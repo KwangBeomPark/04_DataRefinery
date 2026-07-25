@@ -430,12 +430,15 @@ class DataRefineryApp:
         style.configure("Secondary.TButton", background="#E8F1F5", foreground=accent, font=("Segoe UI Semibold", 9), padding=(12, 8), borderwidth=0)
         style.map("Secondary.TButton", background=[("active", "#D4E8EE"), ("pressed", "#C4DDE5")])
         style.configure("App.TNotebook", background=page_bg, borderwidth=0)
-        style.configure("App.TNotebook.Tab", background="#D9E2EC", foreground=text, padding=(18, 9), font=("Segoe UI Semibold", 10))
-        style.map(
-            "App.TNotebook.Tab",
-            background=[("selected", surface), ("active", "#E8F1F5")],
-            foreground=[("selected", navy)],
-        )
+        # The native notebook lifts its selected tab, which makes otherwise
+        # identical labels look like different heights.  The task switcher
+        # below owns the visible tab headers, while the notebook keeps its
+        # reliable page-selection behavior.
+        style.layout("App.TNotebook.Tab", [])
+        style.configure("TaskTab.TButton", background="#D9E2EC", foreground=text, font=("Segoe UI Semibold", 10), padding=(14, 9), borderwidth=1)
+        style.map("TaskTab.TButton", background=[("active", "#E8F1F5"), ("pressed", "#C4DDE5")])
+        style.configure("TaskTab.Selected.TButton", background=surface, foreground=navy, font=("Segoe UI Semibold", 10), padding=(14, 9), borderwidth=1)
+        style.map("TaskTab.Selected.TButton", background=[("active", surface), ("pressed", surface)])
         style.configure("Status.TFrame", background=navy)
         style.configure("Status.TLabel", background=navy, foreground="#D9E2EC", font=("Segoe UI", 9))
         style.configure("App.Horizontal.TProgressbar", troughcolor=border, background=accent, bordercolor=border, lightcolor=accent, darkcolor=accent)
@@ -443,7 +446,7 @@ class DataRefineryApp:
         main = ttk.Frame(root, style="App.TFrame", padding=(24, 20, 24, 18))
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(3, weight=1)
+        main.rowconfigure(4, weight=1)
 
         header = ttk.Frame(main, style="Header.TFrame", padding=(22, 18))
         header.grid(row=0, column=0, sticky="ew")
@@ -501,13 +504,32 @@ class DataRefineryApp:
         )
         self.update_enabled_check.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
+        self.task_tabs = ttk.Frame(main, style="App.TFrame")
+        self.task_tabs.grid(row=1, column=0, sticky="w", pady=(16, 0))
+        self.task_tabs.columnconfigure(0, weight=1)
+        self.task_tabs.columnconfigure(1, weight=1)
+
         self.notebook = ttk.Notebook(main, style="App.TNotebook")
-        self.notebook.grid(row=1, column=0, sticky="nsew", pady=(16, 0))
+        self.notebook.grid(row=2, column=0, sticky="nsew")
         self.csv_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 12, 0, 0))
         self.promotion_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 12, 0, 0))
         self.notebook.add(self.csv_tab)
         self.notebook.add(self.promotion_tab)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_task_tab_change)
+        self.csv_tab_button = ttk.Button(
+            self.task_tabs,
+            command=lambda: self._select_task_tab(self.csv_tab),
+            style="TaskTab.Selected.TButton",
+            width=22,
+        )
+        self.csv_tab_button.grid(row=0, column=0, sticky="ew")
+        self.promotion_tab_button = ttk.Button(
+            self.task_tabs,
+            command=lambda: self._select_task_tab(self.promotion_tab),
+            style="TaskTab.TButton",
+            width=22,
+        )
+        self.promotion_tab_button.grid(row=0, column=1, sticky="ew")
 
         self.file_section = ttk.LabelFrame(self.csv_tab, style="Card.TLabelframe", padding=(18, 14))
         self.file_section.grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -574,7 +596,7 @@ class DataRefineryApp:
         self.combo_format.bind("<<ComboboxSelected>>", self._update_number_format_help)
 
         # Max Columns
-        self.max_cols = tk.StringVar(value="0")
+        self.max_cols = tk.StringVar()
         self.columns_label = ttk.Label(self.output_section, style="Field.TLabel")
         self.columns_label.grid(row=0, column=0, sticky="w")
         self.ent_max_cols = ttk.Entry(self.output_section, textvariable=self.max_cols, width=8)
@@ -614,9 +636,13 @@ class DataRefineryApp:
         # Process Button
         self.btn_process = ttk.Button(self.action_area, command=self.process_csv, style="Primary.TButton")
         self.btn_process.grid(row=0, column=1, sticky="e")
+        self.filepath.trace_add("write", self._refresh_csv_action_state)
+        self.max_cols.trace_add("write", self._refresh_csv_action_state)
+        self._refresh_csv_action_state()
 
         # Promotion keeps its own tab while sharing the explanatory result panel below.
         self.promotion_tab.columnconfigure(0, weight=1)
+        self.promotion_tab.rowconfigure(2, weight=1)
         self.promotion_file_section = ttk.LabelFrame(self.promotion_tab, style="Card.TLabelframe", padding=(18, 14))
         self.promotion_file_section.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         self.promotion_file_section.columnconfigure(0, weight=1)
@@ -654,35 +680,37 @@ class DataRefineryApp:
             state="readonly",
             width=30,
         )
-        self.promotion_output_combo.grid(row=0, column=1, sticky="w", padx=(14, 0))
+        self.promotion_output_combo.grid(row=0, column=1, sticky="ew", padx=(14, 0))
         self.promotion_output_combo.bind("<<ComboboxSelected>>", self._update_promotion_output_hint)
         self.promotion_output_help = ttk.Label(self.promotion_output_section, style="Help.TLabel", wraplength=600)
         self.promotion_output_help.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         self.promotion_action_area = ttk.Frame(self.promotion_tab, style="App.TFrame")
-        self.promotion_action_area.grid(row=2, column=0, sticky="ew", pady=(16, 0))
+        self.promotion_action_area.grid(row=2, column=0, sticky="nsew", pady=(16, 0))
         self.promotion_action_area.columnconfigure(0, weight=1)
+        self.promotion_action_area.rowconfigure(0, weight=1)
         self.promotion_output_hint = tk.StringVar()
         ttk.Label(self.promotion_action_area, textvariable=self.promotion_output_hint, style="Footer.TLabel").grid(
-            row=0, column=0, sticky="w"
+            row=1, column=0, sticky="w"
         )
         self.promotion_process_button = ttk.Button(
             self.promotion_action_area,
             command=self.process_promotion_template,
             style="Primary.TButton",
+            state="disabled",
         )
-        self.promotion_process_button.grid(row=0, column=1, sticky="e")
+        self.promotion_process_button.grid(row=1, column=1, sticky="e")
 
         # Progress bar (advances during processing)
         self.progress = ttk.Progressbar(main, mode="determinate", maximum=100, style="App.Horizontal.TProgressbar")
-        self.progress.grid(row=2, column=0, sticky="ew", pady=(14, 0))
+        self.progress.grid(row=3, column=0, sticky="ew", pady=(14, 0))
 
         self.result_section = ttk.LabelFrame(
             main,
             style="Card.TLabelframe",
             padding=(12, 10),
         )
-        self.result_section.grid(row=3, column=0, sticky="nsew", pady=(14, 0))
+        self.result_section.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
         self.result_section.columnconfigure(0, weight=1)
         self.result_section.rowconfigure(0, weight=1)
         self.result_text = tk.Text(
@@ -747,22 +775,27 @@ class DataRefineryApp:
             filetypes=(("Excel template", "*.xlsx"),),
         )
         if filename:
+            self._promotion_data = None
             self.promotion_filepath.set(filename)
+            self._refresh_promotion_action_state()
             self._load_promotion_template()
 
     def _load_promotion_template(self):
         path = self.promotion_filepath.get()
         if not path or not os.path.exists(path):
             self._promotion_data = None
+            self._refresh_promotion_action_state()
             return None
         try:
             data, issues = load_template(path)
         except Exception as error:
             self._promotion_data = None
+            self._refresh_promotion_action_state()
             self._set_result_text(str(error))
             return None
         if issues:
             self._promotion_data = None
+            self._refresh_promotion_action_state()
             shown = [f"• {issue.display()}" for issue in issues[:6]]
             if len(issues) > len(shown):
                 shown.append(self._ui("promo_issue_more").format(count=len(issues) - len(shown)))
@@ -774,6 +807,7 @@ class DataRefineryApp:
             )))
             return None
         self._promotion_data = data
+        self._refresh_promotion_action_state()
         self._show_promotion_preview(data)
         return data
 
@@ -835,12 +869,52 @@ class DataRefineryApp:
         """Return a stable feature id for the notebook's selected tab."""
         return "promotion" if self.notebook.select() == str(self.promotion_tab) else "csv"
 
+    def _select_task_tab(self, tab):
+        """Select a task page from the equal-height task switcher."""
+        self.notebook.select(tab)
+        self._on_task_tab_change()
+
+    def _refresh_task_tab_buttons(self):
+        promotion_selected = self._selected_task_id() == "promotion"
+        self.csv_tab_button.configure(
+            style="TaskTab.TButton" if promotion_selected else "TaskTab.Selected.TButton"
+        )
+        self.promotion_tab_button.configure(
+            style="TaskTab.Selected.TButton" if promotion_selected else "TaskTab.TButton"
+        )
+
+    @staticmethod
+    def _has_positive_column_count(value):
+        try:
+            return int(str(value)) > 0
+        except (TypeError, ValueError):
+            return False
+
+    def _refresh_csv_action_state(self, *_):
+        """Only enable CSV processing once a usable source and table width are available."""
+        is_ready = bool(
+            self.filepath.get()
+            and os.path.exists(self.filepath.get())
+            and self._has_positive_column_count(self.max_cols.get())
+        )
+        self.btn_process.configure(state="normal" if is_ready else "disabled")
+
+    def _refresh_promotion_action_state(self):
+        """Prevent an avoidable validation dialog until a valid template is loaded."""
+        is_ready = bool(
+            self._promotion_data is not None
+            and self.promotion_filepath.get()
+            and os.path.exists(self.promotion_filepath.get())
+        )
+        self.promotion_process_button.configure(state="normal" if is_ready else "disabled")
+
     @staticmethod
     def _promotion_output_id(selection):
         return "Excel (.xlsx)" if "excel" in str(selection).casefold() else "CSV"
 
     def _on_task_tab_change(self, event=None):
         """Refresh the shared explanation panel for the selected feature tab."""
+        self._refresh_task_tab_buttons()
         if self._selected_task_id() == "promotion":
             self.result_section.configure(text=self._ui("promo_result_title"))
             self._update_promotion_output_hint()
@@ -948,6 +1022,8 @@ class DataRefineryApp:
         self.btn_process.configure(text=text['process'])
         self.notebook.tab(self.csv_tab, text=text['task_options'][0])
         self.notebook.tab(self.promotion_tab, text=text['task_options'][1])
+        self.csv_tab_button.configure(text=text['task_options'][0])
+        self.promotion_tab_button.configure(text=text['task_options'][1])
         self.update_check_button.configure(text=text['check_updates'])
         self.download_update_button.configure(text=text['download_update'])
         self.update_enabled_check.configure(text=text['update_enabled'])
