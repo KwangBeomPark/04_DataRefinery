@@ -1,57 +1,33 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-import csv
-import math
 import os
-import re
 import shutil
 import sys
-import threading
 import webbrowser
-from datetime import datetime
-import decimal
-from collections import Counter
+from pathlib import Path
 
-from promotion_normalizer import (
+from src.background_jobs import BackgroundJobRunner, JobCallbacks
+from src.csv_processing import (
+    CsvNoDataError,
+    CsvNoTableError,
+    CsvProcessingOptions,
+    detect_delimiter as detect_csv_delimiter,
+    is_excel as is_excel_file,
+    normalize_delimiter,
+    process_csv_file,
+    read_file_rows,
+)
+
+from src.promotion_normalizer import (
     EXCEL_MAX_DATA_ROWS,
     export_normalized,
     load_template,
     preview_daily_rows,
 )
-from update_checker import check_for_update, load_settings, save_settings
+from src.update_checker import check_for_update, load_settings, save_settings
+from src.ui_components import UpdateMenu
 
 __version__ = "1.6.0"
-
-_PANDAS = None
-
-
-def _get_pandas():
-    """Import pandas only when a selected file actually needs processing."""
-    global _PANDAS
-    if _PANDAS is None:
-        import pandas as pandas_module
-        _PANDAS = pandas_module
-    return _PANDAS
-
-class ParsedNumber:
-    __slots__ = ['value', 'orig_decimals', 'orig_text']
-
-    def __init__(self, value: decimal.Decimal, orig_decimals: int, orig_text: str):
-        self.value = value
-        self.orig_decimals = orig_decimals
-        self.orig_text = orig_text
-
-
-# Pre-compiled patterns (compiling once matters a lot on large files).
-# _DATE_HINT_RE cheaply rejects non-date cells so we skip the expensive
-# strptime attempts on the vast majority of values.
-_DATE_HINT_RE = re.compile(r'\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}')
-# Every character Excel/Windows can smuggle into a cell as a line break:
-# CR/LF plus vertical tab (Alt+Enter survives copy-paste as \x0b), form feed,
-# NEL, and the Unicode line/paragraph separators.
-_LINEBREAK_RE = re.compile('[\r\n\x0b\x0c\x85\u2028\u2029]+')
-_EN_NUM_RE = re.compile(r'-?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?')
-_PL_NUM_RE = re.compile(r'-?(?:\d+|\d{1,3}(?: \d{3})+|\d{1,3}(?:\.\d{3})+)(?:,\d+)?')
 
 _LANGUAGE_CODES = {
     "English": "en",
@@ -244,6 +220,8 @@ _UI_TEXT["en"].update({
     "task_options": ("CSV repair", "Promotion template"),
     "update_enabled": "Check for updates automatically",
     "check_updates": "Check now",
+    "updates": "Updates",
+    "hide_updates": "Hide updates",
     "checking_updates": "Checking GitHub for updates…",
     "update_current": "You have the latest version.",
     "update_off": "Automatic update checks are off.",
@@ -281,6 +259,8 @@ _UI_TEXT["ko"].update({
     "task_options": ("CSV 구조 복구", "프로모션 템플릿"),
     "update_enabled": "새 버전 자동 확인",
     "check_updates": "지금 확인",
+    "updates": "업데이트",
+    "hide_updates": "업데이트 숨기기",
     "checking_updates": "GitHub에서 새 버전을 확인하는 중…",
     "update_current": "현재 최신 버전을 사용하고 있습니다.",
     "update_off": "새 버전 자동 확인이 꺼져 있습니다.",
@@ -318,6 +298,8 @@ _UI_TEXT["pl"].update({
     "task_options": ("Naprawa CSV", "Szablon promocji"),
     "update_enabled": "Sprawdzaj aktualizacje automatycznie",
     "check_updates": "Sprawdź teraz",
+    "updates": "Aktualizacje",
+    "hide_updates": "Ukryj aktualizacje",
     "checking_updates": "Sprawdzanie aktualizacji na GitHubie…",
     "update_current": "Używasz najnowszej wersji.",
     "update_off": "Automatyczne sprawdzanie aktualizacji jest wyłączone.",
@@ -354,16 +336,21 @@ _UI_TEXT["pl"].update({
 
 class DataRefineryApp:
     @staticmethod
-    def _resource_path(filename):
+    def _resource_path(relative_path):
         """Find bundled assets both during development and in PyInstaller builds."""
-        base_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(base_dir, filename)
+        bundle_root = getattr(sys, '_MEIPASS', None)
+        if bundle_root is not None:
+            return os.path.join(bundle_root, 'assets', relative_path)
+        return str(Path(__file__).resolve().parents[1] / 'assets' / relative_path)
 
     def __init__(self, root):
         self.root = root
         self.language = tk.StringVar(value="English")
         self._last_result = None
         self._promotion_data = None
+        self._csv_processing = False
+        self._promotion_processing = False
+        self._jobs = BackgroundJobRunner(root.after)
         self._update_url = None
         self._update_state = "idle"
         self._update_version = None
@@ -376,13 +363,13 @@ class DataRefineryApp:
         self.root.minsize(720, 700)
 
         try:
-            self.root.iconbitmap(self._resource_path("icon.ico"))
+            self.root.iconbitmap(self._resource_path("icons/icon.ico"))
         except Exception:
             pass
 
         self._header_icon_image = None
         try:
-            self._header_icon_image = tk.PhotoImage(file=self._resource_path("header_icon.png"))
+            self._header_icon_image = tk.PhotoImage(file=self._resource_path("icons/header_icon.png"))
         except tk.TclError:
             pass
 
@@ -454,7 +441,7 @@ class DataRefineryApp:
         title_column = 0
         if self._header_icon_image is not None:
             ttk.Label(header, image=self._header_icon_image, style="Header.Icon.TLabel").grid(
-                row=0, column=0, rowspan=3, sticky="w", padx=(0, 14)
+                row=0, column=0, rowspan=2, sticky="w", padx=(0, 14)
             )
             title_column = 1
         self.header_title = ttk.Label(header, text="Data Refinery", style="Header.Title.TLabel")
@@ -475,34 +462,19 @@ class DataRefineryApp:
         )
         self.language_combo.grid(row=0, column=3, rowspan=2, sticky="e")
         self.language_combo.bind("<<ComboboxSelected>>", self._apply_language)
-
-        self.update_frame = ttk.Frame(header, style="Header.TFrame")
-        self.update_frame.grid(row=2, column=title_column, columnspan=3, sticky="ew", pady=(10, 0))
-        self.update_frame.columnconfigure(0, weight=1)
-        self.update_status = tk.StringVar()
-        ttk.Label(self.update_frame, textvariable=self.update_status, style="Header.Subtitle.TLabel").grid(
-            row=0, column=0, sticky="w"
-        )
-        self.update_check_button = ttk.Button(
-            self.update_frame,
-            command=lambda: self._start_update_check(force=True),
+        self.update_details_button = ttk.Button(
+            header,
+            command=self._show_update_menu,
             style="Secondary.TButton",
         )
-        self.update_check_button.grid(row=0, column=1, padx=(8, 0))
-        self.download_update_button = ttk.Button(
-            self.update_frame,
-            command=self._open_update_page,
-            style="Secondary.TButton",
-            state="disabled",
+        self.update_details_button.grid(row=1, column=2, columnspan=2, sticky="e", pady=(8, 0))
+        self.update_menu = UpdateMenu(
+            root,
+            self.update_check_enabled,
+            on_check=lambda: self._start_update_check(force=True),
+            on_download=self._open_update_page,
+            on_preference_changed=self._save_update_preference,
         )
-        self.download_update_button.grid(row=0, column=2, padx=(8, 0))
-        self.update_enabled_check = ttk.Checkbutton(
-            self.update_frame,
-            variable=self.update_check_enabled,
-            command=self._save_update_preference,
-            style="Header.TCheckbutton",
-        )
-        self.update_enabled_check.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         self.task_tabs = ttk.Frame(main, style="App.TFrame")
         self.task_tabs.grid(row=1, column=0, sticky="w", pady=(16, 0))
@@ -763,7 +735,10 @@ class DataRefineryApp:
         if not destination:
             return
         try:
-            shutil.copyfile(self._resource_path("promotion_template.xlsx"), destination)
+            shutil.copyfile(
+                self._resource_path("templates/promotion_template.xlsx"),
+                destination,
+            )
             self.log_text.set(self._ui("promo_template_saved").format(name=os.path.basename(destination)))
             self._set_result_text(self._ui("promo_template_saved").format(name=destination))
         except OSError as error:
@@ -841,24 +816,71 @@ class DataRefineryApp:
         if daily_format == "Excel (.xlsx)" and data.estimated_daily_rows > EXCEL_MAX_DATA_ROWS:
             self._set_result_text(self._ui("promo_excel_limit").format(limit=EXCEL_MAX_DATA_ROWS))
             return
-        try:
-            self._set_progress(15, self._ui("promo_saving"))
-            result = export_normalized(data, self.promotion_filepath.get(), daily_format=daily_format)
-            self._set_progress(100, self._ui("promo_done").format(rows=f"{result.daily_rows:,}"))
-            self._set_result_text("\n".join((
-                self._ui("promo_done").format(rows=f"{result.daily_rows:,}"),
-                "",
-                self._ui("promo_summary_title"),
-                self._ui("promo_master_file").format(name=result.master_path.name),
-                self._ui("promo_rules_file").format(name=result.rules_path.name),
-                self._ui("promo_daily_file").format(name=result.daily_path.name),
-                self._ui("promo_overlap").format(count=result.overlapping_rule_pairs),
-            )))
-            self.log_text.set(self._ui("promo_done").format(rows=f"{result.daily_rows:,}"))
-        except Exception as error:
-            messagebox.showerror(self._ui("promo_result_title"), str(error))
-        finally:
-            self._set_progress(0)
+        source_path = self.promotion_filepath.get()
+
+        def worker(report):
+            report(15, "saving")
+            return export_normalized(
+                data,
+                source_path,
+                daily_format=daily_format,
+                progress=report,
+            )
+
+        self._promotion_processing = True
+        self._set_promotion_controls_enabled(False)
+        self._refresh_csv_action_state()
+        self._set_progress(15, self._ui("promo_saving"))
+        started = self._jobs.start(
+            "promotion-processing",
+            worker,
+            JobCallbacks(
+                on_progress=self._on_promotion_progress,
+                on_success=self._on_promotion_success,
+                on_error=self._on_promotion_error,
+                on_finished=self._finish_promotion_processing,
+            ),
+        )
+        if not started:
+            self._finish_promotion_processing()
+
+    def _on_promotion_progress(self, percent, detail):
+        message = self._ui("promo_saving") if detail == "saving" else None
+        self._set_progress(percent, message)
+
+    def _on_promotion_success(self, result):
+        done = self._ui("promo_done").format(rows=f"{result.daily_rows:,}")
+        self._set_progress(100, done)
+        self._set_result_text("\n".join((
+            done,
+            "",
+            self._ui("promo_summary_title"),
+            self._ui("promo_master_file").format(name=result.master_path.name),
+            self._ui("promo_rules_file").format(name=result.rules_path.name),
+            self._ui("promo_daily_file").format(name=result.daily_path.name),
+            self._ui("promo_overlap").format(count=result.overlapping_rule_pairs),
+        )))
+        self.log_text.set(done)
+
+    def _on_promotion_error(self, error):
+        messagebox.showerror(self._ui("promo_result_title"), str(error))
+        self.log_text.set(self._ui("promo_result_title"))
+
+    def _finish_promotion_processing(self):
+        self._promotion_processing = False
+        self._set_promotion_controls_enabled(True)
+        self._refresh_csv_action_state()
+        self._set_progress(0)
+
+    def _set_promotion_controls_enabled(self, enabled):
+        state = "normal" if enabled else "disabled"
+        self.promotion_browse_button.configure(state=state)
+        self.promotion_download_button.configure(state=state)
+        self.promotion_output_combo.configure(state="readonly" if enabled else "disabled")
+        if enabled:
+            self._refresh_promotion_action_state()
+        else:
+            self.promotion_process_button.configure(state="disabled")
 
     def _language_code(self):
         language = getattr(self, 'language', None)
@@ -892,6 +914,12 @@ class DataRefineryApp:
 
     def _refresh_csv_action_state(self, *_):
         """Only enable CSV processing once a usable source and table width are available."""
+        if (
+            getattr(self, "_csv_processing", False)
+            or getattr(self, "_promotion_processing", False)
+        ):
+            self.btn_process.configure(state="disabled")
+            return
         is_ready = bool(
             self.filepath.get()
             and os.path.exists(self.filepath.get())
@@ -902,7 +930,9 @@ class DataRefineryApp:
     def _refresh_promotion_action_state(self):
         """Prevent an avoidable validation dialog until a valid template is loaded."""
         is_ready = bool(
-            self._promotion_data is not None
+            not self._csv_processing
+            and not self._promotion_processing
+            and self._promotion_data is not None
             and self.promotion_filepath.get()
             and os.path.exists(self.promotion_filepath.get())
         )
@@ -947,23 +977,31 @@ class DataRefineryApp:
             self._update_state = "off"
             self._refresh_update_status()
             return
+        if self._jobs.is_running("update-check"):
+            return
         self._update_state = "checking"
         self._update_version = None
         self._refresh_update_status()
-        self.download_update_button.configure(state="disabled")
+        self.update_menu.set_download_enabled(False)
         self._update_url = None
         if force:
             self._update_settings["last_update_check"] = ""
 
-        def worker():
+        def worker(_report):
             release = check_for_update(__version__, self._update_settings)
             save_settings(self._update_settings)
-            try:
-                self.root.after(0, lambda: self._finish_update_check(release))
-            except tk.TclError:
-                pass
+            return release
 
-        threading.Thread(target=worker, name="update-check", daemon=True).start()
+        self._jobs.start(
+            "update-check",
+            worker,
+            JobCallbacks(
+                on_progress=lambda _percent, _detail: None,
+                on_success=self._finish_update_check,
+                on_error=lambda _error: self._finish_update_check(None),
+                on_finished=lambda: None,
+            ),
+        )
 
     def _finish_update_check(self, release):
         if release is None:
@@ -975,11 +1013,12 @@ class DataRefineryApp:
         self._update_state = "available"
         self._update_version = release.version
         self._refresh_update_status()
-        self.download_update_button.configure(state="normal")
+        self.update_menu.set_download_enabled(True)
 
     def _refresh_update_status(self):
         """Render the stored update state in the currently selected language."""
         key = {
+            "idle": "checking_updates",
             "checking": "checking_updates",
             "current": "update_current",
             "off": "update_off",
@@ -990,7 +1029,14 @@ class DataRefineryApp:
         message = self._ui(key)
         if self._update_state == "available":
             message = message.format(version=self._update_version)
-        self.update_status.set(message)
+        self.update_menu.set_status(message)
+        button_text = self._ui("updates")
+        if self._update_state == "available":
+            button_text = f"{button_text} •"
+        self.update_details_button.configure(text=button_text)
+
+    def _show_update_menu(self):
+        self.update_menu.show_below(self.update_details_button)
 
     def _open_update_page(self):
         if self._update_url:
@@ -1024,9 +1070,12 @@ class DataRefineryApp:
         self.notebook.tab(self.promotion_tab, text=text['task_options'][1])
         self.csv_tab_button.configure(text=text['task_options'][0])
         self.promotion_tab_button.configure(text=text['task_options'][1])
-        self.update_check_button.configure(text=text['check_updates'])
-        self.download_update_button.configure(text=text['download_update'])
-        self.update_enabled_check.configure(text=text['update_enabled'])
+        self.update_menu.set_texts(
+            status="",
+            check=text['check_updates'],
+            download=text['download_update'],
+            enabled=text['update_enabled'],
+        )
 
         self.promotion_file_section.configure(text=text['promo_file_section'])
         self.promotion_info_label.configure(text=text['promo_file_info'])
@@ -1069,20 +1118,6 @@ class DataRefineryApp:
     def _output_extension(output_fmt):
         return '.xlsx' if output_fmt == 'Excel (.xlsx)' else '.csv'
 
-    @classmethod
-    def _build_output_path(cls, file_path, output_fmt, timestamp=None):
-        """Create a timestamped output path and avoid overwriting a same-minute run."""
-        stamp = (timestamp or datetime.now()).strftime('%Y%m%d_%H%M')
-        extension = cls._output_extension(output_fmt)
-        directory = os.path.dirname(file_path)
-        base_name = f"processed_output_{stamp}"
-        candidate = os.path.join(directory, f"{base_name}{extension}")
-        sequence = 2
-        while os.path.exists(candidate):
-            candidate = os.path.join(directory, f"{base_name}_{sequence:02d}{extension}")
-            sequence += 1
-        return candidate
-
     def _update_output_hint(self, event=None):
         output_fmt = self._output_format(self.out_format.get())
         extension = self._output_extension(output_fmt)
@@ -1122,7 +1157,7 @@ class DataRefineryApp:
 
     @staticmethod
     def _is_excel(file_path):
-        return os.path.splitext(file_path)[1].lower() in ('.xlsx', '.xlsm', '.xls')
+        return is_excel_file(file_path)
 
     def _on_delimiter_user_change(self, event=None):
         """Remember an explicit delimiter choice so file selection cannot overwrite it."""
@@ -1137,186 +1172,14 @@ class DataRefineryApp:
         return True
 
     def _detect_delimiter(self, file_path, sample_rows=50):
-        """Infer a delimiter from logical CSV records, not physical text lines.
-
-        This deliberately tolerates introductory one-column rows and quoted
-        multi-line cells. The candidate with the most stable non-trivial row
-        width wins; a one-column candidate is never selected automatically.
-        """
-        if self._is_excel(file_path):
-            return None
-        try:
-            enc = self._detect_encoding(file_path)
-            candidates = [';', ',', '\t', '|']
-            best_delimiter = None
-            best_score = None
-            for cand in candidates:
-                with open(file_path, 'r', encoding=enc, newline='') as f:
-                    reader = csv.reader(f, delimiter=cand)
-                    rows = []
-                    for row in reader:
-                        if row:
-                            rows.append(row)
-                        if len(rows) >= sample_rows:
-                            break
-                if not rows:
-                    continue
-
-                widths = [len(row) for row in rows]
-                width, count = max(Counter(widths).items(), key=lambda item: (item[1], item[0]))
-                if width <= 1:
-                    continue
-
-                # Ratio first prevents a one-off delimiter in prose from
-                # beating a consistently structured file; width breaks ties.
-                score = (count / len(widths), count, width)
-                if best_score is None or score > best_score:
-                    best_score = score
-                    best_delimiter = cand
-            return best_delimiter
-        except Exception:
-            return None
+        return detect_csv_delimiter(file_path, sample_rows)
 
     @staticmethod
     def _normalize_delim(delim):
-        # Let the user type "\t" or "tab" for tab-separated files
-        # (Excel's "Unicode Text" export is tab-separated).
-        return {'\\t': '\t', 'tab': '\t', 'TAB': '\t', 'Tab': '\t'}.get(delim, delim)
-
-    def _detect_encoding(self, file_path):
-        """Pick the most plausible text encoding.
-
-        UTF-8 (with or without BOM) is authoritative when it decodes cleanly.
-        Among legacy codecs, prefer the one that yields the fewest suspicious
-        characters (C1 controls / replacement chars), which are a strong signal
-        of a wrong codepage. This avoids cp1252 (or cp949) silently mis-decoding
-        a file just because it happens to accept the bytes.
-        """
-        with open(file_path, 'rb') as f:
-            raw = f.read()
-
-        # Excel's "Unicode Text" / "CSV UTF-16" exports are UTF-16. The BOM is
-        # authoritative, and it must be checked before UTF-8: ASCII-only
-        # UTF-16 also decodes "successfully" as UTF-8 (with NULs between
-        # every character), which then crashes csv with "line contains NUL".
-        if raw.startswith(b'\xff\xfe') or raw.startswith(b'\xfe\xff'):
-            return 'utf-16'
-        if raw and raw.count(b'\x00') > len(raw) // 4:
-            for enc in ('utf-16-le', 'utf-16-be'):
-                try:
-                    raw.decode(enc)
-                    return enc
-                except UnicodeDecodeError:
-                    pass
-
-        for enc in ('utf-8-sig', 'utf-8'):
-            try:
-                raw.decode(enc)
-                return enc
-            except UnicodeDecodeError:
-                pass
-
-        best = None  # (encoding, suspicious_char_count)
-        for enc in ('cp949', 'cp1252'):
-            try:
-                text = raw.decode(enc)
-            except UnicodeDecodeError:
-                continue
-            score = sum(1 for ch in text if ('\x80' <= ch <= '\x9f') or ch == '�')
-            if best is None or score < best[1]:
-                best = (enc, score)
-
-        if best is not None:
-            return best[0]
-        return 'latin-1'  # never fails; last-resort so the app degrades gracefully
+        return normalize_delimiter(delim)
 
     def read_file_lines(self, file_path, delim, max_lines=None):
-        if self._is_excel(file_path):
-            return self._read_excel_rows(file_path, max_lines), 'Excel'
-        delim = self._normalize_delim(delim)
-        if not delim or len(delim) != 1:
-            raise ValueError("Delimiter must be a single character.")
-        enc = self._detect_encoding(file_path)
-        with open(file_path, 'r', encoding=enc, newline='') as f:
-            reader = csv.reader(f, delimiter=delim)
-            rows = []
-            for i, row in enumerate(reader):
-                if max_lines is not None and i >= max_lines:
-                    break
-                rows.append(row)
-        return rows, enc
-
-    def _read_excel_rows(self, file_path, max_lines=None):
-        """Read an Excel sheet into rows of native values (no CSV round-trip,
-        so quoting/encoding problems cannot occur). Trailing empty cells are
-        trimmed per row so garbage/header detection works the same as for CSV."""
-        pd = _get_pandas()
-        df = pd.read_excel(file_path, header=None, dtype=object, nrows=max_lines)
-        rows = []
-        for rec in df.itertuples(index=False, name=None):
-            row = []
-            for v in rec:
-                if v is None or (not isinstance(v, str) and pd.isna(v)):
-                    row.append('')
-                elif isinstance(v, datetime):
-                    row.append(v.date() if (v.hour, v.minute, v.second) == (0, 0, 0) else v)
-                else:
-                    row.append(v)
-            while row and row[-1] == '':
-                row.pop()
-            rows.append(row)
-        return rows
-
-    @staticmethod
-    def _repair_split_rows(rows, max_c):
-        """Rejoin records that unquoted in-cell line breaks split across
-        physical lines (a frequent defect in Excel-exported or hand-edited
-        CSVs). A short row is merged with the following row(s) only when the
-        pieces reassemble to exactly max_c columns; genuinely short rows are
-        left untouched and padded later as before."""
-        out = []
-        repaired = 0
-        i = 0
-        n = len(rows)
-        while i < n:
-            row = rows[i]
-            if not 0 < len(row) < max_c:
-                out.append(row)
-                i += 1
-                continue
-            # Case 1: a break inside the LAST field leaves the record itself
-            # complete and spills the remainder onto its own one-cell line —
-            # glue that remainder onto the previous row's last cell. This must
-            # be checked first: forward-merging such an orphan would swallow
-            # the next real record instead.
-            if len(row) == 1 and out and len(out[-1]) == max_c:
-                out[-1][-1] = f"{out[-1][-1]} {row[0]}".strip()
-                repaired += 1
-                i += 1
-                continue
-            # Case 2: a break inside a MIDDLE field leaves every fragment
-            # short. Rebuild the record from consecutive short fragments,
-            # joining the two halves of the broken cell with a space. Never
-            # consume a complete row, and commit only if the pieces
-            # reassemble to exactly max_c columns.
-            merged = list(row)
-            j = i + 1
-            while j < n and len(merged) < max_c and j - i <= 20:
-                nxt = rows[j]
-                if len(nxt) >= max_c or len(merged) + max(len(nxt), 1) - 1 > max_c:
-                    break
-                if nxt:
-                    merged[-1] = f"{merged[-1]} {nxt[0]}".strip()
-                    merged.extend(nxt[1:])
-                j += 1
-            if len(merged) == max_c and j > i + 1:
-                out.append(merged)
-                repaired += 1
-                i = j
-                continue
-            out.append(row)
-            i += 1
-        return out, repaired
+        return read_file_rows(file_path, delim, max_lines)
 
     def update_max_columns(self, event=None):
         file_path = self.filepath.get()
@@ -1332,207 +1195,8 @@ class DataRefineryApp:
             
             self.max_cols.set(str(max_cols))
             self.log_text.set(self._ui('detected_columns').format(columns=max_cols, encoding=enc))
-        except Exception as e:
+        except Exception:
             self.log_text.set(self._ui('detect_columns_error'))
-
-    @staticmethod
-    def parse_number(val, mode):
-        """Parse a safely validated English or Polish number into Decimal.
-
-        A parsed value retains its source decimal scale so CSV and Excel
-        exporters can preserve values such as ``500,00`` cell by cell.
-        Invalid or identifier-like values deliberately remain text.
-        """
-        if not isinstance(val, str):
-            return val
-        v = val.strip()
-        if not v:
-            return val
-
-        v_norm = v.replace('\u00A0', ' ').replace('\u202F', ' ').replace('\u2212', '-')
-
-        sign = ''
-        if v_norm.startswith('-') or v_norm.startswith('+'):
-            sign = v_norm[0]
-            v_norm = v_norm[1:]
-
-        if not v_norm:
-            return val
-
-        if mode == 'Polish':
-            if not re.fullmatch(r'[0-9 \.,]+', v_norm):
-                return val
-
-            parts = v_norm.split(',')
-            if len(parts) > 2:
-                return val
-
-            int_part = parts[0]
-            frac_part = parts[1] if len(parts) == 2 else None
-
-            if frac_part == '':
-                return val
-
-            if not int_part and frac_part:
-                int_part = '0'
-
-            if ' ' in int_part and '.' in int_part:
-                return val
-
-            sep = ' ' if ' ' in int_part else '.' if '.' in int_part else None
-            if sep:
-                groups = int_part.split(sep)
-                if not groups[0] or len(groups[0]) > 3:
-                    return val
-                for g in groups[1:]:
-                    if len(g) != 3:
-                        return val
-                int_part = ''.join(groups)
-
-            if frac_part and ('.' in frac_part or ' ' in frac_part):
-                return val
-
-            if len(int_part) > 1 and int_part.startswith('0'):
-                return val
-
-            orig_decimals = len(frac_part) if frac_part else 0
-            dec_str = f"{sign}{int_part}.{frac_part}" if frac_part else f"{sign}{int_part}"
-
-            try:
-                d = decimal.Decimal(dec_str)
-                return ParsedNumber(d, orig_decimals, val)
-            except decimal.InvalidOperation:
-                return val
-
-        elif mode == 'English':
-            if not re.fullmatch(r'[0-9\.,]+', v_norm):
-                return val
-
-            parts = v_norm.split('.')
-            if len(parts) > 2:
-                return val
-
-            int_part = parts[0]
-            frac_part = parts[1] if len(parts) == 2 else None
-
-            if frac_part == '':
-                return val
-
-            if not int_part and frac_part:
-                int_part = '0'
-
-            if ',' in int_part:
-                groups = int_part.split(',')
-                if not groups[0] or len(groups[0]) > 3:
-                    return val
-                for g in groups[1:]:
-                    if len(g) != 3:
-                        return val
-                int_part = ''.join(groups)
-
-            if frac_part and ',' in frac_part:
-                return val
-
-            if len(int_part) > 1 and int_part.startswith('0'):
-                return val
-
-            orig_decimals = len(frac_part) if frac_part else 0
-            dec_str = f"{sign}{int_part}.{frac_part}" if frac_part else f"{sign}{int_part}"
-
-            try:
-                d = decimal.Decimal(dec_str)
-                return ParsedNumber(d, orig_decimals, val)
-            except decimal.InvalidOperation:
-                return val
-
-        return val
-
-    @staticmethod
-    def _decimal_significant_digits(value):
-        """Count significant decimal digits without treating trailing scale zeros as precision."""
-        normalized = value.normalize()
-        digits = normalized.as_tuple().digits
-        return 1 if all(digit == 0 for digit in digits) else len(digits)
-
-    @classmethod
-    def _requires_excel_text(cls, value):
-        """Excel stores at most 15 significant decimal digits reliably."""
-        return cls._decimal_significant_digits(value.value) > 15
-
-    @staticmethod
-    def _format_csv_value(value, decimal_separator):
-        """Render a converted value without losing its original decimal scale."""
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, ParsedNumber):
-            text = f"{value.value:.{value.orig_decimals}f}"
-            return text.replace('.', decimal_separator) if decimal_separator != '.' else text
-        if isinstance(value, float):
-            if math.isnan(value):
-                return ''
-            text = repr(value)
-            return text.replace('.', decimal_separator) if decimal_separator != '.' else text
-        return value
-
-    @classmethod
-    def _write_excel_output(cls, df, out_path):
-        """Write converted data and return how many values were protected as text."""
-        import openpyxl
-
-        workbook = openpyxl.Workbook()
-        worksheet = workbook.active
-        worksheet.append(list(df.columns))
-        large_numbers_as_text = 0
-
-        for row in df.itertuples(index=False):
-            output_row = []
-            for value in row:
-                if isinstance(value, ParsedNumber):
-                    if cls._requires_excel_text(value):
-                        large_numbers_as_text += 1
-                        output_row.append(value.orig_text)
-                    else:
-                        output_row.append(float(value.value))
-                else:
-                    output_row.append(value)
-            worksheet.append(output_row)
-
-        for row_index, row in enumerate(df.itertuples(index=False), start=2):
-            for column_index, value in enumerate(row, start=1):
-                if isinstance(value, ParsedNumber) and not cls._requires_excel_text(value):
-                    cell = worksheet.cell(row=row_index, column=column_index)
-                    cell.number_format = '0' if value.orig_decimals == 0 else '0.' + ('0' * value.orig_decimals)
-
-        workbook.save(out_path)
-        return large_numbers_as_text
-
-    def parse_date(self, val):
-        """Try to parse a string into a date. Returns a date on success, else the original value."""
-        if not isinstance(val, str):
-            return val
-        v = val.strip()
-        # Skip strptime unless the value even looks like a date. This is the
-        # single biggest speed-up on large files (most cells are not dates).
-        if not v or not _DATE_HINT_RE.fullmatch(v):
-            return val
-        formats = [
-            "%Y-%m-%d", "%Y/%m/%d",
-            "%d.%m.%Y", "%d-%m-%Y", "%d/%m/%Y",
-            "%m/%d/%Y",
-        ]
-        for fmt in formats:
-            try:
-                return datetime.strptime(v, fmt).date()
-            except ValueError:
-                continue
-        return val
-
-    def convert_value(self, val, mode):
-        """Type coercion for a single cell: try date, then number, else keep original text."""
-        d = self.parse_date(val)
-        if not isinstance(d, str):
-            return d
-        return self.parse_number(val, mode)
 
     def _set_progress(self, pct, msg=None):
         """Move the progress bar and (optionally) the status text, then repaint."""
@@ -1544,168 +1208,119 @@ class DataRefineryApp:
         except Exception:
             pass
 
+    def _set_csv_controls_enabled(self, enabled):
+        """Keep inputs stable while the worker owns the selected file."""
+        state = "normal" if enabled else "disabled"
+        self.browse_button.configure(state=state)
+        self.ent_delimiter.configure(state=state)
+        self.ent_max_cols.configure(state=state)
+        self.combo_format.configure(state="readonly" if enabled else "disabled")
+        self.combo_out_format.configure(state="readonly" if enabled else "disabled")
+        if enabled:
+            self._refresh_csv_action_state()
+        else:
+            self.btn_process.configure(state="disabled")
+
+    def _csv_progress_message(self, event):
+        if event == "reading":
+            return self._ui("reading")
+        if event.startswith("scanning:"):
+            return self._ui("scanning").format(rows=f"{int(event.split(':', 1)[1]):,}")
+        if event.startswith("converting:"):
+            _, current, total = event.split(":")
+            return self._ui("converting").format(current=current, total=total)
+        if event == "saving":
+            return self._ui("saving")
+        return None
+
+    def _on_csv_progress(self, percent, detail):
+        self._set_progress(percent, self._csv_progress_message(detail))
+
+    def _on_csv_success(self, result):
+        self._set_progress(100, self._ui("done"))
+        self._last_result = {
+            "out_path": result.out_path,
+            "rows": f"{result.rows:,}",
+            "columns": f"{result.columns:,}",
+            "garbage_skipped": f"{result.garbage_skipped:,}",
+            "numbers": f"{result.numbers:,}",
+            "dates": f"{result.dates:,}",
+            "flattened": f"{result.flattened:,}",
+            "repaired": f"{result.repaired:,}",
+            "large_numbers_as_text": f"{result.large_numbers_as_text:,}",
+            "encoding": result.encoding,
+        }
+        self.log_text.set(
+            self._ui("status_done").format(
+                rows=f"{result.rows:,}", name=os.path.basename(result.out_path)
+            )
+        )
+        self._set_result_text(self._format_result_summary(self._last_result))
+
+    def _on_csv_error(self, error):
+        if isinstance(error, CsvNoTableError):
+            messagebox.showwarning(self._ui("no_table_title"), self._ui("no_table_message"))
+            self.log_text.set(self._ui("no_table_title"))
+        elif isinstance(error, CsvNoDataError):
+            messagebox.showwarning(self._ui("no_data_title"), self._ui("no_data_message"))
+            self.log_text.set(self._ui("no_data_title"))
+        else:
+            messagebox.showerror(
+                self._ui("error_title"),
+                self._ui("error_message").format(error=str(error)),
+            )
+            self.log_text.set(self._ui("error_title"))
+
+    def _finish_csv_processing(self):
+        self._csv_processing = False
+        self._set_csv_controls_enabled(True)
+        self._refresh_promotion_action_state()
+        self._set_progress(0)
+
     def process_csv(self):
         file_path = self.filepath.get()
-        delim = self._normalize_delim(self.delimiter.get())
-        mode = self._number_mode(self.num_format.get())
-        output_fmt = self._output_format(self.out_format.get())
+        delimiter = self._normalize_delim(self.delimiter.get())
+        number_mode = self._number_mode(self.num_format.get())
+        output_format = self._output_format(self.out_format.get())
 
         if not file_path or not os.path.exists(file_path):
-            messagebox.showerror(self._ui('select_file_title'), self._ui('select_file_message'))
+            messagebox.showerror(self._ui("select_file_title"), self._ui("select_file_message"))
             return
-
-        is_excel = self._is_excel(file_path)
-        if not is_excel and (not delim or len(delim) != 1):
-            messagebox.showerror(self._ui('delimiter_title'), self._ui('delimiter_message'))
+        if not self._is_excel(file_path) and (not delimiter or len(delimiter) != 1):
+            messagebox.showerror(self._ui("delimiter_title"), self._ui("delimiter_message"))
             return
-
         try:
-            max_c = int(self.max_cols.get())
+            max_columns = int(self.max_cols.get())
         except ValueError:
-            messagebox.showerror(self._ui('columns_title'), self._ui('columns_number'))
+            messagebox.showerror(self._ui("columns_title"), self._ui("columns_number"))
+            return
+        if max_columns <= 0:
+            messagebox.showerror(self._ui("columns_title"), self._ui("columns_positive"))
             return
 
-        if max_c <= 0:
-            messagebox.showerror(self._ui('columns_title'), self._ui('columns_positive'))
-            return
-
-        self._set_progress(0, self._ui('reading'))
-        self.root.update()
-
-        try:
-            rows, enc = self.read_file_lines(file_path, delim)
-            self._set_progress(10, self._ui('scanning').format(rows=f"{len(rows):,}"))
-
-            # Find the start index (first row that has max_cols) to skip garbage
-            start_idx = 0
-            for i, row in enumerate(rows):
-                if len(row) == max_c:
-                    start_idx = i
-                    break
-
-            garbage_skipped = start_idx
-            data_rows = rows[start_idx:]
-
-            # Rejoin records that unquoted in-cell line breaks split across
-            # physical lines (Excel input needs no repair: cells arrive intact).
-            rows_repaired = 0
-            if not is_excel:
-                data_rows, rows_repaired = self._repair_split_rows(data_rows, max_c)
-
-            # Pad or truncate short/long rows to exactly max_c columns
-            padded_rows = []
-            for r in data_rows:
-                r = list(r)
-                if len(r) < max_c:
-                    r.extend([''] * (max_c - len(r)))
-                elif len(r) > max_c:
-                    r = r[:max_c]
-                padded_rows.append(r)
-
-            if not padded_rows:
-                messagebox.showwarning(self._ui('no_table_title'), self._ui('no_table_message'))
-                self.log_text.set(self._ui('no_table_title'))
-                return
-
-            # Promote the first matching row to the header, remaining rows are data
-            header_row = padded_rows[0]
-            body_rows = padded_rows[1:]
-
-            if not body_rows:
-                messagebox.showwarning(self._ui('no_data_title'), self._ui('no_data_message'))
-                self.log_text.set(self._ui('no_data_title'))
-                return
-
-            # Build unique, non-empty column names from the header
-            col_names = []
-            seen = {}
-            for i, name in enumerate(header_row):
-                name = '' if name is None else str(name)
-                name = _LINEBREAK_RE.sub(' ', name).strip()
-                name = name or f"Column{i+1}"
-                if name in seen:
-                    seen[name] += 1
-                    name = f"{name}_{seen[name]}"
-                else:
-                    seen[name] = 0
-                col_names.append(name)
-
-            # Create DataFrame from the data rows (header excluded)
-            pd = _get_pandas()
-            df = pd.DataFrame(body_rows, columns=col_names)
-
-            # Type coercion (date -> number -> text) in a single pass per column
-            # that also tallies what changed and records each column's original
-            # decimal precision (used to keep values like "500,00" intact on export).
-            dec_sep = ',' if mode == 'Polish' else '.'
-            stats = {'numbers': 0, 'dates': 0, 'flattened': 0, 'large_numbers_as_text': 0}
-            ncols = len(df.columns)
-
-            for ci, col in enumerate(df.columns):
-                def convert(x):
-                    if not isinstance(x, str):
-                        return x  # Excel input arrives already typed (dates, numbers)
-                    # Flatten in-cell line breaks — including the exotic ones Excel
-                    # produces (\x0b from Alt+Enter copy-paste, U+2028/U+2029) — so a
-                    # multi-line field becomes a single physical line in the output.
-                    if _LINEBREAK_RE.search(x):
-                        x = _LINEBREAK_RE.sub(' ', x)
-                        stats['flattened'] += 1
-                    d = self.parse_date(x)
-                    if not isinstance(d, str):
-                        stats['dates'] += 1
-                        return d
-                    n = self.parse_number(x, mode)
-                    if isinstance(n, ParsedNumber):
-                        stats['numbers'] += 1
-                        return n
-                    return n
-
-                df[col] = df[col].map(convert)
-                self._set_progress(10 + int(70 * (ci + 1) / ncols),
-                                   self._ui('converting').format(current=ci + 1, total=ncols))
-
-            # Replace NaNs with empty strings
-            df = df.fillna('')
-
-            # Export
-            self._set_progress(85, self._ui('saving'))
-            out_path = self._build_output_path(file_path, output_fmt)
-            if output_fmt == "Excel (.xlsx)":
-                stats['large_numbers_as_text'] = self._write_excel_output(df, out_path)
-            else:
-                sep = ';' if mode == 'Polish' else ','
-                out_df = df.copy()
-                for col in out_df.columns:
-                    out_df[col] = out_df[col].map(
-                        lambda value: self._format_csv_value(value, dec_sep)
-                    )
-
-                out_df.to_csv(out_path, sep=sep, index=False, encoding='utf-8-sig')
-
-            self._set_progress(100, self._ui('done'))
-            self._last_result = {
-                'out_path': out_path,
-                'rows': f"{len(body_rows):,}",
-                'columns': f"{ncols:,}",
-                'garbage_skipped': f"{garbage_skipped:,}",
-                'numbers': f"{stats['numbers']:,}",
-                'dates': f"{stats['dates']:,}",
-                'flattened': f"{stats['flattened']:,}",
-                'repaired': f"{rows_repaired:,}",
-                'large_numbers_as_text': f"{stats['large_numbers_as_text']:,}",
-                'encoding': enc,
-            }
-            self.log_text.set(
-                self._ui('status_done').format(rows=f"{len(body_rows):,}", name=os.path.basename(out_path))
-            )
-            self._set_result_text(self._format_result_summary(self._last_result))
-
-        except Exception as e:
-            messagebox.showerror(self._ui('error_title'), self._ui('error_message').format(error=str(e)))
-            self.log_text.set(self._ui('error_title'))
-        finally:
-            self._set_progress(0)
+        options = CsvProcessingOptions(
+            file_path=file_path,
+            delimiter=delimiter,
+            number_mode=number_mode,
+            output_format=output_format,
+            max_columns=max_columns,
+        )
+        self._csv_processing = True
+        self._set_csv_controls_enabled(False)
+        self._refresh_promotion_action_state()
+        self._set_progress(0, self._ui("reading"))
+        started = self._jobs.start(
+            "csv-processing",
+            lambda report: process_csv_file(options, report),
+            JobCallbacks(
+                on_progress=self._on_csv_progress,
+                on_success=self._on_csv_success,
+                on_error=self._on_csv_error,
+                on_finished=self._finish_csv_processing,
+            ),
+        )
+        if not started:
+            self._finish_csv_processing()
 
 if __name__ == "__main__":
     root = tk.Tk()

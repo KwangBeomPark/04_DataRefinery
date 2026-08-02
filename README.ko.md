@@ -2,7 +2,7 @@
 
 # Data Refinery
 
-![Data Refinery 처리 흐름: 원본 파일을 복구하고 분석 가능한 구조의 데이터로 정리합니다](manual-data-refinery.png)
+![Data Refinery 처리 흐름: 원본 파일을 복구하고 분석 가능한 구조의 데이터로 정리합니다](assets/images/manual-data-refinery.png)
 
 > **데이터를 정리·정규화하여 분석 가능한 형태로 준비합니다.**
 
@@ -53,6 +53,15 @@ Data Refinery는 복잡하거나 깨진 원본 데이터를 분석에 바로 쓸
 
 ## 개발
 
+앱 코드는 `src`, 번들 자산은 `assets`, 빌드 스크립트는 `scripts`, 설치 설정과
+생성된 릴리스 출력은 `release`에 둡니다.
+
+개발 중 앱 실행:
+
+```powershell
+python -m src.data_refinery
+```
+
 테스트 실행:
 
 ```powershell
@@ -62,5 +71,5 @@ python -m unittest discover -s tests -v
 Windows 설치 파일 빌드:
 
 ```powershell
-.\build_release.ps1
+.\scripts\build_release.ps1
 ```

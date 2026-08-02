@@ -3,10 +3,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 
-$versionMatch = Select-String -Path 'data_refinery.py' -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+$versionMatch = Select-String -Path 'src\data_refinery.py' -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
 if (-not $versionMatch) {
     throw 'Could not read __version__ from data_refinery.py.'
 }
@@ -18,7 +18,7 @@ if (-not $SkipTests) {
     python -m unittest discover -s tests -v
 }
 
-python -m PyInstaller --clean --noconfirm data_refinery.spec
+python -m PyInstaller --clean --noconfirm --workpath release\build --distpath release\dist release\packaging\data_refinery.spec
 if ($LASTEXITCODE -ne 0) {
     throw 'PyInstaller build failed.'
 }
@@ -36,12 +36,12 @@ if (-not $iscc) {
     throw 'Inno Setup 7 is required. Install its 64-bit edition, then run build_release.ps1 again.'
 }
 
-& $iscc "/DAppVersion=$appVersion" "/DAppBundleName=$bundleName" "/DAppExeName=$appExeName" 'installer\DataRefinery.iss'
+& $iscc "/DAppVersion=$appVersion" "/DAppBundleName=$bundleName" "/DAppExeName=$appExeName" 'release\installer\DataRefinery.iss'
 if ($LASTEXITCODE -ne 0) {
     throw 'Inno Setup build failed.'
 }
 
-$installerPath = Join-Path $projectRoot "dist\installer\App04_DataRefinery_Setup_v$appVersion.exe"
+$installerPath = Join-Path $projectRoot "release\dist\installer\App04_DataRefinery_Setup_v$appVersion.exe"
 if (-not (Test-Path $installerPath)) {
     throw "Installer was not created: $installerPath"
 }

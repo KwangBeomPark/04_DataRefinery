@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from data_refinery import DataRefineryApp
+from src.data_refinery import DataRefineryApp
 
 
 class _Value:

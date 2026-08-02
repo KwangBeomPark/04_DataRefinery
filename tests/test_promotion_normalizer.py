@@ -3,8 +3,9 @@ import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from unittest.mock import patch
 
-from promotion_normalizer import (
+from src.promotion_normalizer import (
     DAILY_SUPPORT_COLUMNS,
     EXCEL_MAX_DATA_ROWS,
     PromotionTemplateData,
@@ -48,13 +49,37 @@ class TestPromotionNormalizer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "promotion_input.xlsx"
             source.touch()
-            result = export_normalized(data, source, timestamp=datetime(2030, 1, 2, 3, 4))
+            progress = []
+            result = export_normalized(
+                data,
+                source,
+                timestamp=datetime(2030, 1, 2, 3, 4),
+                progress=lambda percent, event: progress.append((percent, event)),
+            )
             self.assertTrue(result.master_path.exists())
             self.assertTrue(result.rules_path.exists())
             with result.daily_path.open(encoding="utf-8-sig", newline="") as handle:
                 rows = list(csv.DictReader(handle))
         self.assertEqual(tuple(rows[0]), DAILY_SUPPORT_COLUMNS)
         self.assertEqual(len(rows), 5)
+        self.assertEqual(progress[0], (10, "compact"))
+        self.assertIn((25, "daily"), progress)
+        self.assertEqual(progress[-1], (95, "publishing"))
+
+    def test_removes_all_staged_outputs_when_daily_export_fails(self):
+        masters, rules = self._valid_records()
+        data, issues = validate_records(masters, rules)
+        self.assertFalse(issues)
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "promotion_input.xlsx"
+            source.touch()
+            with patch("src.promotion_normalizer._write_daily_csv", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    export_normalized(data, source, timestamp=datetime(2030, 1, 2, 3, 4))
+
+            self.assertEqual(list(Path(directory).glob("promotion_*")), [source])
+            self.assertEqual(list(Path(directory).glob(".*.tmp")), [])
 
     def test_reports_duplicate_ids_missing_master_and_invalid_dates(self):
         masters, rules = self._valid_records()

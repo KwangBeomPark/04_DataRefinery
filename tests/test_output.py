@@ -1,15 +1,24 @@
 import csv
-import shutil
 import tempfile
+import tracemalloc
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest import mock
 
 import openpyxl
 import pandas as pd
 
-from data_refinery import DataRefineryApp, ParsedNumber, _LANGUAGE_CODES
+from src.csv_processing import (
+    CsvProcessingOptions,
+    ParsedNumber,
+    build_output_path,
+    format_csv_value,
+    parse_number,
+    process_csv_file,
+    write_excel_output,
+)
+from src.data_refinery import DataRefineryApp, _LANGUAGE_CODES
 
 
 class _Value:
@@ -21,14 +30,6 @@ class _Value:
 
     def set(self, value):
         self.value = value
-
-
-class _Root:
-    def update(self):
-        pass
-
-    def update_idletasks(self):
-        pass
 
 
 class TestOutput(unittest.TestCase):
@@ -62,38 +63,38 @@ class TestOutput(unittest.TestCase):
             source = Path(directory) / 'input.csv'
             source.touch()
             timestamp = datetime(2030, 1, 2, 3, 4)
-            first = Path(DataRefineryApp._build_output_path(source, 'CSV', timestamp))
+            first = Path(build_output_path(source, 'CSV', timestamp))
             self.assertEqual(first.name, 'processed_output_20300102_0304.csv')
             first.touch()
-            second = Path(DataRefineryApp._build_output_path(source, 'CSV', timestamp))
+            second = Path(build_output_path(source, 'CSV', timestamp))
 
         self.assertEqual(second.name, 'processed_output_20300102_0304_02.csv')
 
     def test_csv_formatter_preserves_each_cell_decimal_scale(self):
         values = [
-            DataRefineryApp.parse_number('500,00', 'Polish'),
-            DataRefineryApp.parse_number('1,2', 'Polish'),
-            DataRefineryApp.parse_number('2,345', 'Polish'),
+            parse_number('500,00', 'Polish'),
+            parse_number('1,2', 'Polish'),
+            parse_number('2,345', 'Polish'),
         ]
         self.assertEqual(
-            [DataRefineryApp._format_csv_value(value, ',') for value in values],
+            [format_csv_value(value, ',') for value in values],
             ['500,00', '1,2', '2,345'],
         )
 
     def test_excel_output_preserves_formats_and_text_protects_large_numbers(self):
         values = [
-            DataRefineryApp.parse_number('500,00', 'Polish'),
-            DataRefineryApp.parse_number('1,2', 'Polish'),
-            DataRefineryApp.parse_number('9999999999999999,99', 'Polish'),
-            DataRefineryApp.parse_number('1234567890123456', 'Polish'),
-            DataRefineryApp.parse_number('100000000000000,00', 'Polish'),
+            parse_number('500,00', 'Polish'),
+            parse_number('1,2', 'Polish'),
+            parse_number('9999999999999999,99', 'Polish'),
+            parse_number('1234567890123456', 'Polish'),
+            parse_number('100000000000000,00', 'Polish'),
         ]
         self.assertTrue(all(isinstance(value, ParsedNumber) for value in values))
         frame = pd.DataFrame([values], columns=['two', 'one', 'large_decimal', 'large_integer', 'safe_zeroes'])
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'output.xlsx'
-            protected_count = DataRefineryApp._write_excel_output(frame, path)
+            protected_count = write_excel_output(frame, path)
             workbook = openpyxl.load_workbook(path, data_only=False)
             sheet = workbook.active
 
@@ -112,27 +113,18 @@ class TestOutput(unittest.TestCase):
         repository_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'input.csv'
-            shutil.copyfile(repository_root / 'test_data.csv', source)
-
-            app = DataRefineryApp.__new__(DataRefineryApp)
-            app.filepath = _Value(str(source))
-            app.delimiter = _Value(',')
-            app.num_format = _Value('Polish')
-            app.max_cols = _Value('5')
-            app.out_format = _Value('CSV')
-            app.log_text = _Value()
-            app.root = _Root()
-            app._set_progress = lambda *args, **kwargs: None
-
-            with patch('data_refinery.messagebox.showerror') as show_error, patch(
-                'data_refinery.messagebox.showwarning'
-            ) as show_warning, patch('data_refinery.messagebox.showinfo'):
-                app.process_csv()
-
-            show_error.assert_not_called()
-            show_warning.assert_not_called()
+            source.write_bytes((repository_root / 'tests' / 'fixtures' / 'test_data.csv').read_bytes())
+            progress = []
+            result = process_csv_file(
+                CsvProcessingOptions(str(source), ',', 'Polish', 'CSV', 5),
+                lambda percent, event: progress.append((percent, event)),
+            )
             output_files = list(Path(directory).glob('processed_output_*.csv'))
             self.assertEqual(len(output_files), 1)
+            self.assertEqual(result.rows, 3)
+            self.assertEqual(progress[0], (0, 'reading'))
+            self.assertTrue(any(event.startswith('scanning:') for _, event in progress))
+            self.assertTrue(any(event == 'saving' for _, event in progress))
             output = output_files[0]
             with output.open(encoding='utf-8-sig', newline='') as file:
                 rows = list(csv.reader(file, delimiter=';'))
@@ -142,3 +134,81 @@ class TestOutput(unittest.TestCase):
         self.assertEqual(rows[2][2], '500,00')
         self.assertEqual(rows[3][2], '1000000,00')
         self.assertEqual(rows[1][4], 'First line Second line')
+
+    def test_large_csv_streams_without_pandas_and_repairs_across_progress_boundaries(self):
+        row_count = 100000
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'large.csv'
+            with source.open('w', encoding='utf-8', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['Id', 'Name', 'Notes'])
+                for index in range(1, row_count + 1):
+                    writer.writerow([index, f'Name {index}', f'Note {index}'])
+                file.write('continued note\n')
+
+            progress = []
+            tracemalloc.start()
+            try:
+                with mock.patch(
+                'src.csv_processing._get_pandas',
+                    side_effect=AssertionError('text CSV must not create a DataFrame'),
+                ):
+                    result = process_csv_file(
+                        CsvProcessingOptions(str(source), ',', 'English', 'CSV', 3),
+                        lambda percent, event: progress.append((percent, event)),
+                    )
+                _current_memory, peak_memory = tracemalloc.get_traced_memory()
+            finally:
+                tracemalloc.stop()
+
+            with Path(result.out_path).open(encoding='utf-8-sig', newline='') as file:
+                output_row_count = 0
+                last_row = None
+                for output_row_count, last_row in enumerate(csv.reader(file), start=1):
+                    pass
+
+        self.assertEqual(result.rows, row_count)
+        self.assertEqual(result.repaired, 1)
+        self.assertEqual(output_row_count, row_count + 1)
+        self.assertEqual(last_row[2], f'Note {row_count} continued note')
+        self.assertLess(peak_memory, 32 * 1024 * 1024)
+        self.assertTrue(any(event == 'scanning:5000' for _, event in progress))
+        self.assertTrue(any(event == 'scanning:100000' for _, event in progress))
+
+    def test_failed_streaming_publish_removes_temporary_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'input.csv'
+            source.write_text('Id,Value\n1,10\n', encoding='utf-8')
+
+            with mock.patch('src.csv_processing.os.replace', side_effect=OSError('publish failed')):
+                with self.assertRaisesRegex(OSError, 'publish failed'):
+                    process_csv_file(
+                        CsvProcessingOptions(str(source), ',', 'English', 'CSV', 2)
+                    )
+
+            self.assertEqual(list(Path(directory).glob('processed_output_*.csv')), [])
+            self.assertEqual(list(Path(directory).glob('.*.tmp')), [])
+
+    def test_streaming_csv_to_excel_keeps_number_formats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'input.csv'
+            source.write_text(
+                'Id,Amount,Large\n1,500.00,1234567890123456\n',
+                encoding='utf-8',
+            )
+            result = process_csv_file(
+                CsvProcessingOptions(
+                    str(source),
+                    ',',
+                    'English',
+                    'Excel (.xlsx)',
+                    3,
+                )
+            )
+            workbook = openpyxl.load_workbook(result.out_path, data_only=False)
+            sheet = workbook.active
+
+        self.assertEqual(sheet['B2'].value, 500)
+        self.assertEqual(sheet['B2'].number_format, '0.00')
+        self.assertEqual(sheet['C2'].value, '1234567890123456')
+        self.assertEqual(result.large_numbers_as_text, 1)

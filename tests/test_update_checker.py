@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from update_checker import ReleaseInfo, check_for_update, load_settings, should_check, version_key
+from src.update_checker import ReleaseInfo, check_for_update, load_settings, should_check, version_key
 
 
 class TestUpdateChecker(unittest.TestCase):
@@ -59,5 +59,5 @@ class TestUpdateChecker(unittest.TestCase):
                 json.dumps({"update_check_enabled": False}), encoding="utf-8"
             )
 
-            with patch("update_checker.settings_path", return_value=target_path):
+            with patch("src.update_checker.settings_path", return_value=target_path):
                 self.assertEqual(load_settings(), {"update_check_enabled": False})

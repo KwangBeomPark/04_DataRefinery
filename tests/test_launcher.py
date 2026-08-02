@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from data_refinery_launcher import (
+from src.data_refinery_launcher import (
     APPLICATION_NAME_PATTERN,
     INSTALLER_NAME_PATTERN,
     InstallerAsset,

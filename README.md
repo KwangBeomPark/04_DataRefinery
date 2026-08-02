@@ -2,7 +2,7 @@
 
 # Data Refinery
 
-![Data Refinery workflow: source files are repaired and normalized into analysis-ready data](manual-data-refinery.png)
+![Data Refinery workflow: source files are repaired and normalized into analysis-ready data](assets/images/manual-data-refinery.png)
 
 > **Clean, normalize, and prepare data for analysis.**
 
@@ -57,6 +57,16 @@ only for the current Windows user; Python and extra libraries are not required.
 
 ## Development
 
+The repository keeps application code in `src`, bundled files in `assets`,
+build scripts in `scripts`, and installer configuration plus generated release
+output in `release`.
+
+Run the desktop app during development with:
+
+```powershell
+python -m src.data_refinery
+```
+
 Run the test suite with:
 
 ```powershell
@@ -66,5 +76,5 @@ python -m unittest discover -s tests -v
 Build the Windows installer with:
 
 ```powershell
-.\build_release.ps1
+.\scripts\build_release.ps1
 ```

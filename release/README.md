@@ -9,7 +9,7 @@ AppData.
 Every release executable **must begin with `App04_`**.
 
 The PyInstaller specification derives the installed application bundle name
-from `__version__` in `data_refinery.py`:
+from `__version__` in `src/data_refinery.py`:
 
 ```text
 App04_DataRefinery_v<version>.exe
@@ -27,12 +27,12 @@ not follow this prefix rule.
 
 ## Release steps
 
-1. Update `__version__` in `data_refinery.py`.
+1. Update `__version__` in `src/data_refinery.py`.
 2. Update the release notes and both README files when necessary.
 3. Run `python -m unittest discover -s tests -v`.
-4. Run `.\build_release.ps1` with Inno Setup 6.7+ or 7 installed.
-5. Verify `dist/App04_DataRefinery_v<version>/App04_DataRefinery_v<version>.exe` exists.
-6. Verify `dist/installer/App04_DataRefinery_Setup_v<version>.exe` installs to
+4. Run `.\scripts\build_release.ps1` with Inno Setup 6.7+ or 7 installed.
+5. Verify `release/dist/App04_DataRefinery_v<version>/App04_DataRefinery_v<version>.exe` exists.
+6. Verify `release/dist/installer/App04_DataRefinery_Setup_v<version>.exe` installs to
    `%LOCALAPPDATA%\Programs\Data Refinery` without an administrator prompt.
 7. Create Git tag `v<version>` and upload only that setup executable to the
    matching GitHub release.

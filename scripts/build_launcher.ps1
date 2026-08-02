@@ -3,7 +3,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 
 if (-not $SkipTests) {
@@ -11,12 +11,12 @@ if (-not $SkipTests) {
 }
 
 $launcherName = 'App04_DataRefinery_Luncher'
-python -m PyInstaller --clean --noconfirm --onefile --windowed --name $launcherName --icon icon.ico --workpath build\launcher --distpath dist data_refinery_launcher.py
+python -m PyInstaller --clean --noconfirm --workpath release\build\launcher --distpath release\dist release\packaging\data_refinery_launcher.spec
 if ($LASTEXITCODE -ne 0) {
     throw 'Launcher build failed.'
 }
 
-$launcherPath = Join-Path $projectRoot "dist\$launcherName.exe"
+$launcherPath = Join-Path $projectRoot "release\dist\$launcherName.exe"
 if (-not (Test-Path $launcherPath)) {
     throw "Launcher was not created: $launcherPath"
 }

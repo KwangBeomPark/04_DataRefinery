@@ -8,11 +8,12 @@ inflate the source data permanently.
 from __future__ import annotations
 
 import csv
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 PROMOTION_MASTER_COLUMNS = (
@@ -286,6 +287,28 @@ def _next_output_path(directory: Path, basename: str, extension: str, stamp: str
     return candidate
 
 
+def _staging_path(final_path: Path) -> Path:
+    """Return a same-directory temporary path so the final rename is atomic."""
+    return final_path.with_name(f".{final_path.name}.{uuid.uuid4().hex}.tmp")
+
+
+def _commit_staged_outputs(staged_outputs: Iterable[tuple[Path, Path]]) -> None:
+    """Publish every staged export or remove the already-published subset."""
+    staged = tuple(staged_outputs)
+    committed: list[Path] = []
+    try:
+        for temporary_path, final_path in staged:
+            temporary_path.replace(final_path)
+            committed.append(final_path)
+    except Exception:
+        for path in committed:
+            path.unlink(missing_ok=True)
+        raise
+    finally:
+        for temporary_path, _ in staged:
+            temporary_path.unlink(missing_ok=True)
+
+
 def _write_compact_csv(path: Path, columns: tuple[str, ...], rows: Iterable[dict]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
@@ -305,25 +328,31 @@ def _iter_daily_records(rules: Iterable[dict]):
             current += timedelta(days=1)
 
 
-def _write_daily_csv(path: Path, rules: Iterable[dict]) -> None:
+def _write_daily_csv(path: Path, rows: Iterable[dict]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=DAILY_SUPPORT_COLUMNS)
         writer.writeheader()
-        writer.writerows(_iter_daily_records(rules))
+        writer.writerows(rows)
 
 
-def _write_daily_excel(path: Path, rules: Iterable[dict]) -> None:
+def _write_daily_excel(path: Path, rows: Iterable[dict]) -> None:
     import openpyxl
 
     workbook = openpyxl.Workbook(write_only=True)
     worksheet = workbook.create_sheet("Daily_Support")
     worksheet.append(list(DAILY_SUPPORT_COLUMNS))
-    for row in _iter_daily_records(rules):
+    for row in rows:
         worksheet.append([row[column] for column in DAILY_SUPPORT_COLUMNS])
     workbook.save(path)
 
 
-def export_normalized(data: PromotionTemplateData, source_path: str | Path, daily_format: str = "CSV", timestamp: datetime | None = None) -> PromotionExportResult:
+def export_normalized(
+    data: PromotionTemplateData,
+    source_path: str | Path,
+    daily_format: str = "CSV",
+    timestamp: datetime | None = None,
+    progress: Callable[[int, str], None] | None = None,
+) -> PromotionExportResult:
     """Write compact source tables plus one analysis-ready daily support file."""
     source = Path(source_path)
     directory = source.parent
@@ -337,12 +366,38 @@ def export_normalized(data: PromotionTemplateData, source_path: str | Path, dail
     else:
         daily_path = _next_output_path(directory, "promotion_daily_support", ".csv", stamp)
 
-    _write_compact_csv(master_path, PROMOTION_MASTER_COLUMNS, data.master_rows)
-    _write_compact_csv(rules_path, SUPPORT_RULE_COLUMNS, data.support_rules)
-    if daily_format == "Excel (.xlsx)":
-        _write_daily_excel(daily_path, data.support_rules)
-    else:
-        _write_daily_csv(daily_path, data.support_rules)
+    staged_outputs = (
+        (_staging_path(master_path), master_path),
+        (_staging_path(rules_path), rules_path),
+        (_staging_path(daily_path), daily_path),
+    )
+
+    def report(percent: int, event: str) -> None:
+        if progress is not None:
+            progress(percent, event)
+
+    def daily_records():
+        for row_number, row in enumerate(_iter_daily_records(data.support_rules), start=1):
+            if row_number % 5000 == 0:
+                percent = 25 + int(65 * row_number / max(1, data.estimated_daily_rows))
+                report(min(percent, 90), f"daily:{row_number}:{data.estimated_daily_rows}")
+            yield row
+
+    try:
+        report(10, "compact")
+        _write_compact_csv(staged_outputs[0][0], PROMOTION_MASTER_COLUMNS, data.master_rows)
+        _write_compact_csv(staged_outputs[1][0], SUPPORT_RULE_COLUMNS, data.support_rules)
+        report(25, "daily")
+        if daily_format == "Excel (.xlsx)":
+            _write_daily_excel(staged_outputs[2][0], daily_records())
+        else:
+            _write_daily_csv(staged_outputs[2][0], daily_records())
+        report(95, "publishing")
+        _commit_staged_outputs(staged_outputs)
+    except Exception:
+        for temporary_path, _ in staged_outputs:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
     return PromotionExportResult(
         master_path=master_path,

@@ -1,6 +1,4 @@
-build/
-dist/
-__pycache__/
-*.spec
-!data_refinery.spec
-*.pyc
+release/build/
+release/dist/
+**/__pycache__/
+*.py[cod]

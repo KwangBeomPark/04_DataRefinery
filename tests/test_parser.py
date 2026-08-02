@@ -1,6 +1,6 @@
 import unittest
 import decimal
-from data_refinery import DataRefineryApp, ParsedNumber
+from src.csv_processing import ParsedNumber, parse_date, parse_number, requires_excel_text
 
 
 class TestDataRefineryParser(unittest.TestCase):
@@ -24,7 +24,7 @@ class TestDataRefineryParser(unittest.TestCase):
 
         for val, expected_dec_str, expected_orig_dec in cases:
             with self.subTest(val=val):
-                res = DataRefineryApp.parse_number(val, 'Polish')
+                res = parse_number(val, 'Polish')
                 self.assertIsInstance(res, ParsedNumber)
                 self.assertEqual(res.value, decimal.Decimal(expected_dec_str))
                 self.assertEqual(res.orig_decimals, expected_orig_dec)
@@ -45,7 +45,7 @@ class TestDataRefineryParser(unittest.TestCase):
 
         for val in cases:
             with self.subTest(val=val):
-                res = DataRefineryApp.parse_number(val, 'Polish')
+                res = parse_number(val, 'Polish')
                 self.assertEqual(res, val) # Should return original string
 
     def test_english_valid_numbers(self):
@@ -62,7 +62,7 @@ class TestDataRefineryParser(unittest.TestCase):
 
         for val, expected_dec_str, expected_orig_dec in cases:
             with self.subTest(val=val):
-                res = DataRefineryApp.parse_number(val, 'English')
+                res = parse_number(val, 'English')
                 self.assertIsInstance(res, ParsedNumber)
                 self.assertEqual(res.value, decimal.Decimal(expected_dec_str))
                 self.assertEqual(res.orig_decimals, expected_orig_dec)
@@ -79,14 +79,33 @@ class TestDataRefineryParser(unittest.TestCase):
 
         for val in cases:
             with self.subTest(val=val):
-                res = DataRefineryApp.parse_number(val, 'English')
+                res = parse_number(val, 'English')
                 self.assertEqual(res, val)
 
     def test_large_integer_is_preserved_as_decimal_for_safe_export_handling(self):
-        result = DataRefineryApp.parse_number("1234567890123456", "Polish")
+        result = parse_number("1234567890123456", "Polish")
         self.assertIsInstance(result, ParsedNumber)
         self.assertEqual(result.value, decimal.Decimal("1234567890123456"))
-        self.assertTrue(DataRefineryApp._requires_excel_text(result))
+        self.assertTrue(requires_excel_text(result))
+
+    def test_date_parser_keeps_ambiguous_numeric_dates_as_text(self):
+        for value in ("01/02/2026", "02-01-2026", "12/11/2026"):
+            with self.subTest(value=value):
+                self.assertEqual(parse_date(value), value)
+
+    def test_date_parser_normalizes_iso_and_unambiguous_numeric_dates(self):
+        cases = {
+            "2026-01-02": "2026-01-02",
+            "2026/01/02": "2026-01-02",
+            "13/01/2026": "2026-01-13",
+            "01/13/2026": "2026-01-13",
+            "13-01-2026": "2026-01-13",
+            "01-13-2026": "2026-01-13",
+            "01.02.2026": "2026-02-01",
+        }
+        for value, expected in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(parse_date(value).isoformat(), expected)
 
 if __name__ == '__main__':
     unittest.main()

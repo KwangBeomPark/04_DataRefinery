@@ -3,21 +3,20 @@ from pathlib import Path
 import re
 
 
-project_root = Path(SPECPATH)
-source = (project_root / 'data_refinery.py').read_text(encoding='utf-8')
+project_root = Path(SPECPATH).parents[1]
+app_source = project_root / 'src' / 'data_refinery.py'
+source = app_source.read_text(encoding='utf-8')
 match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
 if match is None:
     raise RuntimeError('Could not find __version__ in data_refinery.py')
 release_executable_name = f"App04_DataRefinery_v{match.group(1)}"
 
 a = Analysis(
-    ['data_refinery.py'],
+    [str(app_source)],
     pathex=[str(project_root)],
     binaries=[],
     datas=[
-        (str(project_root / 'icon.ico'), '.'),
-        (str(project_root / 'header_icon.png'), '.'),
-        (str(project_root / 'promotion_template.xlsx'), '.'),
+        (str(project_root / 'assets'), 'assets'),
     ],
     hiddenimports=[],
     hookspath=[],
@@ -45,7 +44,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(project_root / 'icon.ico'),
+    icon=str(project_root / 'assets' / 'icons' / 'icon.ico'),
     exclude_binaries=True,
 )
 
