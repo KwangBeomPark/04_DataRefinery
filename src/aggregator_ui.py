@@ -253,11 +253,24 @@ class AggregatorTabFrame(ttk.Frame):
             self.app.set_progress(0, "파일 컬럼 구조를 분석하는 중...")
             schema = inspect_dataset_schema(fn)
             self._schema = schema
+            self._clear_all_rules()
             self._populate_discovered_columns(schema)
             self.app.set_progress(100, f"컬럼 감지 완료 ({len(schema.columns)}개 열)")
             self.app.set_status_log(f"파일 감지: {os.path.basename(fn)} (총 {len(schema.columns)}개 컬럼)")
         except Exception as e:
             messagebox.showerror("파일 분석 오류", f"파일 스키마를 읽을 수 없습니다:\n{e}")
+
+    def _clear_all_rules(self):
+        self.selected_group_keys.clear()
+        self.selected_measures.clear()
+        self.filters.clear()
+        self.column_groups.clear()
+        self.derived_formulas.clear()
+
+        self.lb_group_keys.delete(0, tk.END)
+        self.lb_selected_measures.delete(0, tk.END)
+        self.lb_filters.delete(0, tk.END)
+        self.lb_custom_rules.delete(0, tk.END)
 
     def _populate_discovered_columns(self, schema):
         self.lb_dimensions.delete(0, tk.END)
@@ -437,7 +450,7 @@ class AggregatorTabFrame(ttk.Frame):
 
         top = tk.Toplevel(self)
         top.title("필터 조건 추가")
-        top.geometry("380x240")
+        top.geometry("400x260")
         top.transient(self)
         top.grab_set()
 
@@ -462,11 +475,26 @@ class AggregatorTabFrame(ttk.Frame):
 
         ttk.Label(grid_f, text="비교 값:", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=6)
         val_var = tk.StringVar()
-        ent_val = ttk.Entry(grid_f, textvariable=val_var)
-        ent_val.grid(row=2, column=1, sticky="ew", pady=6)
-        ent_val.focus_set()
+        # Pre-populate sample values from schema if available
+        init_col = col_var.get()
+        sample_vals = [str(x) for x in self._schema.sample_values.get(init_col, []) if str(x).strip()]
+        combo_val = ttk.Combobox(grid_f, textvariable=val_var, values=sample_vals)
+        combo_val.grid(row=2, column=1, sticky="ew", pady=6)
+        combo_val.focus_set()
 
-        ttk.Label(grid_f, text="※ in / not in 은 콤마(,)로 여러 값을 구분 입력", font=("Segoe UI", 8), foreground="#666666").grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 6))
+        def _on_col_change(event=None):
+            c = col_var.get()
+            s_vals = [str(x) for x in self._schema.sample_values.get(c, []) if str(x).strip()]
+            combo_val["values"] = s_vals
+
+        combo_col.bind("<<ComboboxSelected>>", _on_col_change)
+
+        ttk.Label(
+            grid_f,
+            text="※ 텍스트 원본 기준 일치 비교 (in / not in 은 콤마로 여러 값 구분)",
+            font=("Segoe UI", 8),
+            foreground="#666666",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 6))
 
         def on_ok():
             col = col_var.get().strip()
@@ -475,6 +503,10 @@ class AggregatorTabFrame(ttk.Frame):
 
             if not col or not op:
                 messagebox.showwarning("입력 확인", "컬럼과 연산자를 지정해 주세요.")
+                return
+
+            if not raw_val:
+                messagebox.showwarning("입력 확인", "비교할 값을 입력해 주세요.")
                 return
 
             if op in ("in", "not in"):

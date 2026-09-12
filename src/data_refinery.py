@@ -368,12 +368,6 @@ class DataRefineryApp:
 
         try:
             self.root.iconbitmap(self._resource_path("icons/icon.ico"))
-        except Exception:
-            pass
-
-        self._header_icon_image = None
-        try:
-            self._header_icon_image = tk.PhotoImage(file=self._resource_path("icons/header_icon.png"))
         except tk.TclError:
             pass
 
@@ -399,12 +393,6 @@ class DataRefineryApp:
 
         style.configure(".", font=("Segoe UI", 10), background=page_bg, foreground=text)
         style.configure("App.TFrame", background=page_bg)
-        style.configure("Header.TFrame", background=navy)
-        style.configure("Header.Icon.TLabel", background=navy)
-        style.configure("Header.Title.TLabel", background=navy, foreground="#FFFFFF", font=("Segoe UI Semibold", 20))
-        style.configure("Header.Subtitle.TLabel", background=navy, foreground="#C9D6E2", font=("Segoe UI", 10))
-        style.configure("Header.TCheckbutton", background=navy, foreground="#C9D6E2", font=("Segoe UI", 8))
-        style.map("Header.TCheckbutton", background=[("active", navy)], foreground=[("active", "#FFFFFF")])
         style.configure("Card.TLabelframe", background=surface, bordercolor=border, relief="solid", borderwidth=1)
         style.configure("Card.TLabelframe.Label", background=surface, foreground=navy, font=("Segoe UI Semibold", 10))
         style.configure("TLabel", background=surface, foreground=text)
@@ -442,7 +430,6 @@ class DataRefineryApp:
         # 1-Line Compact Top Bar (Tabs on Left, Language/Update on Right)
         top_bar = ttk.Frame(main, style="App.TFrame")
         top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        top_bar.columnconfigure(0, weight=1)
 
         self.task_tabs = ttk.Frame(top_bar, style="App.TFrame")
         self.task_tabs.pack(side="left")
@@ -519,6 +506,7 @@ class DataRefineryApp:
         self.file_section = ttk.LabelFrame(self.csv_tab, style="Card.TLabelframe", padding=(18, 14))
         self.file_section.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         self.csv_tab.columnconfigure(0, weight=1)
+        self.csv_tab.rowconfigure(1, weight=1)
         self.file_section.columnconfigure(0, weight=1)
 
         # File Path
@@ -537,6 +525,7 @@ class DataRefineryApp:
         self.settings.grid(row=1, column=0, sticky="nsew")
         self.settings.columnconfigure(0, weight=1)
         self.settings.columnconfigure(1, weight=1)
+        self.settings.rowconfigure(0, weight=1)
 
         self.import_section = ttk.LabelFrame(self.settings, style="Card.TLabelframe", padding=(18, 14))
         self.import_section.grid(row=0, column=0, sticky="nsew", padx=(0, 6))

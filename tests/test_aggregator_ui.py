@@ -104,6 +104,83 @@ class TestAggregatorUI(unittest.TestCase):
             # User chose 'No' on overwrite, so save should be aborted
             mock_ask.assert_called_once()
 
+    def test_filter_management_add_and_remove(self):
+        from src.data_aggregator import FilterCondition
+        tab = self.app.aggregator_tab
+        tab.filters.clear()
+        tab.lb_filters.delete(0, tk.END)
+
+        # Simulate adding a filter
+        f1 = FilterCondition(column="디비전", operator="==", value="패션")
+        tab.filters.append(f1)
+        tab.lb_filters.insert(tk.END, "디비전 == 패션")
+
+        self.assertEqual(len(tab.filters), 1)
+        self.assertEqual(tab.lb_filters.size(), 1)
+
+        # Select and remove
+        tab.lb_filters.selection_set(0)
+        tab._remove_selected_filter()
+        self.assertEqual(len(tab.filters), 0)
+        self.assertEqual(tab.lb_filters.size(), 0)
+
+    def test_clear_all_rules(self):
+        from src.data_aggregator import FilterCondition, ColumnGroupRule, DerivedFormulaRule
+        tab = self.app.aggregator_tab
+
+        tab.selected_group_keys = ["디비전"]
+        tab.lb_group_keys.insert(tk.END, "디비전")
+        tab.selected_measures = ["매출"]
+        tab.lb_selected_measures.insert(tk.END, "매출")
+        tab.filters = [FilterCondition("국가", "==", "KR")]
+        tab.lb_filters.insert(tk.END, "국가 == KR")
+        tab.column_groups = [ColumnGroupRule("총비용", ["비용1", "비용2"])]
+        tab.lb_custom_rules.insert(tk.END, "[묶음] 총비용 = 비용1 + 비용2")
+
+        tab._clear_all_rules()
+
+        self.assertEqual(len(tab.selected_group_keys), 0)
+        self.assertEqual(len(tab.selected_measures), 0)
+        self.assertEqual(len(tab.filters), 0)
+        self.assertEqual(len(tab.column_groups), 0)
+        self.assertEqual(len(tab.derived_formulas), 0)
+        self.assertEqual(tab.lb_group_keys.size(), 0)
+        self.assertEqual(tab.lb_selected_measures.size(), 0)
+        self.assertEqual(tab.lb_filters.size(), 0)
+        self.assertEqual(tab.lb_custom_rules.size(), 0)
+
+    def test_apply_selected_preset_with_filters(self):
+        from unittest.mock import patch
+        from src.data_aggregator import FilterCondition, ColumnGroupRule, DerivedFormulaRule
+        from src.preset_manager import AggregationPreset
+
+        tab = self.app.aggregator_tab
+        tab.preset_name_var.set("필터포함프리셋")
+
+        dummy_preset = AggregationPreset(
+            name="필터포함프리셋",
+            description="테스트용",
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            column_groups=[],
+            derived_formulas=[],
+            filters=[
+                FilterCondition(column="디비전", operator="in", value=["식품", "생활"]),
+                FilterCondition(column="국가", operator="==", value="KR"),
+            ],
+            rollup_annual=True,
+            month_column="월",
+            output_format="xlsx",
+        )
+
+        with patch("src.aggregator_ui.load_preset", return_value=dummy_preset):
+            tab.apply_selected_preset()
+
+        self.assertEqual(len(tab.filters), 2)
+        self.assertEqual(tab.lb_filters.size(), 2)
+        self.assertEqual(tab.lb_filters.get(0), "디비전 in 식품, 생활")
+        self.assertEqual(tab.lb_filters.get(1), "국가 == KR")
+
 
 if __name__ == "__main__":
     unittest.main()
