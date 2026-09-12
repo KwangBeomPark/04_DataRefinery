@@ -68,6 +68,7 @@ class TestAggregatorUI(unittest.TestCase):
         self.assertIsNotNone(tab.lb_measures)
         self.assertIsNotNone(tab.lb_group_keys)
         self.assertIsNotNone(tab.lb_selected_measures)
+        self.assertIsNotNone(tab.lb_filters)
         self.assertIsNotNone(tab.lb_custom_rules)
         self.assertTrue(tab.rollup_annual_var.get())
 

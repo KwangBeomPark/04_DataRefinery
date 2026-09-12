@@ -113,76 +113,98 @@ class AggregatorTabFrame(ttk.Frame):
         pane_frame = ttk.Frame(self, style="App.TFrame")
         pane_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
         self.rowconfigure(1, weight=1)
-        pane_frame.columnconfigure(0, weight=4)  # Left: columns
-        pane_frame.columnconfigure(1, weight=6)  # Right: config
+        pane_frame.columnconfigure(0, weight=5)  # Left: columns (2-column list)
+        pane_frame.columnconfigure(1, weight=5)  # Right: config (2x2 pivot quadrants)
         pane_frame.rowconfigure(0, weight=1)
 
-        # Left Pane: Discovered Columns
-        left_card = ttk.LabelFrame(pane_frame, style="Card.TLabelframe", text=" 원본 컬럼 (더블클릭하여 추가) ", padding=(10, 8))
+        # Left Pane: Discovered Columns (2 columns side-by-side for full vertical view)
+        left_card = ttk.LabelFrame(pane_frame, style="Card.TLabelframe", text=" 원본 컬럼 탐색기 (더블클릭하여 추가) ", padding=(10, 8))
         left_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
         left_card.columnconfigure(0, weight=1)
+        left_card.columnconfigure(1, weight=1)
         left_card.rowconfigure(1, weight=1)
-        left_card.rowconfigure(3, weight=1)
 
-        ttk.Label(left_card, text="📁 차원/키 컬럼 (더블클릭 ➔ 행 그룹)", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 2))
-        self.lb_dimensions = tk.Listbox(left_card, height=6, exportselection=False)
-        self.lb_dimensions.grid(row=1, column=0, sticky="nsew")
+        # Left Sub-Column: Dimensions
+        ttk.Label(left_card, text="📁 차원/키 (더블클릭 ➔ 행)", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 2))
+        self.lb_dimensions = tk.Listbox(left_card, exportselection=False)
+        self.lb_dimensions.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
         self.lb_dimensions.bind("<Double-Button-1>", lambda e: self._add_dimension_to_group())
 
         dim_btn_frame = ttk.Frame(left_card, style="App.TFrame")
-        dim_btn_frame.grid(row=2, column=0, sticky="ew", pady=(2, 6))
-        ttk.Button(dim_btn_frame, text="➔ 행 그룹에 추가", command=self._add_dimension_to_group, style="Secondary.TButton").pack(side="left", padx=2)
-        ttk.Button(dim_btn_frame, text="↔ 수치로 전환", command=self._switch_dim_to_measure, style="Secondary.TButton").pack(side="right", padx=2)
+        dim_btn_frame.grid(row=2, column=0, sticky="ew", pady=(4, 0), padx=(0, 4))
+        ttk.Button(dim_btn_frame, text="➔ 행 추가", command=self._add_dimension_to_group, style="Secondary.TButton").pack(side="left", padx=1)
+        ttk.Button(dim_btn_frame, text="↔ 수치로", command=self._switch_dim_to_measure, style="Secondary.TButton").pack(side="right", padx=1)
 
-        ttk.Label(left_card, text="📊 수치/값 컬럼 (더블클릭 ➔ 합산값)", style="Field.TLabel").grid(row=3, column=0, sticky="w", pady=(4, 2))
-        self.lb_measures = tk.Listbox(left_card, height=6, exportselection=False)
-        self.lb_measures.grid(row=4, column=0, sticky="nsew")
+        # Right Sub-Column: Measures
+        ttk.Label(left_card, text="📊 수치/값 (더블클릭 ➔ 값)", style="Field.TLabel").grid(row=0, column=1, sticky="w", pady=(0, 2), padx=(4, 0))
+        self.lb_measures = tk.Listbox(left_card, exportselection=False)
+        self.lb_measures.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
         self.lb_measures.bind("<Double-Button-1>", lambda e: self._add_measure_to_sums())
 
         meas_btn_frame = ttk.Frame(left_card, style="App.TFrame")
-        meas_btn_frame.grid(row=5, column=0, sticky="ew", pady=(2, 0))
-        ttk.Button(meas_btn_frame, text="➔ 합산값에 추가", command=self._add_measure_to_sums, style="Secondary.TButton").pack(side="left", padx=2)
-        ttk.Button(meas_btn_frame, text="↔ 차원으로 전환", command=self._switch_measure_to_dim, style="Secondary.TButton").pack(side="right", padx=2)
+        meas_btn_frame.grid(row=2, column=1, sticky="ew", pady=(4, 0), padx=(4, 0))
+        ttk.Button(meas_btn_frame, text="➔ 값 추가", command=self._add_measure_to_sums, style="Secondary.TButton").pack(side="left", padx=1)
+        ttk.Button(meas_btn_frame, text="↔ 차원으로", command=self._switch_measure_to_dim, style="Secondary.TButton").pack(side="right", padx=1)
 
-        # Right Pane: Aggregation Settings & Rules
-        right_card = ttk.LabelFrame(pane_frame, style="Card.TLabelframe", text=" 집계 및 계산 규칙 설정 ", padding=(10, 8))
+        # Right Pane: Aggregation Settings & Rules (2x2 Pivot Quadrants)
+        right_card = ttk.LabelFrame(pane_frame, style="Card.TLabelframe", text=" 집계 및 피벗 규칙 설정 (4분면) ", padding=(10, 8))
         right_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
         right_card.columnconfigure(0, weight=1)
+        right_card.columnconfigure(1, weight=1)
+        right_card.rowconfigure(0, weight=1)
+        right_card.rowconfigure(1, weight=1)
 
-        # Right Section 1: Group By & Annual Rollup
-        grp_box = ttk.LabelFrame(right_card, text="1. 행 그룹 (Group By Keys)", padding=(8, 6))
-        grp_box.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        # Quadrant 1 (Row 0, Col 0): 1. 행 그룹 (Rows / Group By)
+        grp_box = ttk.LabelFrame(right_card, text=" 1. 행 그룹 (Rows / Group By) ", padding=(6, 5))
+        grp_box.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=(0, 3))
         grp_box.columnconfigure(0, weight=1)
+        grp_box.rowconfigure(1, weight=1)
 
-        self.chk_rollup = ttk.Checkbutton(grp_box, text="연간 통합 (월 YYYYMM ➔ 연도 YYYY 롤업 합산)", variable=self.rollup_annual_var)
-        self.chk_rollup.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.chk_rollup = ttk.Checkbutton(grp_box, text="연간 롤업 합산 (YYYYMM ➔ YYYY)", variable=self.rollup_annual_var)
+        self.chk_rollup.grid(row=0, column=0, sticky="w", pady=(0, 2))
 
-        self.lb_group_keys = tk.Listbox(grp_box, height=3, exportselection=False)
-        self.lb_group_keys.grid(row=1, column=0, sticky="ew")
-        ttk.Button(grp_box, text="선택 항목 삭제", command=self._remove_selected_group_key, style="Secondary.TButton").grid(row=2, column=0, sticky="e", pady=(2, 0))
+        self.lb_group_keys = tk.Listbox(grp_box, exportselection=False)
+        self.lb_group_keys.grid(row=1, column=0, sticky="nsew")
+        ttk.Button(grp_box, text="선택 삭제", command=self._remove_selected_group_key, style="Secondary.TButton").grid(row=2, column=0, sticky="e", pady=(2, 0))
 
-        # Right Section 2: Measure Sums
-        meas_box = ttk.LabelFrame(right_card, text="2. 기본 합산 항목 (Measure Sums)", padding=(8, 6))
-        meas_box.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        # Quadrant 2 (Row 0, Col 1): 2. 기본 합산값 (Values / Sums)
+        meas_box = ttk.LabelFrame(right_card, text=" 2. 기본 합산값 (Values / Sums) ", padding=(6, 5))
+        meas_box.grid(row=0, column=1, sticky="nsew", padx=(3, 0), pady=(0, 3))
         meas_box.columnconfigure(0, weight=1)
+        meas_box.rowconfigure(0, weight=1)
 
-        self.lb_selected_measures = tk.Listbox(meas_box, height=3, exportselection=False)
-        self.lb_selected_measures.grid(row=0, column=0, sticky="ew")
-        ttk.Button(meas_box, text="선택 항목 삭제", command=self._remove_selected_measure, style="Secondary.TButton").grid(row=1, column=0, sticky="e", pady=(2, 0))
+        self.lb_selected_measures = tk.Listbox(meas_box, exportselection=False)
+        self.lb_selected_measures.grid(row=0, column=0, sticky="nsew")
+        ttk.Button(meas_box, text="선택 삭제", command=self._remove_selected_measure, style="Secondary.TButton").grid(row=1, column=0, sticky="e", pady=(2, 0))
 
-        # Right Section 3: Column Groups & Formulas
-        calc_box = ttk.LabelFrame(right_card, text="3. 컬럼 묶기 & 비율 수식", padding=(8, 6))
-        calc_box.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        # Quadrant 3 (Row 1, Col 0): 3. 조건 필터 (Filters)
+        filt_box = ttk.LabelFrame(right_card, text=" 3. 조건 필터 (Filters) ", padding=(6, 5))
+        filt_box.grid(row=1, column=0, sticky="nsew", padx=(0, 3), pady=(3, 0))
+        filt_box.columnconfigure(0, weight=1)
+        filt_box.rowconfigure(0, weight=1)
+
+        self.lb_filters = tk.Listbox(filt_box, exportselection=False)
+        self.lb_filters.grid(row=0, column=0, sticky="nsew")
+
+        filt_btn_frame = ttk.Frame(filt_box, style="App.TFrame")
+        filt_btn_frame.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        ttk.Button(filt_btn_frame, text="+ 필터 추가", command=self._popup_add_filter, style="Secondary.TButton").pack(side="left", padx=1)
+        ttk.Button(filt_btn_frame, text="선택 삭제", command=self._remove_selected_filter, style="Secondary.TButton").pack(side="right", padx=1)
+
+        # Quadrant 4 (Row 1, Col 1): 4. 컬럼 묶기 & 비율 수식 (Formulas)
+        calc_box = ttk.LabelFrame(right_card, text=" 4. 컬럼 묶기 & 비율 수식 ", padding=(6, 5))
+        calc_box.grid(row=1, column=1, sticky="nsew", padx=(3, 0), pady=(3, 0))
         calc_box.columnconfigure(0, weight=1)
+        calc_box.rowconfigure(0, weight=1)
 
-        self.lb_custom_rules = tk.Listbox(calc_box, height=3, exportselection=False)
-        self.lb_custom_rules.grid(row=0, column=0, sticky="ew")
+        self.lb_custom_rules = tk.Listbox(calc_box, exportselection=False)
+        self.lb_custom_rules.grid(row=0, column=0, sticky="nsew")
 
         rule_btn_frame = ttk.Frame(calc_box, style="App.TFrame")
-        rule_btn_frame.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        ttk.Button(rule_btn_frame, text="+ 컬럼 묶기(합산)", command=self._popup_add_column_group, style="Secondary.TButton").pack(side="left", padx=2)
-        ttk.Button(rule_btn_frame, text="+ 비율식(이익율 등)", command=self._popup_add_formula, style="Secondary.TButton").pack(side="left", padx=2)
-        ttk.Button(rule_btn_frame, text="규칙 삭제", command=self._remove_selected_custom_rule, style="Secondary.TButton").pack(side="right", padx=2)
+        rule_btn_frame.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        ttk.Button(rule_btn_frame, text="+ 묶기", command=self._popup_add_column_group, style="Secondary.TButton").pack(side="left", padx=1)
+        ttk.Button(rule_btn_frame, text="+ 비율식", command=self._popup_add_formula, style="Secondary.TButton").pack(side="left", padx=1)
+        ttk.Button(rule_btn_frame, text="규칙 삭제", command=self._remove_selected_custom_rule, style="Secondary.TButton").pack(side="right", padx=1)
 
         # -------------------------------------------------------------
         # 3. Bottom Action Bar: Output format, Progress, Action buttons
@@ -406,6 +428,84 @@ class AggregatorTabFrame(ttk.Frame):
         ttk.Button(btn_box, text="추가", command=on_ok, style="Primary.TButton").pack(side="right", padx=4)
         ttk.Button(btn_box, text="취소", command=top.destroy, style="Secondary.TButton").pack(side="right")
 
+    def _popup_add_filter(self):
+        if not self._schema:
+            messagebox.showinfo("알림", "먼저 원본 파일을 선택해 주세요.")
+            return
+
+        all_cols = list(self._schema.columns)
+
+        top = tk.Toplevel(self)
+        top.title("필터 조건 추가")
+        top.geometry("380x240")
+        top.transient(self)
+        top.grab_set()
+
+        grid_f = ttk.Frame(top, style="App.TFrame")
+        grid_f.pack(fill="both", expand=True, padx=14, pady=12)
+        grid_f.columnconfigure(1, weight=1)
+
+        ttk.Label(grid_f, text="대상 컬럼:", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=6)
+        col_var = tk.StringVar(value=all_cols[0] if all_cols else "")
+        combo_col = ttk.Combobox(grid_f, textvariable=col_var, values=all_cols, state="readonly")
+        combo_col.grid(row=0, column=1, sticky="ew", pady=6)
+
+        ttk.Label(grid_f, text="조건 연산자:", style="Field.TLabel").grid(row=1, column=0, sticky="w", pady=6)
+        op_var = tk.StringVar(value="==")
+        combo_op = ttk.Combobox(
+            grid_f,
+            textvariable=op_var,
+            values=["==", "!=", "contains", "in", "not in"],
+            state="readonly",
+        )
+        combo_op.grid(row=1, column=1, sticky="ew", pady=6)
+
+        ttk.Label(grid_f, text="비교 값:", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=6)
+        val_var = tk.StringVar()
+        ent_val = ttk.Entry(grid_f, textvariable=val_var)
+        ent_val.grid(row=2, column=1, sticky="ew", pady=6)
+        ent_val.focus_set()
+
+        ttk.Label(grid_f, text="※ in / not in 은 콤마(,)로 여러 값을 구분 입력", font=("Segoe UI", 8), foreground="#666666").grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 6))
+
+        def on_ok():
+            col = col_var.get().strip()
+            op = op_var.get().strip()
+            raw_val = val_var.get().strip()
+
+            if not col or not op:
+                messagebox.showwarning("입력 확인", "컬럼과 연산자를 지정해 주세요.")
+                return
+
+            if op in ("in", "not in"):
+                parsed_val = [x.strip() for x in raw_val.split(",") if x.strip()]
+                if not parsed_val:
+                    messagebox.showwarning("입력 확인", "비교할 값을 최소 하나 이상 입력해 주세요.")
+                    return
+                display_val = ", ".join(parsed_val)
+            else:
+                parsed_val = raw_val
+                display_val = raw_val
+
+            rule = FilterCondition(column=col, operator=op, value=parsed_val)
+            self.filters.append(rule)
+            self.lb_filters.insert(tk.END, f"{col} {op} {display_val}")
+            top.destroy()
+
+        btn_box = ttk.Frame(top, style="App.TFrame")
+        btn_box.pack(fill="x", padx=14, pady=(0, 12))
+        ttk.Button(btn_box, text="추가", command=on_ok, style="Primary.TButton").pack(side="right", padx=4)
+        ttk.Button(btn_box, text="취소", command=top.destroy, style="Secondary.TButton").pack(side="right")
+
+    def _remove_selected_filter(self):
+        sel = self.lb_filters.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        self.lb_filters.delete(idx)
+        if idx < len(self.filters):
+            del self.filters[idx]
+
     def _remove_selected_custom_rule(self):
         sel = self.lb_custom_rules.curselection()
         if not sel:
@@ -420,6 +520,7 @@ class AggregatorTabFrame(ttk.Frame):
         elif text.startswith("[비율]"):
             col_name = text.split(" = ")[0].replace("[비율] ", "").strip()
             self.derived_formulas = [df for df in self.derived_formulas if df.new_column != col_name]
+
 
     # -------------------------------------------------------------
     # Presets Management UI Actions
@@ -479,6 +580,12 @@ class AggregatorTabFrame(ttk.Frame):
             self.lb_custom_rules.insert(tk.END, f"[묶음] {cg.new_column} = {' + '.join(cg.source_columns)}")
         for df in self.derived_formulas:
             self.lb_custom_rules.insert(tk.END, f"[비율] {df.new_column} = ({df.numerator_column} ÷ {df.denominator_column}) × {df.multiplier}")
+
+        self.filters = list(preset.filters)
+        self.lb_filters.delete(0, tk.END)
+        for f in self.filters:
+            val_str = ", ".join(map(str, f.value)) if isinstance(f.value, (list, tuple)) else str(f.value)
+            self.lb_filters.insert(tk.END, f"{f.column} {f.operator} {val_str}")
 
         self.app.set_status_log(f"프리셋 '{name}' 적용 완료")
         if preset.description:

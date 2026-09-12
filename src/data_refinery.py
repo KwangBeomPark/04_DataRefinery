@@ -434,44 +434,68 @@ class DataRefineryApp:
         style.configure("Status.TLabel", background=navy, foreground="#D9E2EC", font=("Segoe UI", 9))
         style.configure("App.Horizontal.TProgressbar", troughcolor=border, background=accent, bordercolor=border, lightcolor=accent, darkcolor=accent)
 
-        main = ttk.Frame(root, style="App.TFrame", padding=(24, 20, 24, 18))
+        main = ttk.Frame(root, style="App.TFrame", padding=(16, 10, 16, 8))
         main.grid(row=0, column=0, sticky="nsew")
         main.columnconfigure(0, weight=1)
-        main.rowconfigure(4, weight=1)
+        main.rowconfigure(1, weight=1)
 
-        header = ttk.Frame(main, style="Header.TFrame", padding=(22, 18))
-        header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(1, weight=1)
-        title_column = 0
-        if self._header_icon_image is not None:
-            ttk.Label(header, image=self._header_icon_image, style="Header.Icon.TLabel").grid(
-                row=0, column=0, rowspan=2, sticky="w", padx=(0, 14)
-            )
-            title_column = 1
-        self.header_title = ttk.Label(header, text="Data Refinery", style="Header.Title.TLabel")
-        self.header_title.grid(row=0, column=title_column, sticky="w")
-        self.header_subtitle = ttk.Label(
-            header,
-            style="Header.Subtitle.TLabel",
+        # 1-Line Compact Top Bar (Tabs on Left, Language/Update on Right)
+        top_bar = ttk.Frame(main, style="App.TFrame")
+        top_bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        top_bar.columnconfigure(0, weight=1)
+
+        self.task_tabs = ttk.Frame(top_bar, style="App.TFrame")
+        self.task_tabs.pack(side="left")
+
+        self.csv_tab_button = ttk.Button(
+            self.task_tabs,
+            command=lambda: self._select_task_tab(self.csv_tab),
+            style="TaskTab.Selected.TButton",
+            width=18,
         )
-        self.header_subtitle.grid(row=1, column=title_column, sticky="w", pady=(3, 0))
-        self.language_label = ttk.Label(header, style="Header.Subtitle.TLabel")
-        self.language_label.grid(row=0, column=2, sticky="e", padx=(16, 8))
+        self.csv_tab_button.pack(side="left", padx=(0, 2))
+
+        self.promotion_tab_button = ttk.Button(
+            self.task_tabs,
+            command=lambda: self._select_task_tab(self.promotion_tab),
+            style="TaskTab.TButton",
+            width=18,
+        )
+        self.promotion_tab_button.pack(side="left", padx=2)
+
+        self.aggregator_tab_button = ttk.Button(
+            self.task_tabs,
+            command=lambda: self._select_task_tab(self.aggregator_tab),
+            style="TaskTab.TButton",
+            width=18,
+        )
+        self.aggregator_tab_button.pack(side="left", padx=2)
+
+        # Utility controls (Right side)
+        util_frame = ttk.Frame(top_bar, style="App.TFrame")
+        util_frame.pack(side="right")
+
+        self.header_subtitle = ttk.Label(util_frame, text="")  # keep for language binding compatibility
+        self.language_label = ttk.Label(util_frame, style="Muted.TLabel")
+        self.language_label.pack(side="left", padx=(0, 6))
+
         self.language_combo = ttk.Combobox(
-            header,
+            util_frame,
             textvariable=self.language,
             values=tuple(_LANGUAGE_CODES),
             state="readonly",
-            width=11,
+            width=9,
         )
-        self.language_combo.grid(row=0, column=3, rowspan=2, sticky="e")
+        self.language_combo.pack(side="left", padx=(0, 6))
         self.language_combo.bind("<<ComboboxSelected>>", self._apply_language)
+
         self.update_details_button = ttk.Button(
-            header,
+            util_frame,
             command=self._show_update_menu,
             style="Secondary.TButton",
         )
-        self.update_details_button.grid(row=1, column=2, columnspan=2, sticky="e", pady=(8, 0))
+        self.update_details_button.pack(side="left")
+
         self.update_menu = UpdateMenu(
             root,
             self.update_check_enabled,
@@ -481,42 +505,16 @@ class DataRefineryApp:
         )
 
         self.job_runner = self._jobs
-        self.task_tabs = ttk.Frame(main, style="App.TFrame")
-        self.task_tabs.grid(row=1, column=0, sticky="w", pady=(16, 0))
-        self.task_tabs.columnconfigure(0, weight=1)
-        self.task_tabs.columnconfigure(1, weight=1)
-        self.task_tabs.columnconfigure(2, weight=1)
 
         self.notebook = ttk.Notebook(main, style="App.TNotebook")
-        self.notebook.grid(row=2, column=0, sticky="nsew")
-        self.csv_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 12, 0, 0))
-        self.promotion_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 12, 0, 0))
-        self.aggregator_tab = AggregatorTabFrame(self.notebook, self, padding=(0, 12, 0, 0))
+        self.notebook.grid(row=1, column=0, sticky="nsew")
+        self.csv_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 6, 0, 0))
+        self.promotion_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 6, 0, 0))
+        self.aggregator_tab = AggregatorTabFrame(self.notebook, self, padding=(0, 6, 0, 0))
         self.notebook.add(self.csv_tab)
         self.notebook.add(self.promotion_tab)
         self.notebook.add(self.aggregator_tab)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_task_tab_change)
-        self.csv_tab_button = ttk.Button(
-            self.task_tabs,
-            command=lambda: self._select_task_tab(self.csv_tab),
-            style="TaskTab.Selected.TButton",
-            width=18,
-        )
-        self.csv_tab_button.grid(row=0, column=0, sticky="ew")
-        self.promotion_tab_button = ttk.Button(
-            self.task_tabs,
-            command=lambda: self._select_task_tab(self.promotion_tab),
-            style="TaskTab.TButton",
-            width=18,
-        )
-        self.promotion_tab_button.grid(row=0, column=1, sticky="ew")
-        self.aggregator_tab_button = ttk.Button(
-            self.task_tabs,
-            command=lambda: self._select_task_tab(self.aggregator_tab),
-            style="TaskTab.TButton",
-            width=18,
-        )
-        self.aggregator_tab_button.grid(row=0, column=2, sticky="ew")
 
         self.file_section = ttk.LabelFrame(self.csv_tab, style="Card.TLabelframe", padding=(18, 14))
         self.file_section.grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -690,14 +688,14 @@ class DataRefineryApp:
 
         # Progress bar (advances during processing)
         self.progress = ttk.Progressbar(main, mode="determinate", maximum=100, style="App.Horizontal.TProgressbar")
-        self.progress.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        self.progress.grid(row=2, column=0, sticky="ew", pady=(8, 0))
 
         self.result_section = ttk.LabelFrame(
             main,
             style="Card.TLabelframe",
-            padding=(12, 10),
+            padding=(12, 8),
         )
-        self.result_section.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
+        self.result_section.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
         self.result_section.columnconfigure(0, weight=1)
         self.result_section.rowconfigure(0, weight=1)
         self.result_text = tk.Text(
