@@ -24,10 +24,11 @@ from src.promotion_normalizer import (
     load_template,
     preview_daily_rows,
 )
+from src.aggregator_ui import AggregatorTabFrame
 from src.update_checker import check_for_update, load_settings, save_settings
 from src.ui_components import UpdateMenu
 
-__version__ = "1.6.0"
+__version__ = "1.7.0"
 
 _LANGUAGE_CODES = {
     "English": "en",
@@ -217,7 +218,8 @@ _UI_TEXT = {
 
 _UI_TEXT["en"].update({
     "task_label": "Task",
-    "task_options": ("CSV repair", "Promotion template"),
+    "task_options": ("CSV repair", "Promotion template", "Data aggregator"),
+    "agg_initial_result": "Select a CSV file to inspect columns, configure group keys and measures, or load a saved preset.",
     "update_enabled": "Check for updates automatically",
     "check_updates": "Check now",
     "updates": "Updates",
@@ -256,7 +258,8 @@ _UI_TEXT["en"].update({
 })
 _UI_TEXT["ko"].update({
     "task_label": "작업 방식",
-    "task_options": ("CSV 구조 복구", "프로모션 템플릿"),
+    "task_options": ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서"),
+    "agg_initial_result": "대용량 CSV 파일을 선택하여 컬럼을 분석하고, 행 그룹과 합산 항목을 지정하거나 저장된 프리셋을 불러오세요.",
     "update_enabled": "새 버전 자동 확인",
     "check_updates": "지금 확인",
     "updates": "업데이트",
@@ -295,7 +298,8 @@ _UI_TEXT["ko"].update({
 })
 _UI_TEXT["pl"].update({
     "task_label": "Zadanie",
-    "task_options": ("Naprawa CSV", "Szablon promocji"),
+    "task_options": ("Naprawa CSV", "Szablon promocji", "Agregacja danych"),
+    "agg_initial_result": "Wybierz plik CSV, aby przeanalizować kolumny, skonfigurować grupowanie lub wczytać szablon.",
     "update_enabled": "Sprawdzaj aktualizacje automatycznie",
     "check_updates": "Sprawdź teraz",
     "updates": "Aktualizacje",
@@ -422,9 +426,9 @@ class DataRefineryApp:
         # below owns the visible tab headers, while the notebook keeps its
         # reliable page-selection behavior.
         style.layout("App.TNotebook.Tab", [])
-        style.configure("TaskTab.TButton", background="#D9E2EC", foreground=text, font=("Segoe UI Semibold", 10), padding=(14, 9), borderwidth=1)
+        style.configure("TaskTab.TButton", background="#D9E2EC", foreground=text, font=("Segoe UI", 10), padding=(14, 9), borderwidth=1)
         style.map("TaskTab.TButton", background=[("active", "#E8F1F5"), ("pressed", "#C4DDE5")])
-        style.configure("TaskTab.Selected.TButton", background=surface, foreground=navy, font=("Segoe UI Semibold", 10), padding=(14, 9), borderwidth=1)
+        style.configure("TaskTab.Selected.TButton", background=surface, foreground=navy, font=("Segoe UI Bold", 11), padding=(14, 9), borderwidth=1)
         style.map("TaskTab.Selected.TButton", background=[("active", surface), ("pressed", surface)])
         style.configure("Status.TFrame", background=navy)
         style.configure("Status.TLabel", background=navy, foreground="#D9E2EC", font=("Segoe UI", 9))
@@ -476,32 +480,43 @@ class DataRefineryApp:
             on_preference_changed=self._save_update_preference,
         )
 
+        self.job_runner = self._jobs
         self.task_tabs = ttk.Frame(main, style="App.TFrame")
         self.task_tabs.grid(row=1, column=0, sticky="w", pady=(16, 0))
         self.task_tabs.columnconfigure(0, weight=1)
         self.task_tabs.columnconfigure(1, weight=1)
+        self.task_tabs.columnconfigure(2, weight=1)
 
         self.notebook = ttk.Notebook(main, style="App.TNotebook")
         self.notebook.grid(row=2, column=0, sticky="nsew")
         self.csv_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 12, 0, 0))
         self.promotion_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 12, 0, 0))
+        self.aggregator_tab = AggregatorTabFrame(self.notebook, self, padding=(0, 12, 0, 0))
         self.notebook.add(self.csv_tab)
         self.notebook.add(self.promotion_tab)
+        self.notebook.add(self.aggregator_tab)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_task_tab_change)
         self.csv_tab_button = ttk.Button(
             self.task_tabs,
             command=lambda: self._select_task_tab(self.csv_tab),
             style="TaskTab.Selected.TButton",
-            width=22,
+            width=18,
         )
         self.csv_tab_button.grid(row=0, column=0, sticky="ew")
         self.promotion_tab_button = ttk.Button(
             self.task_tabs,
             command=lambda: self._select_task_tab(self.promotion_tab),
             style="TaskTab.TButton",
-            width=22,
+            width=18,
         )
         self.promotion_tab_button.grid(row=0, column=1, sticky="ew")
+        self.aggregator_tab_button = ttk.Button(
+            self.task_tabs,
+            command=lambda: self._select_task_tab(self.aggregator_tab),
+            style="TaskTab.TButton",
+            width=18,
+        )
+        self.aggregator_tab_button.grid(row=0, column=2, sticky="ew")
 
         self.file_section = ttk.LabelFrame(self.csv_tab, style="Card.TLabelframe", padding=(18, 14))
         self.file_section.grid(row=0, column=0, sticky="ew", pady=(0, 12))
@@ -889,7 +904,12 @@ class DataRefineryApp:
 
     def _selected_task_id(self):
         """Return a stable feature id for the notebook's selected tab."""
-        return "promotion" if self.notebook.select() == str(self.promotion_tab) else "csv"
+        sel = self.notebook.select()
+        if sel == str(self.promotion_tab):
+            return "promotion"
+        if sel == str(self.aggregator_tab):
+            return "aggregator"
+        return "csv"
 
     def _select_task_tab(self, tab):
         """Select a task page from the equal-height task switcher."""
@@ -897,12 +917,15 @@ class DataRefineryApp:
         self._on_task_tab_change()
 
     def _refresh_task_tab_buttons(self):
-        promotion_selected = self._selected_task_id() == "promotion"
+        tid = self._selected_task_id()
         self.csv_tab_button.configure(
-            style="TaskTab.TButton" if promotion_selected else "TaskTab.Selected.TButton"
+            style="TaskTab.Selected.TButton" if tid == "csv" else "TaskTab.TButton"
         )
         self.promotion_tab_button.configure(
-            style="TaskTab.Selected.TButton" if promotion_selected else "TaskTab.TButton"
+            style="TaskTab.Selected.TButton" if tid == "promotion" else "TaskTab.TButton"
+        )
+        self.aggregator_tab_button.configure(
+            style="TaskTab.Selected.TButton" if tid == "aggregator" else "TaskTab.TButton"
         )
 
     @staticmethod
@@ -912,11 +935,15 @@ class DataRefineryApp:
         except (TypeError, ValueError):
             return False
 
+    def _is_aggregating(self) -> bool:
+        return bool(getattr(getattr(self, "aggregator_tab", None), "_is_aggregating", False))
+
     def _refresh_csv_action_state(self, *_):
         """Only enable CSV processing once a usable source and table width are available."""
         if (
             getattr(self, "_csv_processing", False)
             or getattr(self, "_promotion_processing", False)
+            or self._is_aggregating()
         ):
             self.btn_process.configure(state="disabled")
             return
@@ -932,6 +959,7 @@ class DataRefineryApp:
         is_ready = bool(
             not self._csv_processing
             and not self._promotion_processing
+            and not self._is_aggregating()
             and self._promotion_data is not None
             and self.promotion_filepath.get()
             and os.path.exists(self.promotion_filepath.get())
@@ -953,6 +981,10 @@ class DataRefineryApp:
                 self.log_text.set(self._ui("promo_initial_result"))
             else:
                 self._show_promotion_preview(self._promotion_data)
+        elif self._selected_task_id() == "aggregator":
+            self.result_section.configure(text=self._ui("task_options")[2])
+            self._set_result_text(self._ui("agg_initial_result"))
+            self.log_text.set(self._ui("task_options")[2])
         else:
             self.result_section.configure(text=self._ui("result_title"))
             if self._last_result is None:
@@ -1068,8 +1100,10 @@ class DataRefineryApp:
         self.btn_process.configure(text=text['process'])
         self.notebook.tab(self.csv_tab, text=text['task_options'][0])
         self.notebook.tab(self.promotion_tab, text=text['task_options'][1])
+        self.notebook.tab(self.aggregator_tab, text=text['task_options'][2])
         self.csv_tab_button.configure(text=text['task_options'][0])
         self.promotion_tab_button.configure(text=text['task_options'][1])
+        self.aggregator_tab_button.configure(text=text['task_options'][2])
         self.update_menu.set_texts(
             status="",
             check=text['check_updates'],
@@ -1207,6 +1241,15 @@ class DataRefineryApp:
             self.root.update_idletasks()
         except Exception:
             pass
+
+    def set_progress(self, pct, msg=None):
+        self._set_progress(pct, msg)
+
+    def set_status_log(self, text):
+        self.log_text.set(text)
+
+    def set_result_text(self, text):
+        self._set_result_text(text)
 
     def _set_csv_controls_enabled(self, enabled):
         """Keep inputs stable while the worker owns the selected file."""

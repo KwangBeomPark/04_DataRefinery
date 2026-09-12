@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "name": "TV사업부 연간 요약",
+  "description": "TV 모델별 연간 실적 집계, 직접비 묶음 및 이익율 산출",
+  "created_at": "2026-09-12T12:00:00",
+  "updated_at": "2026-09-12T12:00:00",
+  "group_by_keys": [
+    "디비전",
+    "모델"
+  ],
+  "measure_sums": [
+    "매출",
+    "영업이익"
+  ],
+  "column_groups": [
+    {
+      "new_column": "직접비",
+      "source_columns": [
+        "비용1",
+        "비용2"
+      ]
+    }
+  ],
+  "derived_formulas": [
+    {
+      "new_column": "이익율(%)",
+      "numerator_column": "영업이익",
+      "denominator_column": "매출",
+      "multiplier": 100.0,
+      "format_type": "percent"
+    }
+  ],
+  "filters": [
+    {
+      "column": "디비전",
+      "operator": "==",
+      "value": "TV"
+    }
+  ],
+  "rollup_annual": true,
+  "month_column": "월",
+  "annual_column_name": "연도",
+  "output_format": "xlsx"
+}
