@@ -1,4 +1,10 @@
-"""Tkinter UI frame component for the Data Aggregator tab."""
+"""Tkinter UI frame component for the Data Aggregator tab.
+
+The screen is a pivot field list: source columns live in the left pools, and the
+user moves them into the row-group and values areas on the right by
+double-clicking or dragging (filters come from a dialog).  All of the truth
+lives in `AggregatorFieldState`; the widgets are only a rendering of it.
+"""
 
 from __future__ import annotations
 
@@ -6,24 +12,44 @@ import os
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set
+from typing import Any, Callable, Dict, List, Optional
 
+from src.aggregator_dialogs import (
+    PreviewDialog,
+    ask_column_group,
+    ask_constant_column,
+    ask_derived_formula,
+    ask_filter,
+    describe_filter,
+)
+from src.aggregator_fields import (
+    CONSTANT,
+    DIMENSION,
+    MEASURE,
+    ROWS,
+    VALUES,
+    AggregatorFieldState,
+    PoolField,
+)
+from src.background_jobs import JobCallbacks
 from src.data_aggregator import (
     AggregationCancelledError,
     AggregationResult,
     AggregationSpec,
     ColumnGroupRule,
-    ColumnNotFoundError,
     DerivedFormulaRule,
-    EmptyResultError,
     FilterCondition,
     aggregate_dataset,
+    default_output_path,
+    estimate_result_rows,
+    format_preview_rows,
     inspect_dataset_schema,
     preview_aggregation,
 )
+from src.file_reveal import open_containing_folder, open_file
+from src.session_memory import recall, remember
 from src.preset_manager import (
     AggregationPreset,
-    PresetValidationError,
     delete_preset,
     export_preset_file,
     import_preset_file,
@@ -33,6 +59,32 @@ from src.preset_manager import (
     save_preset,
     validate_preset_against_columns,
 )
+from src.ui_dnd import DragDropController, DragPayload
+from src.ui_field_list import FieldListItem, FieldListView, PlaceholderEntry
+
+GROUP_GLYPH = "∑"
+FORMULA_GLYPH = "%"
+CONSTANT_GLYPH = "✎"
+_OUTPUT_FORMATS = ("Excel (.xlsx)", "CSV (.csv)")
+_ROW_GAP = 3  # vertical gap between the single-line setup fields
+_PREVIEW_ROWS = 2000
+# Background job that counts the rows a full run would produce; one per preview dialog.
+_ROW_COUNT_JOB = "preview-row-count"
+# How each value column is reduced. Sum is the default and carries no marker,
+# so only a deliberate choice shows up in the list.
+_FUNCTION_KEYS = {
+    "sum": "agg_fn_sum",
+    "mean": "agg_fn_mean",
+    "count": "agg_fn_count",
+    "min": "agg_fn_min",
+    "max": "agg_fn_max",
+}
+_FUNCTION_GLYPHS = {"mean": "x̄", "count": "#", "min": "↓", "max": "↑"}
+_FORMAT_LABEL_KEYS = {
+    "percent": "agg_dlg_format_percent",
+    "ratio": "agg_dlg_format_ratio",
+    "number": "agg_dlg_format_number",
+}
 
 
 class AggregatorTabFrame(ttk.Frame):
@@ -44,714 +96,1051 @@ class AggregatorTabFrame(ttk.Frame):
         self._schema = None
         self._cancel_event: Optional[threading.Event] = None
         self._is_aggregating = False
+        self._row_count_seq = 0
+
+        self.state = AggregatorFieldState()
+        self.dnd = DragDropController(self.winfo_toplevel())
 
         # State variables
         self.filepath_var = tk.StringVar()
         self.preset_name_var = tk.StringVar()
-        self.rollup_annual_var = tk.BooleanVar(value=True)
-        self.output_format_var = tk.StringVar(value="Excel (.xlsx)")
+        self.output_format_var = tk.StringVar(value=_OUTPUT_FORMATS[0])
+        self.output_dir_var = tk.StringVar()
+        self.output_name_var = tk.StringVar()
+        self.search_var = tk.StringVar()
+        self._last_output_path: Optional[str] = None
 
-        # In-memory configuration lists
-        self.selected_group_keys: List[str] = []
-        self.selected_measures: List[str] = []
-        self.filters: List[FilterCondition] = []
-        self.column_groups: List[ColumnGroupRule] = []
-        self.derived_formulas: List[DerivedFormulaRule] = []
+        self._translated: List[tuple] = []  # (widget, option, ui_key)
+        self._list_hints: Dict[FieldListView, str] = {}
+        # The two pane cards and, per card row, the frames whose height both
+        # panes must agree on (see `_align_pane_rows`).
+        self._pane_cards: List[ttk.LabelFrame] = []
+        self._shared_rows: Dict[int, List[tk.Misc]] = {0: [], 3: []}
 
         self._build_ui()
+        self._build_function_menu()
+        self._register_drag_and_drop()
         self.refresh_presets_dropdown()
+        self.refresh_views()
 
+    # -------------------------------------------------------------
+    # Translation helpers
+    # -------------------------------------------------------------
     def _ui(self, key: str) -> str:
         return self.app._ui(key)
 
+    def _track(self, widget: tk.Misc, key: str, option: str = "text") -> tk.Misc:
+        """Apply a translated string now and remember it for language switches."""
+        widget.configure(**{option: self._ui(key)})
+        self._translated.append((widget, option, key))
+        return widget
+
+    def apply_language(self) -> None:
+        """Re-apply every translated string after the user switches language."""
+        for widget, option, key in self._translated:
+            try:
+                if option == "placeholder":
+                    widget.set_placeholder(self._ui(key))
+                else:
+                    widget.configure(**{option: self._ui(key)})
+            except tk.TclError:
+                pass
+        self._translate_preset_menu()
+        self._translate_function_menu()
+        self.refresh_views()
+
+    # -------------------------------------------------------------
+    # Layout
+    # -------------------------------------------------------------
     def _build_ui(self):
         self.columnconfigure(0, weight=1)
 
-        # -------------------------------------------------------------
-        # 1. Top Section: File & Preset Selection Card
-        # -------------------------------------------------------------
-        top_card = ttk.LabelFrame(self, style="Card.TLabelframe", padding=(14, 10))
-        top_card.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        top_card.columnconfigure(1, weight=1)
+        self._build_setup_card()
+        self._build_panes()
+        self._build_bottom_bar()
+        self.search_var.trace_add("write", lambda *_: self._refresh_pools())
 
-        # File selection
-        ttk.Label(top_card, text="원본 파일:", style="Field.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.ent_file = ttk.Entry(top_card, textvariable=self.filepath_var, state="readonly")
-        self.ent_file.grid(row=0, column=1, sticky="ew")
+    def _build_setup_card(self) -> None:
+        """Source, destination and presets in one card: everything you set up
+        before touching the field lists lives here, in the order you do it."""
+        card = ttk.Frame(self, style="Card.TFrame", padding=(12, 8))
+        card.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        # One grid for all three rows so the labels, fields and buttons line up
+        # in columns instead of drifting row by row.
+        card.columnconfigure(1, weight=1)
 
-        btn_browse = ttk.Button(top_card, text="파일 찾기...", command=self.browse_file, style="Secondary.TButton")
-        btn_browse.grid(row=0, column=2, padx=(8, 0))
+        rows = (
+            ("agg_file_label", self.filepath_var, True, "agg_browse", self.browse_file),
+            ("agg_output_dir", self.output_dir_var, False, "agg_browse_folder", self.browse_output_dir),
+            ("agg_output_name", self.output_name_var, False, None, None),
+        )
+        entries = []
+        for index, (label_key, variable, readonly, button_key, command) in enumerate(rows):
+            # Three single-line fields have no reason to be airy; they sit at the
+            # same density as the search box and filter strip below them.
+            pad_y = (0, 0) if index == 0 else (_ROW_GAP, 0)
+            self._track(ttk.Label(card, style="Field.TLabel"), label_key).grid(
+                row=index, column=0, sticky="w", padx=(0, 10), pady=pad_y
+            )
+            entry = ttk.Entry(
+                card,
+                textvariable=variable,
+                state="readonly" if readonly else "normal",
+                style="Compact.TEntry",
+            )
+            entry.grid(row=index, column=1, sticky="ew", pady=pad_y)
+            entries.append(entry)
+            if button_key:
+                self._track(
+                    ttk.Button(card, command=command, style="Compact.TButton", width=11), button_key
+                ).grid(row=index, column=2, sticky="ew", padx=(8, 0), pady=pad_y)
 
-        # Presets toolbar
-        preset_frame = ttk.Frame(top_card, style="App.TFrame")
-        preset_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-        preset_frame.columnconfigure(1, weight=1)
+        self.ent_file, self.ent_out_dir, self.ent_out_name = entries
 
-        ttk.Label(preset_frame, text="프리셋:", style="Field.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        self.combo_presets = ttk.Combobox(preset_frame, textvariable=self.preset_name_var, state="readonly")
-        self.combo_presets.grid(row=0, column=1, sticky="ew")
-        self.combo_presets.bind("<<ComboboxSelected>>", self._on_preset_selected)
+        # Each "open the result" button sits on the line it acts on: the folder
+        # button beside the folder, the file button beside the file name.
+        self.btn_open_folder = self._track(
+            ttk.Button(
+                card, command=self.open_output_folder, style="Compact.TButton", width=11, state="disabled"
+            ),
+            "agg_open_folder",
+        )
+        self.btn_open_folder.grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(_ROW_GAP, 0))
 
-        btn_load_preset = ttk.Button(preset_frame, text="불러오기", command=self.apply_selected_preset, style="Secondary.TButton")
-        btn_load_preset.grid(row=0, column=2, padx=(6, 2))
+        # The format belongs with the file name whose extension it decides.
+        self.combo_out_fmt = ttk.Combobox(
+            card,
+            textvariable=self.output_format_var,
+            values=list(_OUTPUT_FORMATS),
+            state="readonly",
+            width=11,
+            style="Compact.TCombobox",
+        )
+        self.combo_out_fmt.grid(row=2, column=2, sticky="ew", padx=(8, 0), pady=(_ROW_GAP, 0))
 
-        btn_save_preset = ttk.Button(preset_frame, text="저장", command=self.save_current_as_preset, style="Secondary.TButton")
-        btn_save_preset.grid(row=0, column=3, padx=2)
+        self.btn_open_file = self._track(
+            ttk.Button(
+                card, command=self.open_output_file, style="Compact.TButton", width=11, state="disabled"
+            ),
+            "agg_open_file",
+        )
+        self.btn_open_file.grid(row=2, column=3, sticky="ew", padx=(6, 0), pady=(_ROW_GAP, 0))
 
-        btn_export_preset = ttk.Button(preset_frame, text="내보내기", command=self.export_preset, style="Secondary.TButton")
-        btn_export_preset.grid(row=0, column=4, padx=2)
+        # Presets are a different job from "where does this run read and write",
+        # so they sit apart at the far right.
+        self._track(ttk.Label(card, style="Field.TLabel"), "agg_preset_label").grid(
+            row=0, column=4, sticky="e", padx=(24, 8)
+        )
+        self.combo_presets = ttk.Combobox(
+            card, textvariable=self.preset_name_var, state="readonly", width=16, style="Compact.TCombobox"
+        )
+        self.combo_presets.grid(row=0, column=5, sticky="ew")
+        self.btn_preset_menu = self._track(
+            ttk.Button(card, command=self._show_preset_menu, style="Compact.TButton", width=11),
+            "agg_preset_menu",
+        )
+        self.btn_preset_menu.grid(row=0, column=6, sticky="ew", padx=(8, 0))
 
-        btn_import_preset = ttk.Button(preset_frame, text="가져오기", command=self.import_preset, style="Secondary.TButton")
-        btn_import_preset.grid(row=0, column=5, padx=2)
+        self._preset_menu = tk.Menu(self, tearoff=False)
+        self._preset_menu_items = (
+            ("agg_preset_load", self.apply_selected_preset),
+            ("agg_preset_save", self.save_current_as_preset),
+            ("agg_preset_export", self.export_preset),
+            ("agg_preset_import", self.import_preset),
+            ("agg_preset_delete", self.delete_current_preset),
+        )
+        for _key, command in self._preset_menu_items:
+            self._preset_menu.add_command(command=command)
+        self._translate_preset_menu()
 
-        btn_del_preset = ttk.Button(preset_frame, text="삭제", command=self.delete_current_preset, style="Secondary.TButton")
-        btn_del_preset.grid(row=0, column=6, padx=(2, 0))
+    def _build_function_menu(self) -> None:
+        """Right-click a value to choose how it is reduced; sum stays the default."""
+        self._function_menu = tk.Menu(self, tearoff=False)
+        self._function_var = tk.StringVar(value="sum")
+        self._function_target: Optional[str] = None
+        for name in _FUNCTION_KEYS:
+            self._function_menu.add_radiobutton(
+                value=name,
+                variable=self._function_var,
+                command=lambda n=name: self._apply_function_choice(n),
+            )
+        self._translate_function_menu()
 
-        # -------------------------------------------------------------
-        # 2. Main 2-Pane Content: Columns on Left, Builder on Right
-        # -------------------------------------------------------------
+    def _translate_function_menu(self) -> None:
+        for index, key in enumerate(_FUNCTION_KEYS.values()):
+            self._function_menu.entryconfigure(index, label=self._ui(key))
+
+    def _show_function_menu(self, item: FieldListItem, x_root: int, y_root: int) -> None:
+        if self.state.is_derived(item.name):
+            return  # a rule column is computed, not aggregated
+        self._function_target = item.name
+        self._function_var.set(self.state.measure_function(item.name))
+        try:
+            self._function_menu.tk_popup(x_root, y_root)
+        finally:
+            self._function_menu.grab_release()
+
+    def _apply_function_choice(self, function: str) -> None:
+        name = self._function_target
+        if not name:
+            return
+        self._mutate(lambda: self.state.set_measure_function(name, function))
+
+    def _translate_preset_menu(self) -> None:
+        """Menu entries are not widgets, so `_track` cannot reach them."""
+        for index, (key, _command) in enumerate(self._preset_menu_items):
+            self._preset_menu.entryconfigure(index, label=self._ui(key))
+
+    def _show_preset_menu(self) -> None:
+        """Pop the preset actions under their button."""
+        self.btn_preset_menu.update_idletasks()
+        x = self.btn_preset_menu.winfo_rootx()
+        y = self.btn_preset_menu.winfo_rooty() + self.btn_preset_menu.winfo_height()
+        try:
+            self._preset_menu.tk_popup(x, y)
+        finally:
+            self._preset_menu.grab_release()
+
+    def _build_panes(self) -> None:
         pane_frame = ttk.Frame(self, style="App.TFrame")
         pane_frame.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
         self.rowconfigure(1, weight=1)
-        pane_frame.columnconfigure(0, weight=5)  # Left: columns (2-column list)
-        pane_frame.columnconfigure(1, weight=5)  # Right: config (2x2 pivot quadrants)
+        pane_frame.columnconfigure(0, weight=5)
+        pane_frame.columnconfigure(1, weight=6)
         pane_frame.rowconfigure(0, weight=1)
 
-        # Left Pane: Discovered Columns (2 columns side-by-side for full vertical view)
-        left_card = ttk.LabelFrame(pane_frame, style="Card.TLabelframe", text=" 원본 컬럼 탐색기 (더블클릭하여 추가) ", padding=(10, 8))
-        left_card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-        left_card.columnconfigure(0, weight=1)
-        left_card.columnconfigure(1, weight=1)
-        left_card.rowconfigure(1, weight=1)
+        self._build_source_pane(pane_frame)
+        self._build_rules_pane(pane_frame)
+        self._align_pane_rows()
 
-        # Left Sub-Column: Dimensions
-        ttk.Label(left_card, text="📁 차원/키 (더블클릭 ➔ 행)", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 2))
-        self.lb_dimensions = tk.Listbox(left_card, exportselection=False)
-        self.lb_dimensions.grid(row=1, column=0, sticky="nsew", padx=(0, 4))
-        self.lb_dimensions.bind("<Double-Button-1>", lambda e: self._add_dimension_to_group())
+    def _align_pane_rows(self) -> None:
+        """Reserve the same height for the utility and action rows of both panes.
 
-        dim_btn_frame = ttk.Frame(left_card, style="App.TFrame")
-        dim_btn_frame.grid(row=2, column=0, sticky="ew", pady=(4, 0), padx=(0, 4))
-        ttk.Button(dim_btn_frame, text="➔ 행 추가", command=self._add_dimension_to_group, style="Secondary.TButton").pack(side="left", padx=1)
-        ttk.Button(dim_btn_frame, text="↔ 수치로", command=self._switch_dim_to_measure, style="Secondary.TButton").pack(side="right", padx=1)
+        The panes put different things in those rows (a search box against a
+        caption plus a one-row list; rule buttons against nothing), and the
+        pixel heights follow the font and DPI scaling, so each row is sized to
+        the tallest content on either side once the widgets exist.  That is
+        what keeps the four field lists on one baseline.
+        """
+        self.update_idletasks()
+        for row, frames in self._shared_rows.items():
+            height = max(frame.winfo_reqheight() for frame in frames)
+            for card in self._pane_cards:
+                card.rowconfigure(row, minsize=height)
 
-        # Right Sub-Column: Measures
-        ttk.Label(left_card, text="📊 수치/값 (더블클릭 ➔ 값)", style="Field.TLabel").grid(row=0, column=1, sticky="w", pady=(0, 2), padx=(4, 0))
-        self.lb_measures = tk.Listbox(left_card, exportselection=False)
-        self.lb_measures.grid(row=1, column=1, sticky="nsew", padx=(4, 0))
-        self.lb_measures.bind("<Double-Button-1>", lambda e: self._add_measure_to_sums())
+    def _build_source_pane(self, parent: tk.Widget) -> None:
+        card = ttk.LabelFrame(parent, style="Card.TLabelframe", padding=(10, 8))
+        self._track(card, "agg_source_card")
+        card.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        card.columnconfigure(0, weight=1)
+        card.columnconfigure(1, weight=1)
+        card.rowconfigure(2, weight=1)
+        self._pane_cards.append(card)
 
-        meas_btn_frame = ttk.Frame(left_card, style="App.TFrame")
-        meas_btn_frame.grid(row=2, column=1, sticky="ew", pady=(4, 0), padx=(4, 0))
-        ttk.Button(meas_btn_frame, text="➔ 값 추가", command=self._add_measure_to_sums, style="Secondary.TButton").pack(side="left", padx=1)
-        ttk.Button(meas_btn_frame, text="↔ 차원으로", command=self._switch_measure_to_dim, style="Secondary.TButton").pack(side="right", padx=1)
+        # A file with hundreds of columns is unusable without a filter box.
+        search_row = ttk.Frame(card, style="Card.TFrame")
+        search_row.grid(row=0, column=0, columnspan=2, sticky="ew")
+        search_row.columnconfigure(0, weight=1)
+        self._shared_rows[0].append(search_row)
+        self.ent_search = PlaceholderEntry(
+            search_row, textvariable=self.search_var, placeholder=self._ui("agg_search_placeholder")
+        )
+        self.ent_search.grid(row=0, column=0, sticky="ew")
+        self._translated.append((self.ent_search, "placeholder", "agg_search_placeholder"))
+        self.btn_search_clear = self._track(
+            ttk.Button(search_row, command=self.clear_search, style="Compact.TButton", width=12),
+            "agg_search_clear",
+        )
+        self.btn_search_clear.grid(row=0, column=1, padx=(6, 0))
 
-        # Right Pane: Aggregation Settings & Rules (2x2 Pivot Quadrants)
-        right_card = ttk.LabelFrame(pane_frame, style="Card.TLabelframe", text=" 집계 및 피벗 규칙 설정 (4분면) ", padding=(10, 8))
-        right_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
-        right_card.columnconfigure(0, weight=1)
-        right_card.columnconfigure(1, weight=1)
-        right_card.rowconfigure(0, weight=1)
-        right_card.rowconfigure(1, weight=1)
+        # --- Dimensions column -------------------------------------------------
+        self._track(ttk.Label(card, style="Field.TLabel"), "agg_dim_header").grid(
+            row=1, column=0, sticky="w", pady=(0, 2)
+        )
+        self.view_dimensions = FieldListView(
+            card,
+            on_activate=lambda item: self._place_as_row(item.name),
+            on_remove=lambda item: self._remove_constant_column(item.name),
+        )
+        self.view_dimensions.grid(row=2, column=0, sticky="nsew", padx=(0, 4))
+        self._list_hints[self.view_dimensions] = "agg_hint_dimensions"
 
-        # Quadrant 1 (Row 0, Col 0): 1. 행 그룹 (Rows / Group By)
-        grp_box = ttk.LabelFrame(right_card, text=" 1. 행 그룹 (Rows / Group By) ", padding=(6, 5))
-        grp_box.grid(row=0, column=0, sticky="nsew", padx=(0, 3), pady=(0, 3))
-        grp_box.columnconfigure(0, weight=1)
-        grp_box.rowconfigure(1, weight=1)
+        # The gap above the buttons is packed inside the frame so that the
+        # frame's requested height is the whole row `_align_pane_rows` reads.
+        constant_buttons = ttk.Frame(card, style="Card.TFrame")
+        constant_buttons.grid(row=3, column=0, sticky="ew", padx=(0, 4))
+        self._shared_rows[3].append(constant_buttons)
+        self.btn_constant = self._track(
+            ttk.Button(constant_buttons, command=self.add_constant_column, style="Compact.TButton"),
+            "agg_btn_constant",
+        )
+        self.btn_constant.pack(side="left", expand=True, fill="x", padx=1, pady=(4, 0))
 
-        self.chk_rollup = ttk.Checkbutton(grp_box, text="연간 롤업 합산 (YYYYMM ➔ YYYY)", variable=self.rollup_annual_var)
-        self.chk_rollup.grid(row=0, column=0, sticky="w", pady=(0, 2))
+        # --- Measures column ---------------------------------------------------
+        self._track(ttk.Label(card, style="Field.TLabel"), "agg_measure_header").grid(
+            row=1, column=1, sticky="w", pady=(0, 2), padx=(4, 0)
+        )
+        self.view_measures = FieldListView(
+            card,
+            on_activate=lambda item: self._place_as_value(item.name),
+            on_remove=lambda item: self._delete_rule(item.name),
+        )
+        self.view_measures.grid(row=2, column=1, sticky="nsew", padx=(4, 0))
+        self._list_hints[self.view_measures] = "agg_hint_measures"
 
-        self.lb_group_keys = tk.Listbox(grp_box, exportselection=False)
-        self.lb_group_keys.grid(row=1, column=0, sticky="nsew")
-        ttk.Button(grp_box, text="선택 삭제", command=self._remove_selected_group_key, style="Secondary.TButton").grid(row=2, column=0, sticky="e", pady=(2, 0))
+        # Rule builders sit with the measures they produce.
+        rule_buttons = ttk.Frame(card, style="Card.TFrame")
+        rule_buttons.grid(row=3, column=1, sticky="ew", padx=(4, 0))
+        self._shared_rows[3].append(rule_buttons)
+        self.btn_group_rule = self._track(
+            ttk.Button(rule_buttons, command=self.add_column_group_rule, style="Compact.TButton"),
+            "agg_btn_group_rule",
+        )
+        self.btn_group_rule.pack(side="left", expand=True, fill="x", padx=1, pady=(4, 0))
+        self.btn_formula_rule = self._track(
+            ttk.Button(rule_buttons, command=self.add_formula_rule, style="Compact.TButton"),
+            "agg_btn_formula_rule",
+        )
+        self.btn_formula_rule.pack(side="left", expand=True, fill="x", padx=1, pady=(4, 0))
 
-        # Quadrant 2 (Row 0, Col 1): 2. 기본 합산값 (Values / Sums)
-        meas_box = ttk.LabelFrame(right_card, text=" 2. 기본 합산값 (Values / Sums) ", padding=(6, 5))
-        meas_box.grid(row=0, column=1, sticky="nsew", padx=(3, 0), pady=(0, 3))
-        meas_box.columnconfigure(0, weight=1)
-        meas_box.rowconfigure(0, weight=1)
+    def _build_rules_pane(self, parent: tk.Widget) -> None:
+        card = ttk.LabelFrame(parent, style="Card.TLabelframe", padding=(10, 8))
+        self._track(card, "agg_rules_card")
+        card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        card.columnconfigure(0, weight=1)
+        card.columnconfigure(1, weight=1)
+        card.rowconfigure(2, weight=1)
+        self._pane_cards.append(card)
 
-        self.lb_selected_measures = tk.Listbox(meas_box, exportselection=False)
-        self.lb_selected_measures.grid(row=0, column=0, sticky="nsew")
-        ttk.Button(meas_box, text="선택 삭제", command=self._remove_selected_measure, style="Secondary.TButton").grid(row=1, column=0, sticky="e", pady=(2, 0))
+        # --- Filters: a short strip on top, because a filter narrows everything
+        # below it. It occupies the same row as the source pane's search box, so
+        # the two placement lists line up with the two source lists.
+        filter_row = ttk.Frame(card, style="Card.TFrame")
+        filter_row.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._shared_rows[0].append(filter_row)
 
-        # Quadrant 3 (Row 1, Col 0): 3. 조건 필터 (Filters)
-        filt_box = ttk.LabelFrame(right_card, text=" 3. 조건 필터 (Filters) ", padding=(6, 5))
-        filt_box.grid(row=1, column=0, sticky="nsew", padx=(0, 3), pady=(3, 0))
-        filt_box.columnconfigure(0, weight=1)
-        filt_box.rowconfigure(0, weight=1)
+        # The caption sits beside the list rather than above it, which buys the
+        # second row without costing any height.
+        filter_row.columnconfigure(1, weight=1)
+        self._track(ttk.Label(filter_row, style="Field.TLabel"), "agg_filters_box").grid(
+            row=0, column=0, sticky="w", padx=(0, 10)
+        )
+        self.view_filters = FieldListView(
+            filter_row,
+            on_remove=lambda item: self._remove_filter(item.name),
+            height=2,
+        )
+        self.view_filters.grid(row=0, column=1, sticky="ew")
+        self._list_hints[self.view_filters] = "agg_hint_filters"
 
-        self.lb_filters = tk.Listbox(filt_box, exportselection=False)
-        self.lb_filters.grid(row=0, column=0, sticky="nsew")
+        self.btn_add_filter = self._track(
+            ttk.Button(filter_row, command=self.add_filter_condition, style="Compact.TButton", width=11),
+            "agg_btn_add_filter",
+        )
+        self.btn_add_filter.grid(row=0, column=2, sticky="n", padx=(8, 0))
 
-        filt_btn_frame = ttk.Frame(filt_box, style="App.TFrame")
-        filt_btn_frame.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        ttk.Button(filt_btn_frame, text="+ 필터 추가", command=self._popup_add_filter, style="Secondary.TButton").pack(side="left", padx=1)
-        ttk.Button(filt_btn_frame, text="선택 삭제", command=self._remove_selected_filter, style="Secondary.TButton").pack(side="right", padx=1)
+        # --- 1. Row groups / 2. Values, mirroring the source pane's two columns
+        self._track(ttk.Label(card, style="Field.TLabel"), "agg_rows_box").grid(
+            row=1, column=0, sticky="w", pady=(0, 2)
+        )
+        self.view_rows = FieldListView(
+            card,
+            on_remove=lambda item: self._unplace(item.name),
+            on_activate=lambda item: self._unplace(item.name),
+        )
+        self.view_rows.grid(row=2, column=0, sticky="nsew", padx=(0, 4))
+        self._list_hints[self.view_rows] = "agg_hint_rows"
 
-        # Quadrant 4 (Row 1, Col 1): 4. 컬럼 묶기 & 비율 수식 (Formulas)
-        calc_box = ttk.LabelFrame(right_card, text=" 4. 컬럼 묶기 & 비율 수식 ", padding=(6, 5))
-        calc_box.grid(row=1, column=1, sticky="nsew", padx=(3, 0), pady=(3, 0))
-        calc_box.columnconfigure(0, weight=1)
-        calc_box.rowconfigure(0, weight=1)
+        self._track(ttk.Label(card, style="Field.TLabel"), "agg_values_box").grid(
+            row=1, column=1, sticky="w", pady=(0, 2), padx=(4, 0)
+        )
+        self.view_values = FieldListView(
+            card,
+            on_remove=lambda item: self._unplace(item.name),
+            on_activate=lambda item: self._unplace(item.name),
+            on_context=self._show_function_menu,
+        )
+        self.view_values.grid(row=2, column=1, sticky="nsew", padx=(4, 0))
+        self._list_hints[self.view_values] = "agg_hint_values"
 
-        self.lb_custom_rules = tk.Listbox(calc_box, exportselection=False)
-        self.lb_custom_rules.grid(row=0, column=0, sticky="nsew")
-
-        rule_btn_frame = ttk.Frame(calc_box, style="App.TFrame")
-        rule_btn_frame.grid(row=1, column=0, sticky="ew", pady=(2, 0))
-        ttk.Button(rule_btn_frame, text="+ 묶기", command=self._popup_add_column_group, style="Secondary.TButton").pack(side="left", padx=1)
-        ttk.Button(rule_btn_frame, text="+ 비율식", command=self._popup_add_formula, style="Secondary.TButton").pack(side="left", padx=1)
-        ttk.Button(rule_btn_frame, text="규칙 삭제", command=self._remove_selected_custom_rule, style="Secondary.TButton").pack(side="right", padx=1)
-
-        # -------------------------------------------------------------
-        # 3. Bottom Action Bar: Output format, Progress, Action buttons
-        # -------------------------------------------------------------
+    def _build_bottom_bar(self) -> None:
         bottom_bar = ttk.Frame(self, style="App.TFrame")
-        bottom_bar.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        bottom_bar.grid(row=3, column=0, sticky="ew")
         bottom_bar.columnconfigure(0, weight=1)
 
-        fmt_frame = ttk.Frame(bottom_bar, style="App.TFrame")
-        fmt_frame.grid(row=0, column=0, sticky="w")
-        ttk.Label(fmt_frame, text="출력 형식:", style="Field.TLabel").pack(side="left", padx=(0, 6))
-        self.combo_out_fmt = ttk.Combobox(
-            fmt_frame,
-            textvariable=self.output_format_var,
-            values=["Excel (.xlsx)", "CSV (.csv)"],
-            state="readonly",
-            width=14,
+        # Undo belongs with the configuration it reverses, not with "run it".
+        self.btn_undo = self._track(
+            ttk.Button(bottom_bar, command=self.undo_last_change, style="Secondary.TButton", state="disabled"),
+            "agg_undo",
         )
-        self.combo_out_fmt.pack(side="left")
+        self.btn_undo.grid(row=0, column=0, sticky="w")
+        self.winfo_toplevel().bind("<Control-z>", self._undo_shortcut, add="+")
 
         btn_frame = ttk.Frame(bottom_bar, style="App.TFrame")
         btn_frame.grid(row=0, column=1, sticky="e")
 
-        self.btn_preview = ttk.Button(btn_frame, text="🔍 미리보기 (샘플)", command=self.run_preview, style="Secondary.TButton")
+        self.btn_preview = self._track(
+            ttk.Button(btn_frame, command=self.run_preview, style="Secondary.TButton"), "agg_preview"
+        )
         self.btn_preview.pack(side="left", padx=(0, 6))
 
-        self.btn_cancel = ttk.Button(btn_frame, text="취소", command=self.cancel_aggregation, style="Secondary.TButton", state="disabled")
-        self.btn_cancel.pack(side="left", padx=(0, 8))
+        self.btn_cancel = self._track(
+            ttk.Button(btn_frame, command=self.cancel_aggregation, style="Secondary.TButton", state="disabled"),
+            "agg_cancel",
+        )
+        self.btn_cancel.pack(side="left", padx=(0, 10))
 
-        self.btn_run = ttk.Button(btn_frame, text="★ 데이터 집계 및 저장하기", command=self.run_aggregation, style="Primary.TButton")
+        self.btn_run = self._track(
+            ttk.Button(btn_frame, command=self.run_aggregation, style="Primary.TButton"), "agg_run"
+        )
         self.btn_run.pack(side="left")
 
     # -------------------------------------------------------------
-    # Event Handlers & Helper Methods
+    # Output destination
+    # -------------------------------------------------------------
+    def _output_extension(self) -> str:
+        return ".xlsx" if self._output_format() == "xlsx" else ".csv"
+
+    def _output_format(self) -> str:
+        return "xlsx" if "excel" in self.output_format_var.get().lower() else "csv"
+
+    def _reset_output_destination(self, source_path: str) -> None:
+        """Default the destination to the engine's own choice next to the source."""
+        suggestion = default_output_path(source_path, self._output_format())
+        self.output_dir_var.set(os.path.dirname(suggestion))
+        self.output_name_var.set(os.path.splitext(os.path.basename(suggestion))[0])
+
+    def resolved_output_path(self) -> Optional[str]:
+        """The absolute destination, or None while the form is incomplete."""
+        folder = self.output_dir_var.get().strip()
+        stem = self.output_name_var.get().strip()
+        if not folder or not stem:
+            return None
+        # Strip only an extension we would add ourselves. `os.path.splitext`
+        # would turn "2026.01 요약" into "2026".
+        for extension in (".xlsx", ".csv"):
+            if stem.lower().endswith(extension) and len(stem) > len(extension):
+                stem = stem[: -len(extension)]
+                break
+        return os.path.abspath(os.path.join(folder, f"{stem}{self._output_extension()}"))
+
+    def browse_output_dir(self) -> None:
+        chosen = filedialog.askdirectory(
+            title=self._ui("agg_msg_choose_folder"),
+            initialdir=self.output_dir_var.get().strip() or None,
+        )
+        if chosen:
+            self.output_dir_var.set(os.path.normpath(chosen))
+
+    def open_output_folder(self) -> None:
+        if self._last_output_path and not open_containing_folder(self._last_output_path):
+            self._warn_open_failed()
+
+    def open_output_file(self) -> None:
+        if self._last_output_path and not open_file(self._last_output_path):
+            self._warn_open_failed()
+
+    def _warn_open_failed(self) -> None:
+        messagebox.showwarning(
+            self._ui("agg_msg_open_failed_title"),
+            self._ui("agg_msg_open_failed").format(path=self._last_output_path or ""),
+        )
+
+    def _set_last_output(self, path: Optional[str]) -> None:
+        self._last_output_path = path
+        state = "normal" if path and os.path.exists(path) else "disabled"
+        self.btn_open_folder.configure(state=state)
+        self.btn_open_file.configure(state=state)
+
+    # -------------------------------------------------------------
+    # Drag and drop wiring
+    # -------------------------------------------------------------
+    def _register_drag_and_drop(self) -> None:
+        # A pool lights up for a field going back home or for a raw source column
+        # being reclassified, which is the deliberate way to use a measure as a
+        # row key.  The year, constant and rule fields never leave their pool.
+        self.dnd.register(
+            self.view_dimensions,
+            draggable=True,
+            accepts=lambda payload: self.state.can_drop_on_pool(payload.item.name, DIMENSION),
+            on_drop=lambda payload, index: self._drop_on_pool(payload, DIMENSION),
+        )
+        self.dnd.register(
+            self.view_measures,
+            draggable=True,
+            accepts=lambda payload: self.state.can_drop_on_pool(payload.item.name, MEASURE),
+            on_drop=lambda payload, index: self._drop_on_pool(payload, MEASURE),
+        )
+        # An area only lights up for a field it can actually hold: rows take raw
+        # dimensions, values take measures and rule columns.
+        self.dnd.register(
+            self.view_rows,
+            draggable=True,
+            accepts=lambda payload: self.state.can_place_group_key(payload.item.name),
+            on_drop=self._drop_on_rows,
+        )
+        self.dnd.register(
+            self.view_values,
+            draggable=True,
+            accepts=lambda payload: self.state.can_place_value(payload.item.name),
+            on_drop=self._drop_on_values,
+        )
+        self.winfo_toplevel().bind("<Escape>", lambda _event: self.dnd.cancel(), add="+")
+
+    def _drop_on_pool(self, payload: DragPayload, home: str) -> None:
+        name = payload.item.name
+
+        def move() -> bool:
+            moved = False
+            if payload.source in (self.view_rows, self.view_values):
+                moved |= self.state.unplace(name)
+            return self.state.reclassify(name, home) or moved
+
+        self._mutate(move)
+
+    def _drop_on_rows(self, payload: DragPayload, index: int) -> None:
+        self._mutate(lambda: self._drop_into(payload, index, ROWS))
+
+    def _drop_on_values(self, payload: DragPayload, index: int) -> None:
+        self._mutate(lambda: self._drop_into(payload, index, VALUES))
+
+    def _drop_into(self, payload: DragPayload, index: int, area: str) -> bool:
+        """Reorder within the area, or move the field in from wherever it was."""
+        name = payload.item.name
+        view = self.view_rows if area == ROWS else self.view_values
+        if payload.source is view:
+            return self.state.reorder(area, payload.index, index if index <= payload.index else index - 1)
+        self.state.unplace(name)
+        place = self.state.place_group_key if area == ROWS else self.state.place_value
+        return place(name, index)
+
+    # -------------------------------------------------------------
+    # Rendering
+    # -------------------------------------------------------------
+    def refresh_views(self) -> None:
+        """Redraw every list from the state model."""
+        self._refresh_pools()
+        self.view_rows.set_items([self._placed_item(name) for name in self.state.group_keys])
+        self.view_values.set_items([self._placed_item(name) for name in self.state.values])
+        self.view_filters.set_items(
+            [
+                FieldListItem(name=str(index), label=describe_filter(condition), hint=describe_filter(condition))
+                for index, condition in enumerate(self.state.filters)
+            ]
+        )
+        for view, key in self._list_hints.items():
+            view.set_empty_hint(self._ui(key))
+        self._refresh_undo_state()
+
+    def _refresh_pools(self) -> None:
+        """Redraw the two source lists, applying the search filter."""
+        needle = self.search_var.get().strip().casefold()
+
+        def matches(field: PoolField) -> bool:
+            return not needle or needle in field.name.casefold()
+
+        self.view_dimensions.set_items(
+            [self._pool_item(f, removable=f.kind == CONSTANT) for f in self.state.dimension_pool if matches(f)]
+        )
+        self.view_measures.set_items(
+            [self._pool_item(f, removable=f.is_derived) for f in self.state.measure_pool if matches(f)]
+        )
+
+    def clear_search(self) -> None:
+        self.search_var.set("")
+        self.ent_search.focus_set()
+
+    def _pool_item(self, field: PoolField, removable: bool) -> FieldListItem:
+        return FieldListItem(
+            name=field.name,
+            label=self._field_label(field.name, field.is_month),
+            tag=self._field_tag(field.name, field.is_month),
+            removable=removable,
+            hint=self._rule_description(field.name),
+        )
+
+    def _placed_item(self, name: str) -> FieldListItem:
+        field = self.state.field(name)
+        is_month = bool(field and field.is_month)
+        return FieldListItem(
+            name=name,
+            label=self._field_label(name, is_month),
+            tag=self._field_tag(name, is_month),
+            hint=self._rule_description(name),
+        )
+
+    def _field_label(self, name: str, is_month: bool = False) -> str:
+        rule = self.state.rule_for(name)
+        if isinstance(rule, ColumnGroupRule):
+            return f"{GROUP_GLYPH} {name}"
+        if isinstance(rule, DerivedFormulaRule):
+            return f"{FORMULA_GLYPH} {name}"
+        glyph = _FUNCTION_GLYPHS.get(self.state.measure_function(name))
+        if glyph and name in self.state.values:
+            return f"{glyph} {name}"
+        if self.state.is_constant(name):
+            return f"{CONSTANT_GLYPH} {name} = {self.state.constant_columns[name]}"
+        if self.state.is_year(name):
+            return f"{name} {self._ui('agg_year_tag')}"
+        return f"{name} {self._ui('agg_month_tag')}" if is_month else name
+
+    def _field_tag(self, name: str, is_month: bool) -> str:
+        if self.state.is_derived(name) or self.state.is_constant(name):
+            return "derived"
+        if self.state.is_year(name):
+            return "month"
+        return "month" if is_month else ""
+
+    def _rule_description(self, name: str) -> str:
+        """Full definition of a rule column, shown on hover since lists are narrow."""
+        if self.state.is_constant(name):
+            return self._ui("agg_hint_constant").format(name=name, value=self.state.constant_columns[name])
+        if self.state.is_year(name):
+            return self._ui("agg_hint_year").format(month=self.state.month_column or "")
+        rule = self.state.rule_for(name)
+        if isinstance(rule, ColumnGroupRule):
+            return f"{rule.new_column} = {' + '.join(rule.source_columns)}"
+        if isinstance(rule, DerivedFormulaRule):
+            body = f"{rule.new_column} = {rule.numerator_column} ÷ {rule.denominator_column}"
+            if rule.multiplier != 1.0:  # a plain "× 1" tells the reader nothing
+                body += f" × {rule.multiplier:g}"
+            return f"{body}  ({self._format_type_label(rule.format_type)})"
+        return ""
+
+    def _format_type_label(self, format_type: str) -> str:
+        return self._ui(_FORMAT_LABEL_KEYS.get(format_type, "agg_dlg_format_number"))
+
+    # -------------------------------------------------------------
+    # Field placement actions
+    # -------------------------------------------------------------
+    def _mutate(self, action: Callable[[], bool]) -> bool:
+        """Run a configuration change behind a restore point.
+
+        A rejected change (dropping a measure on the row area, say) must not
+        leave a step behind, or the next Ctrl+Z would appear to do nothing.
+        """
+        self.state.snapshot()
+        if action():
+            self.refresh_views()
+            return True
+        self.state.undo()  # the snapshot equals the current state, so this just drops it
+        return False
+
+    def _place_as_row(self, name: str) -> None:
+        self._mutate(lambda: self.state.place_group_key(name))
+
+    def _place_as_value(self, name: str) -> None:
+        self._mutate(lambda: self.state.place_value(name))
+
+    def _unplace(self, name: str) -> None:
+        self._mutate(lambda: self.state.unplace(name))
+
+    # -------------------------------------------------------------
+    # Rule actions
+    # -------------------------------------------------------------
+    def _require_schema(self) -> bool:
+        if self._schema is None:
+            messagebox.showinfo(self._ui("agg_msg_notice"), self._ui("agg_msg_select_file_first"))
+            return False
+        return True
+
+    def add_column_group_rule(self) -> None:
+        if not self._require_schema():
+            return
+        rule = ask_column_group(self, self._ui, self.state)
+        if rule and self._mutate(lambda: self.state.add_column_group(rule)):
+            self.view_measures.reveal(rule.new_column)
+
+    def add_formula_rule(self) -> None:
+        if not self._require_schema():
+            return
+        rule = ask_derived_formula(self, self._ui, self.state)
+        if rule and self._mutate(lambda: self.state.add_derived_formula(rule)):
+            self.view_measures.reveal(rule.new_column)
+
+    def add_constant_column(self) -> None:
+        """A literal column needs no source file: it supplies its own value."""
+        result = ask_constant_column(self, self._ui, self.state)
+        if result and self._mutate(lambda: self.state.add_constant_column(*result)):
+            self.view_dimensions.reveal(result[0])
+
+    def _remove_constant_column(self, name: str) -> None:
+        self._mutate(lambda: self.state.remove_constant_column(name))
+
+    def add_filter_condition(self) -> None:
+        if not self._require_schema():
+            return
+        condition = ask_filter(self, self._ui, self._schema.columns, self._schema.sample_values)
+        if condition:
+            self._mutate(lambda: self.state.add_filter(condition) or True)
+
+    def _delete_rule(self, name: str) -> None:
+        """Remove a rule column, warning first when other rules depend on it."""
+        dependents = self.state.dependents_of(name)
+        if dependents:
+            confirmed = messagebox.askyesno(
+                self._ui("agg_msg_cascade_title"),
+                self._ui("agg_msg_cascade").format(name=name, dependents=", ".join(dependents)),
+            )
+            if not confirmed:
+                return
+        self._mutate(lambda: bool(self.state.remove_derived(name)))
+
+    def _remove_filter(self, row_name: str) -> None:
+        try:
+            index = int(row_name)
+        except ValueError:
+            return
+        self._mutate(lambda: self.state.remove_filter(index))
+
+    # -------------------------------------------------------------
+    # Compatibility accessors (read-only views onto the state model)
+    # -------------------------------------------------------------
+    @property
+    def group_keys(self) -> List[str]:
+        return self.state.group_keys
+
+    @property
+    def values(self) -> List[str]:
+        return self.state.values
+
+    @property
+    def filters(self) -> List[FilterCondition]:
+        return self.state.filters
+
+    @property
+    def column_groups(self) -> List[ColumnGroupRule]:
+        return self.state.column_groups
+
+    @property
+    def derived_formulas(self) -> List[DerivedFormulaRule]:
+        return self.state.derived_formulas
+
+    # -------------------------------------------------------------
+    # File selection
     # -------------------------------------------------------------
     def browse_file(self):
-        fn = filedialog.askopenfilename(
-            title="대용량 데이터 파일 선택 (CSV)",
+        filename = filedialog.askopenfilename(
+            title=self._ui("agg_file_dialog_title"),
             filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
         )
-        if not fn:
+        if not filename:
             return
 
-        self.filepath_var.set(fn)
+        self.filepath_var.set(filename)
+        # A long path would otherwise show its drive letter and hide the file name.
+        self.ent_file.xview_moveto(1.0)
         try:
-            self.app.set_progress(0, "파일 컬럼 구조를 분석하는 중...")
-            schema = inspect_dataset_schema(fn)
+            self.app.set_progress(0, self._ui("agg_msg_schema_progress"))
+            schema = inspect_dataset_schema(filename)
             self._schema = schema
-            self._clear_all_rules()
-            self._populate_discovered_columns(schema)
-            self.app.set_progress(100, f"컬럼 감지 완료 ({len(schema.columns)}개 열)")
-            self.app.set_status_log(f"파일 감지: {os.path.basename(fn)} (총 {len(schema.columns)}개 컬럼)")
-        except Exception as e:
-            messagebox.showerror("파일 분석 오류", f"파일 스키마를 읽을 수 없습니다:\n{e}")
-
-    def _clear_all_rules(self):
-        self.selected_group_keys.clear()
-        self.selected_measures.clear()
-        self.filters.clear()
-        self.column_groups.clear()
-        self.derived_formulas.clear()
-
-        self.lb_group_keys.delete(0, tk.END)
-        self.lb_selected_measures.delete(0, tk.END)
-        self.lb_filters.delete(0, tk.END)
-        self.lb_custom_rules.delete(0, tk.END)
-
-    def _populate_discovered_columns(self, schema):
-        self.lb_dimensions.delete(0, tk.END)
-        for d in schema.dimension_candidates:
-            tag = " [월]" if d == schema.detected_month_column else ""
-            self.lb_dimensions.insert(tk.END, f"{d}{tag}")
-
-        self.lb_measures.delete(0, tk.END)
-        for m in schema.measure_candidates:
-            self.lb_measures.insert(tk.END, m)
-
-        # Default auto-select: if month detected, keep rollup enabled
-        if schema.detected_month_column:
-            self.rollup_annual_var.set(True)
-
-    def _clean_col_name(self, text: str) -> str:
-        return text.replace(" [월]", "").strip()
-
-    def _add_dimension_to_group(self):
-        sel = self.lb_dimensions.curselection()
-        if not sel:
-            return
-        col = self._clean_col_name(self.lb_dimensions.get(sel[0]))
-        if col not in self.selected_group_keys:
-            self.selected_group_keys.append(col)
-            self.lb_group_keys.insert(tk.END, col)
-
-    def _remove_selected_group_key(self):
-        sel = self.lb_group_keys.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        val = self.lb_group_keys.get(idx)
-        self.selected_group_keys.remove(val)
-        self.lb_group_keys.delete(idx)
-
-    def _add_measure_to_sums(self):
-        sel = self.lb_measures.curselection()
-        if not sel:
-            return
-        col = self._clean_col_name(self.lb_measures.get(sel[0]))
-        if col not in self.selected_measures:
-            self.selected_measures.append(col)
-            self.lb_selected_measures.insert(tk.END, col)
-
-    def _remove_selected_measure(self):
-        sel = self.lb_selected_measures.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        val = self.lb_selected_measures.get(idx)
-        self.selected_measures.remove(val)
-        self.lb_selected_measures.delete(idx)
-
-    def _switch_dim_to_measure(self):
-        sel = self.lb_dimensions.curselection()
-        if not sel:
-            return
-        val = self._clean_col_name(self.lb_dimensions.get(sel[0]))
-        self.lb_dimensions.delete(sel[0])
-        self.lb_measures.insert(tk.END, val)
-
-    def _switch_measure_to_dim(self):
-        sel = self.lb_measures.curselection()
-        if not sel:
-            return
-        val = self._clean_col_name(self.lb_measures.get(sel[0]))
-        self.lb_measures.delete(sel[0])
-        self.lb_dimensions.insert(tk.END, val)
-
-    def _popup_add_column_group(self):
-        if not self._schema:
-            messagebox.showinfo("알림", "먼저 원본 파일을 선택해 주세요.")
-            return
-
-        top = tk.Toplevel(self)
-        top.title("컬럼 묶기(합산) 추가")
-        top.geometry("380x320")
-        top.transient(self)
-        top.grab_set()
-
-        ttk.Label(top, text="새 묶음 컬럼 이름:", style="Field.TLabel").pack(anchor="w", padx=12, pady=(12, 4))
-        name_var = tk.StringVar(value="새_묶음_컬럼")
-        ttk.Entry(top, textvariable=name_var).pack(fill="x", padx=12)
-
-        ttk.Label(top, text="합산할 원본 수치 컬럼들 (Ctrl 누르고 다중 선택):", style="Field.TLabel").pack(anchor="w", padx=12, pady=(8, 4))
-        lb = tk.Listbox(top, selectmode="multiple", height=7)
-        lb.pack(fill="both", expand=True, padx=12)
-
-        for col in self._schema.measure_candidates:
-            lb.insert(tk.END, col)
-
-        def on_ok():
-            name = name_var.get().strip()
-            selections = [lb.get(i) for i in lb.curselection()]
-            if not name or not selections:
-                messagebox.showwarning("입력 확인", "컬럼 이름과 최소 하나 이상의 합산 컬럼을 선택해 주세요.")
-                return
-            rule = ColumnGroupRule(new_column=name, source_columns=selections)
-            self.column_groups.append(rule)
-            self.lb_custom_rules.insert(tk.END, f"[묶음] {name} = {' + '.join(selections)}")
-            top.destroy()
-
-        btn_box = ttk.Frame(top, style="App.TFrame")
-        btn_box.pack(fill="x", padx=12, pady=10)
-        ttk.Button(btn_box, text="추가", command=on_ok, style="Primary.TButton").pack(side="right", padx=4)
-        ttk.Button(btn_box, text="취소", command=top.destroy, style="Secondary.TButton").pack(side="right")
-
-    def _popup_add_formula(self):
-        if not self._schema:
-            messagebox.showinfo("알림", "먼저 원본 파일을 선택해 주세요.")
-            return
-
-        all_candidates = list(self._schema.measure_candidates)
-        # Add column group names as well
-        for cg in self.column_groups:
-            if cg.new_column not in all_candidates:
-                all_candidates.append(cg.new_column)
-
-        top = tk.Toplevel(self)
-        top.title("비율/파생 수식 추가")
-        top.geometry("380x280")
-        top.transient(self)
-        top.grab_set()
-
-        ttk.Label(top, text="새 수식 컬럼 이름:", style="Field.TLabel").pack(anchor="w", padx=12, pady=(12, 4))
-        name_var = tk.StringVar(value="이익율(%)")
-        ttk.Entry(top, textvariable=name_var).pack(fill="x", padx=12)
-
-        grid_f = ttk.Frame(top, style="App.TFrame")
-        grid_f.pack(fill="x", padx=12, pady=8)
-        grid_f.columnconfigure(1, weight=1)
-
-        ttk.Label(grid_f, text="분자 (Numerator):").grid(row=0, column=0, sticky="w", pady=4)
-        num_var = tk.StringVar()
-        combo_num = ttk.Combobox(grid_f, textvariable=num_var, values=all_candidates, state="readonly")
-        combo_num.grid(row=0, column=1, sticky="ew", pady=4)
-
-        ttk.Label(grid_f, text="÷ 분모 (Denominator):").grid(row=1, column=0, sticky="w", pady=4)
-        den_var = tk.StringVar()
-        combo_den = ttk.Combobox(grid_f, textvariable=den_var, values=all_candidates, state="readonly")
-        combo_den.grid(row=1, column=1, sticky="ew", pady=4)
-
-        ttk.Label(grid_f, text="× 승수 (Multiplier):").grid(row=2, column=0, sticky="w", pady=4)
-        mult_var = tk.StringVar(value="100")
-        ttk.Entry(grid_f, textvariable=mult_var).grid(row=2, column=1, sticky="ew", pady=4)
-
-        def on_ok():
-            name = name_var.get().strip()
-            num = num_var.get()
-            den = den_var.get()
-            try:
-                mult = float(mult_var.get())
-            except ValueError:
-                mult = 100.0
-
-            if not name or not num or not den:
-                messagebox.showwarning("입력 확인", "이름, 분자, 분모를 모두 지정해 주세요.")
-                return
-
-            rule = DerivedFormulaRule(new_column=name, numerator_column=num, denominator_column=den, multiplier=mult)
-            self.derived_formulas.append(rule)
-            self.lb_custom_rules.insert(tk.END, f"[비율] {name} = ({num} ÷ {den}) × {mult}")
-            top.destroy()
-
-        btn_box = ttk.Frame(top, style="App.TFrame")
-        btn_box.pack(fill="x", padx=12, pady=10)
-        ttk.Button(btn_box, text="추가", command=on_ok, style="Primary.TButton").pack(side="right", padx=4)
-        ttk.Button(btn_box, text="취소", command=top.destroy, style="Secondary.TButton").pack(side="right")
-
-    def _popup_add_filter(self):
-        if not self._schema:
-            messagebox.showinfo("알림", "먼저 원본 파일을 선택해 주세요.")
-            return
-
-        all_cols = list(self._schema.columns)
-
-        top = tk.Toplevel(self)
-        top.title("필터 조건 추가")
-        top.geometry("400x260")
-        top.transient(self)
-        top.grab_set()
-
-        grid_f = ttk.Frame(top, style="App.TFrame")
-        grid_f.pack(fill="both", expand=True, padx=14, pady=12)
-        grid_f.columnconfigure(1, weight=1)
-
-        ttk.Label(grid_f, text="대상 컬럼:", style="Field.TLabel").grid(row=0, column=0, sticky="w", pady=6)
-        col_var = tk.StringVar(value=all_cols[0] if all_cols else "")
-        combo_col = ttk.Combobox(grid_f, textvariable=col_var, values=all_cols, state="readonly")
-        combo_col.grid(row=0, column=1, sticky="ew", pady=6)
-
-        ttk.Label(grid_f, text="조건 연산자:", style="Field.TLabel").grid(row=1, column=0, sticky="w", pady=6)
-        op_var = tk.StringVar(value="==")
-        combo_op = ttk.Combobox(
-            grid_f,
-            textvariable=op_var,
-            values=["==", "!=", "contains", "in", "not in"],
-            state="readonly",
-        )
-        combo_op.grid(row=1, column=1, sticky="ew", pady=6)
-
-        ttk.Label(grid_f, text="비교 값:", style="Field.TLabel").grid(row=2, column=0, sticky="w", pady=6)
-        val_var = tk.StringVar()
-        # Pre-populate sample values from schema if available
-        init_col = col_var.get()
-        sample_vals = [str(x) for x in self._schema.sample_values.get(init_col, []) if str(x).strip()]
-        combo_val = ttk.Combobox(grid_f, textvariable=val_var, values=sample_vals)
-        combo_val.grid(row=2, column=1, sticky="ew", pady=6)
-        combo_val.focus_set()
-
-        def _on_col_change(event=None):
-            c = col_var.get()
-            s_vals = [str(x) for x in self._schema.sample_values.get(c, []) if str(x).strip()]
-            combo_val["values"] = s_vals
-
-        combo_col.bind("<<ComboboxSelected>>", _on_col_change)
-
-        ttk.Label(
-            grid_f,
-            text="※ 텍스트 원본 기준 일치 비교 (in / not in 은 콤마로 여러 값 구분)",
-            font=("Segoe UI", 8),
-            foreground="#666666",
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 6))
-
-        def on_ok():
-            col = col_var.get().strip()
-            op = op_var.get().strip()
-            raw_val = val_var.get().strip()
-
-            if not col or not op:
-                messagebox.showwarning("입력 확인", "컬럼과 연산자를 지정해 주세요.")
-                return
-
-            if not raw_val:
-                messagebox.showwarning("입력 확인", "비교할 값을 입력해 주세요.")
-                return
-
-            if op in ("in", "not in"):
-                parsed_val = [x.strip() for x in raw_val.split(",") if x.strip()]
-                if not parsed_val:
-                    messagebox.showwarning("입력 확인", "비교할 값을 최소 하나 이상 입력해 주세요.")
-                    return
-                display_val = ", ".join(parsed_val)
-            else:
-                parsed_val = raw_val
-                display_val = raw_val
-
-            rule = FilterCondition(column=col, operator=op, value=parsed_val)
-            self.filters.append(rule)
-            self.lb_filters.insert(tk.END, f"{col} {op} {display_val}")
-            top.destroy()
-
-        btn_box = ttk.Frame(top, style="App.TFrame")
-        btn_box.pack(fill="x", padx=14, pady=(0, 12))
-        ttk.Button(btn_box, text="추가", command=on_ok, style="Primary.TButton").pack(side="right", padx=4)
-        ttk.Button(btn_box, text="취소", command=top.destroy, style="Secondary.TButton").pack(side="right")
-
-    def _remove_selected_filter(self):
-        sel = self.lb_filters.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        self.lb_filters.delete(idx)
-        if idx < len(self.filters):
-            del self.filters[idx]
-
-    def _remove_selected_custom_rule(self):
-        sel = self.lb_custom_rules.curselection()
-        if not sel:
-            return
-        idx = sel[0]
-        text = self.lb_custom_rules.get(idx)
-        self.lb_custom_rules.delete(idx)
-
-        if text.startswith("[묶음]"):
-            col_name = text.split(" = ")[0].replace("[묶음] ", "").strip()
-            self.column_groups = [cg for cg in self.column_groups if cg.new_column != col_name]
-        elif text.startswith("[비율]"):
-            col_name = text.split(" = ")[0].replace("[비율] ", "").strip()
-            self.derived_formulas = [df for df in self.derived_formulas if df.new_column != col_name]
-
+            self.state.load_schema(
+                dimensions=schema.dimension_candidates,
+                measures=schema.measure_candidates,
+                month_column=schema.detected_month_column,
+                columns=schema.columns,
+            )
+            self._reset_output_destination(filename)
+            self._set_last_output(None)
+            restored = self._restore_remembered_configuration(filename)
+            self.refresh_views()
+            self.app.set_progress(100, self._ui("agg_msg_schema_done").format(count=len(schema.columns)))
+            log_key = "agg_msg_schema_restored" if restored else "agg_msg_schema_log"
+            self.app.set_status_log(
+                self._ui(log_key).format(name=os.path.basename(filename), count=len(schema.columns))
+            )
+        except Exception as error:
+            messagebox.showerror(
+                self._ui("agg_msg_schema_error_title"),
+                self._ui("agg_msg_schema_error").format(error=error),
+            )
 
     # -------------------------------------------------------------
-    # Presets Management UI Actions
+    # Per-file memory
+    # -------------------------------------------------------------
+    def _current_preset(self, name: str = "") -> AggregationPreset:
+        """The current screen as a preset, which is also the memory format."""
+        column_groups, derived_formulas = self.state.all_rules_with_output()
+        return AggregationPreset(
+            name=name,
+            group_by_keys=list(self.state.group_keys),
+            measure_sums=self.state.measure_sums(),
+            column_groups=column_groups,
+            derived_formulas=derived_formulas,
+            filters=list(self.state.filters),
+            value_order=list(self.state.values),
+            constant_columns=dict(self.state.constant_columns),
+            measure_functions=self.state.measure_functions_for_spec(),
+            rollup_annual=self.state.uses_year(),
+            month_column=self._schema.detected_month_column if self._schema else self.state.month_column,
+            output_format=self._output_format(),
+        )
+
+    def _apply_preset_to_state(self, preset: AggregationPreset) -> None:
+        self.state.apply_configuration(
+            group_keys=preset.group_by_keys,
+            measure_sums=preset.measure_sums,
+            column_groups=preset.column_groups,
+            derived_formulas=preset.derived_formulas,
+            filters=preset.filters,
+            value_order=preset.value_order,
+            constant_columns=preset.constant_columns,
+            measure_functions=preset.measure_functions,
+        )
+
+    def _restore_remembered_configuration(self, file_path: str) -> bool:
+        """Bring back how this file was last aggregated. Never blocks the open."""
+        try:
+            stored = recall(file_path)
+            if not stored:
+                return False
+            preset = AggregationPreset.from_dict({**stored, "name": stored.get("name") or "recent"})
+            self._apply_preset_to_state(preset)
+            self.output_format_var.set(
+                _OUTPUT_FORMATS[0] if preset.output_format.lower() == "xlsx" else _OUTPUT_FORMATS[1]
+            )
+            return True
+        except Exception:
+            # A convenience feature must never stop the user opening a file.
+            return False
+
+    def _remember_configuration(self, file_path: str) -> None:
+        try:
+            remember(file_path, self._current_preset().to_dict())
+        except Exception:
+            pass
+
+    # -------------------------------------------------------------
+    # Presets
     # -------------------------------------------------------------
     def refresh_presets_dropdown(self):
-        presets = list_presets()
-        names = [p.name for p in presets]
+        names = [preset.name for preset in list_presets()]
         self.combo_presets["values"] = names
         if names and not self.preset_name_var.get():
             self.preset_name_var.set(names[0])
 
-    def _on_preset_selected(self, event=None):
-        pass
-
     def apply_selected_preset(self):
         name = self.preset_name_var.get().strip()
         if not name:
-            messagebox.showinfo("알림", "불러올 프리셋을 선택해 주세요.")
+            messagebox.showinfo(self._ui("agg_msg_notice"), self._ui("agg_msg_preset_missing"))
             return
 
         try:
             preset = load_preset(name)
-        except Exception as e:
-            messagebox.showerror("프리셋 오류", f"프리셋을 불러오지 못했습니다:\n{e}")
+        except Exception as error:
+            messagebox.showerror(
+                self._ui("agg_msg_preset_load_error_title"),
+                self._ui("agg_msg_preset_load_error").format(error=error),
+            )
             return
 
-        # Validate against schema if file is loaded
         if self._schema:
             missing = validate_preset_against_columns(preset, self._schema.columns)
             if missing:
                 proceed = messagebox.askyesno(
-                    "컬럼 불일치 경고",
-                    f"선택한 프리셋의 컬럼 중 현재 파일에 없는 컬럼이 있습니다:\n{', '.join(missing)}\n\n계속 적용하시겠습니까?",
+                    self._ui("agg_msg_preset_mismatch_title"),
+                    self._ui("agg_msg_preset_mismatch").format(columns=", ".join(missing)),
                 )
                 if not proceed:
                     return
 
-        # Apply to UI
-        self.rollup_annual_var.set(preset.rollup_annual)
-        self.output_format_var.set("Excel (.xlsx)" if preset.output_format.lower() == "xlsx" else "CSV (.csv)")
+        self.output_format_var.set(_OUTPUT_FORMATS[0] if preset.output_format.lower() == "xlsx" else _OUTPUT_FORMATS[1])
 
-        self.selected_group_keys = list(preset.group_by_keys)
-        self.lb_group_keys.delete(0, tk.END)
-        for k in self.selected_group_keys:
-            self.lb_group_keys.insert(tk.END, k)
+        self._apply_preset_to_state(preset)
+        self.refresh_views()
 
-        self.selected_measures = list(preset.measure_sums)
-        self.lb_selected_measures.delete(0, tk.END)
-        for m in self.selected_measures:
-            self.lb_selected_measures.insert(tk.END, m)
-
-        self.column_groups = list(preset.column_groups)
-        self.derived_formulas = list(preset.derived_formulas)
-        self.lb_custom_rules.delete(0, tk.END)
-
-        for cg in self.column_groups:
-            self.lb_custom_rules.insert(tk.END, f"[묶음] {cg.new_column} = {' + '.join(cg.source_columns)}")
-        for df in self.derived_formulas:
-            self.lb_custom_rules.insert(tk.END, f"[비율] {df.new_column} = ({df.numerator_column} ÷ {df.denominator_column}) × {df.multiplier}")
-
-        self.filters = list(preset.filters)
-        self.lb_filters.delete(0, tk.END)
-        for f in self.filters:
-            val_str = ", ".join(map(str, f.value)) if isinstance(f.value, (list, tuple)) else str(f.value)
-            self.lb_filters.insert(tk.END, f"{f.column} {f.operator} {val_str}")
-
-        self.app.set_status_log(f"프리셋 '{name}' 적용 완료")
+        self.app.set_status_log(self._ui("agg_msg_preset_applied").format(name=name))
         if preset.description:
-            self.app.set_result_text(f"프리셋: {name}\n설명: {preset.description}")
+            self.app.set_result_text(
+                self._ui("agg_msg_preset_desc").format(name=name, description=preset.description)
+            )
 
     def save_current_as_preset(self):
-        name = simpledialog.askstring("프리셋 저장", "저장할 프리셋의 이름을 입력하세요:", initialvalue=self.preset_name_var.get())
-        if not name:
+        name = simpledialog.askstring(
+            self._ui("agg_msg_preset_save_title"),
+            self._ui("agg_msg_preset_save_prompt"),
+            initialvalue=self.preset_name_var.get(),
+        )
+        if not name or not name.strip():
             return
         name = name.strip()
-        if not name:
-            return
 
         if preset_exists(name):
             overwrite = messagebox.askyesno(
-                "프리셋 덮어쓰기 확인",
-                f"이미 '{name}' 이름의 프리셋이 존재합니다.\n기존 설정을 덮어쓰시겠습니까?",
+                self._ui("agg_msg_preset_overwrite_title"),
+                self._ui("agg_msg_preset_overwrite").format(name=name),
             )
             if not overwrite:
                 return
 
-        desc = simpledialog.askstring("프리셋 메모", "설명 또는 메모를 입력하세요 (선택 사항):", initialvalue="") or ""
+        description = simpledialog.askstring(
+            self._ui("agg_msg_preset_memo_title"),
+            self._ui("agg_msg_preset_memo_prompt"),
+            initialvalue="",
+        ) or ""
 
-        month_col = self._schema.detected_month_column if self._schema else "월"
-
-        preset = AggregationPreset(
-            name=name,
-            description=desc.strip(),
-            group_by_keys=list(self.selected_group_keys),
-            measure_sums=list(self.selected_measures),
-            column_groups=list(self.column_groups),
-            derived_formulas=list(self.derived_formulas),
-            filters=list(self.filters),
-            rollup_annual=self.rollup_annual_var.get(),
-            month_column=month_col,
-            output_format="xlsx" if "excel" in self.output_format_var.get().lower() else "csv",
-        )
+        preset = self._current_preset(name)
+        preset.description = description.strip()
 
         save_preset(preset)
         self.refresh_presets_dropdown()
         self.preset_name_var.set(preset.name)
-        messagebox.showinfo("저장 완료", f"프리셋 '{preset.name}'이(가) 저장되었습니다.")
+        messagebox.showinfo(
+            self._ui("agg_msg_preset_saved_title"),
+            self._ui("agg_msg_preset_saved").format(name=preset.name),
+        )
 
     def export_preset(self):
         name = self.preset_name_var.get().strip()
         if not name:
-            messagebox.showinfo("알림", "내보낼 프리셋을 선택해 주세요.")
+            messagebox.showinfo(self._ui("agg_msg_notice"), self._ui("agg_msg_preset_missing"))
             return
 
-        dest = filedialog.asksaveasfilename(
-            title="프리셋 내보내기",
+        destination = filedialog.asksaveasfilename(
+            title=self._ui("agg_msg_preset_export_title"),
             defaultextension=".json",
             initialfile=f"{name}.json",
             filetypes=(("JSON preset file", "*.json"),),
         )
-        if not dest:
+        if not destination:
             return
 
         try:
-            preset = load_preset(name)
-            export_preset_file(preset, dest)
-            messagebox.showinfo("내보내기 완료", f"프리셋을 성공적으로 내보냈습니다:\n{dest}")
-        except Exception as e:
-            messagebox.showerror("내보내기 오류", str(e))
+            export_preset_file(load_preset(name), destination)
+            messagebox.showinfo(
+                self._ui("agg_msg_preset_export_done_title"),
+                self._ui("agg_msg_preset_export_done").format(path=destination),
+            )
+        except Exception as error:
+            messagebox.showerror(self._ui("agg_msg_preset_export_error"), str(error))
 
     def import_preset(self):
-        src = filedialog.askopenfilename(
-            title="공유된 프리셋 파일 가져오기",
+        source = filedialog.askopenfilename(
+            title=self._ui("agg_msg_preset_import_title"),
             filetypes=(("JSON preset file", "*.json"), ("All files", "*.*")),
         )
-        if not src:
+        if not source:
             return
 
         try:
-            imported = import_preset_file(src, save_to_local=True)
+            imported = import_preset_file(source, save_to_local=True)
             self.refresh_presets_dropdown()
             self.preset_name_var.set(imported.name)
-            messagebox.showinfo("가져오기 완료", f"프리셋 '{imported.name}'을(를) 성공적으로 가져왔습니다.")
+            messagebox.showinfo(
+                self._ui("agg_msg_preset_import_done_title"),
+                self._ui("agg_msg_preset_import_done").format(name=imported.name),
+            )
             self.apply_selected_preset()
-        except Exception as e:
-            messagebox.showerror("가져오기 오류", f"프리셋 파일을 가져오지 못했습니다:\n{e}")
+        except Exception as error:
+            messagebox.showerror(
+                self._ui("agg_msg_preset_import_error"),
+                self._ui("agg_msg_preset_import_error_body").format(error=error),
+            )
 
     def delete_current_preset(self):
         name = self.preset_name_var.get().strip()
         if not name:
             return
-        if messagebox.askyesno("프리셋 삭제", f"정말로 프리셋 '{name}'을(를) 삭제하시겠습니까?"):
+        if messagebox.askyesno(
+            self._ui("agg_msg_preset_delete_title"),
+            self._ui("agg_msg_preset_delete").format(name=name),
+        ):
             delete_preset(name)
             self.preset_name_var.set("")
             self.refresh_presets_dropdown()
 
     # -------------------------------------------------------------
-    # Execution & Cancellation
+    # Execution
     # -------------------------------------------------------------
     def cancel_aggregation(self):
         if self._cancel_event and not self._cancel_event.is_set():
             self._cancel_event.set()
             self.btn_cancel.configure(state="disabled")
-            self.app.set_status_log("집계 취소 요청됨... 정리 중")
+            self.app.set_status_log(self._ui("agg_msg_cancel_requested"))
 
     def _build_spec(self) -> Optional[AggregationSpec]:
-        fp = self.filepath_var.get().strip()
-        if not fp or not os.path.exists(fp):
-            messagebox.showerror("파일 선택 필요", "먼저 처리할 원본 CSV 파일을 선택해 주세요.")
+        file_path = self.filepath_var.get().strip()
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showerror(self._ui("agg_msg_need_file_title"), self._ui("agg_msg_need_file"))
             return None
 
-        if not self.selected_group_keys:
-            messagebox.showwarning("설정 확인", "최소 하나 이상의 행 그룹(Group By 키)을 선택해 주세요.")
+        if not self.state.group_keys:
+            messagebox.showwarning(self._ui("agg_msg_config_title"), self._ui("agg_msg_need_group_key"))
             return None
 
-        if not self.selected_measures and not self.column_groups and not self.derived_formulas:
-            messagebox.showwarning("설정 확인", "합산할 수치 컬럼 또는 계산 규칙을 최소 하나 이상 지정해 주세요.")
+        if not self.state.values:
+            messagebox.showwarning(self._ui("agg_msg_config_title"), self._ui("agg_msg_need_measure"))
             return None
 
-        num_mode = getattr(self.app, "_number_mode", lambda _: "English")(getattr(self.app, "num_format", tk.StringVar()).get())
-        month_col = self._schema.detected_month_column if self._schema else "월"
-        out_fmt = "xlsx" if "excel" in self.output_format_var.get().lower() else "csv"
-        delim = self._schema.delimiter if self._schema else None
-        enc = self._schema.encoding if self._schema else None
+        number_mode = getattr(self.app, "_number_mode", lambda _: "English")(
+            getattr(self.app, "num_format", tk.StringVar()).get()
+        )
+        column_groups, derived_formulas = self.state.rules_for_spec()
 
         return AggregationSpec(
-            file_path=fp,
-            group_by_keys=list(self.selected_group_keys),
-            measure_sums=list(self.selected_measures),
-            column_groups=list(self.column_groups),
-            derived_formulas=list(self.derived_formulas),
-            filters=list(self.filters),
-            rollup_annual=self.rollup_annual_var.get(),
-            month_column=month_col,
-            delimiter=delim,
-            encoding=enc,
-            number_mode=num_mode,
-            output_format=out_fmt,
+            file_path=file_path,
+            group_by_keys=list(self.state.group_keys),
+            measure_sums=self.state.measure_sums(),
+            column_groups=column_groups,
+            derived_formulas=derived_formulas,
+            filters=list(self.state.filters),
+            output_order=list(self.state.values),
+            constant_columns=self.state.constant_columns_for_spec(),
+            measure_functions=self.state.measure_functions_for_spec(),
+            rollup_annual=self.state.uses_year(),
+            month_column=self._schema.detected_month_column if self._schema else self.state.month_column,
+            delimiter=self._schema.delimiter if self._schema else None,
+            encoding=self._schema.encoding if self._schema else None,
+            number_mode=number_mode,
+            output_format=self._output_format(),
+            # None lets the engine fall back to its own name next to the source.
+            output_path=self.resolved_output_path(),
         )
+
+    def _confirm_destination(self, spec: AggregationSpec) -> bool:
+        """Check the chosen folder is usable and get consent before overwriting."""
+        if not spec.output_path:
+            return True
+
+        folder = os.path.dirname(spec.output_path)
+        if not os.path.isdir(folder):
+            messagebox.showerror(
+                self._ui("agg_msg_config_title"),
+                self._ui("agg_msg_bad_folder").format(folder=folder),
+            )
+            return False
+
+        if os.path.exists(spec.output_path):
+            return messagebox.askyesno(
+                self._ui("agg_msg_overwrite_title"),
+                self._ui("agg_msg_overwrite").format(name=os.path.basename(spec.output_path)),
+            )
+        return True
+
+    def undo_last_change(self) -> None:
+        """Take back the last configuration change."""
+        if self.state.undo():
+            self.refresh_views()
+
+    def _undo_shortcut(self, _event: Any = None) -> None:
+        """Ctrl+Z is bound on the whole window, so it must check that it is meant for us.
+
+        Without the checks a Ctrl+Z pressed on the CSV tab would silently rewind a
+        configuration the user cannot see, and one pressed while typing a file name
+        would move a field instead of touching the text.
+        """
+        if not self.winfo_viewable():
+            return
+        try:
+            focused = self.focus_get()
+        except (tk.TclError, KeyError):
+            focused = None
+        if isinstance(focused, (tk.Entry, ttk.Entry, tk.Text)):
+            return
+        self.undo_last_change()
+
+    def _refresh_undo_state(self) -> None:
+        self.btn_undo.configure(state="normal" if self.state.can_undo() else "disabled")
 
     def run_preview(self):
         spec = self._build_spec()
@@ -759,99 +1148,165 @@ class AggregatorTabFrame(ttk.Frame):
             return
 
         try:
-            self.app.set_status_log("샘플 2,000행 대상 간이 집계 미리보기 생성 중...")
-            preview_df, preview_text = preview_aggregation(spec, sample_rows=2000)
-            msg = (
-                f"=== [미리보기] 상위 샘플 2,000행 집계 결과 (최대 15행 표시) ===\n\n"
-                f"{preview_text}\n\n"
-                f"※ 위 결과는 상위 2,000개 행을 대상으로 한 즉시 집계 샘플이며, 전체 데이터 집계 시에는 모든 행이 처리됩니다."
+            self.app.set_status_log(self._ui("agg_msg_preview_running"))
+            preview_df, _text = preview_aggregation(spec, sample_rows=_PREVIEW_ROWS)
+            columns, rows = format_preview_rows(
+                preview_df, spec, self._effective_group_keys(spec), rows=_PREVIEW_ROWS
             )
-            self.app.set_result_text(msg)
-            self.app.set_status_log("미리보기 표시 완료")
-        except Exception as e:
-            messagebox.showerror("미리보기 오류", f"미리보기를 생성하지 못했습니다:\n{e}")
+        except Exception as error:
+            messagebox.showerror(
+                self._ui("agg_msg_preview_error_title"),
+                self._ui("agg_msg_preview_error").format(error=error),
+            )
+            return
+
+        group_keys = set(self._effective_group_keys(spec))
+        dialog = PreviewDialog(
+            self, self._ui, columns, rows,
+            numeric_columns=[c for c in columns if c not in group_keys],
+        )
+        dialog.set_summary(self._ui("agg_preview_counting"))
+        self.app.set_status_log(self._ui("agg_msg_preview_done"))
+        self._start_row_count(dialog, spec, len(rows))
+        dialog.show()
+
+    def _effective_group_keys(self, spec: AggregationSpec) -> List[str]:
+        """The group columns as the engine will emit them, roll-up included."""
+        keys = list(spec.group_by_keys)
+        if spec.rollup_annual and spec.month_column:
+            if spec.month_column in keys:
+                keys[keys.index(spec.month_column)] = spec.annual_column_name
+            elif spec.annual_column_name not in keys:
+                keys.insert(0, spec.annual_column_name)
+        return keys
+
+    def _start_row_count(self, dialog: PreviewDialog, spec: AggregationSpec, shown: int) -> None:
+        """Tell the user how big the real result will be before they commit to it.
+
+        The count streams only the grouping columns, so it is far cheaper than
+        the run itself — but it is still a pass over the whole file, and on a
+        large one that is seconds to minutes. On the Tk thread it would freeze
+        the dialog with no way to close it, so it runs as a background job and
+        closing the dialog cancels it at the next chunk.
+        """
+        cancel = threading.Event()
+        dialog.bind("<Destroy>", lambda _event: cancel.set(), add="+")
+        sample_only = self._ui("agg_preview_summary_sample").format(shown=shown)
+
+        def worker(_report_progress):
+            return estimate_result_rows(spec, cancel_event=cancel)
+
+        def on_success(result):
+            total, exact = result
+            key = "agg_preview_summary" if exact else "agg_preview_summary_capped"
+            self._set_preview_summary(dialog, self._ui(key).format(shown=shown, rows=f"{total:,}"))
+
+        def on_error(_error):
+            if not cancel.is_set():  # a cancelled count has no dialog left to report to
+                self._set_preview_summary(dialog, sample_only)
+
+        # One job name per dialog: a count still winding down for a preview that
+        # was just closed must not stop the next preview from getting its own.
+        self._row_count_seq += 1
+        started = self.app.job_runner.start(
+            f"{_ROW_COUNT_JOB}-{self._row_count_seq}",
+            worker,
+            JobCallbacks(
+                on_progress=lambda _percent, _message: None,
+                on_success=on_success,
+                on_error=on_error,
+                on_finished=lambda: None,
+            ),
+        )
+        if not started:
+            self._set_preview_summary(dialog, sample_only)
+
+    @staticmethod
+    def _set_preview_summary(dialog: PreviewDialog, text: str) -> None:
+        try:
+            if dialog.winfo_exists():
+                dialog.set_summary(text)
+        except tk.TclError:
+            pass  # the user closed the preview while the count was running
 
     def run_aggregation(self):
         if getattr(self.app, "_csv_processing", False) or getattr(self.app, "_promotion_processing", False):
-            messagebox.showinfo("작업 중", "현재 다른 작업이 실행 중입니다. 완료 후 다시 시도해 주세요.")
+            messagebox.showinfo(self._ui("agg_msg_busy_title"), self._ui("agg_msg_busy"))
             return
 
         spec = self._build_spec()
         if not spec:
             return
+        if not self._confirm_destination(spec):
+            return
 
+        self._set_last_output(None)
         self._cancel_event = threading.Event()
         self._is_aggregating = True
         self.btn_run.configure(state="disabled")
         self.btn_preview.configure(state="disabled")
         self.btn_cancel.configure(state="normal")
-        if hasattr(self.app, "_refresh_csv_action_state"):
-            self.app._refresh_csv_action_state()
-        if hasattr(self.app, "_refresh_promotion_action_state"):
-            self.app._refresh_promotion_action_state()
-        self.app.set_progress(0, "집계 준비 중...")
+        self._refresh_sibling_tabs()
+        self.app.set_progress(0, self._ui("agg_msg_prepare"))
 
         def worker(report_progress):
-            def progress_bridge(cur, total, msg):
-                pct = int((cur / max(1, total)) * 100)
-                report_progress(pct, msg)
+            def progress_bridge(current, total, message):
+                report_progress(int((current / max(1, total)) * 100), message)
 
             return aggregate_dataset(spec, progress_callback=progress_bridge, cancel_event=self._cancel_event)
 
         def on_success(result: AggregationResult):
-            out_path = result.out_path
-            self.app.set_progress(100, "집계 완료!")
-            self.app.set_status_log(f"저장 완료: {os.path.basename(out_path)}")
+            self.app.set_progress(100, self._ui("agg_msg_done_progress"))
+            self.app.set_status_log(self._ui("agg_msg_saved_log").format(name=os.path.basename(result.out_path)))
+            self._set_last_output(result.out_path)
+            self._remember_configuration(spec.file_path)
 
-            warning_msg = ""
+            warning = ""
             if result.coerced_numbers_count > 0:
-                warning_msg = f"\n\n⚠️ 주의: 비정상 또는 결측 수치 데이터 {result.coerced_numbers_count:,}건이 0으로 자동 치환되었습니다."
+                warning = self._ui("agg_msg_coerced").format(count=result.coerced_numbers_count)
 
-            summary = (
-                f"데이터 집계 완료!\n\n"
-                f"• 저장 파일: {os.path.basename(out_path)}\n"
-                f"• 저장 경로: {os.path.dirname(out_path)}\n"
-                f"• 최종 집계 행 수: {result.final_rows:,}행\n"
-                f"• 집계 기준: {', '.join(spec.group_by_keys)}\n"
-                f"• 연간 롤업: {'적용됨' if spec.rollup_annual else '미적용'}\n"
-                f"• 계산 항목: {len(spec.measure_sums) + len(spec.column_groups) + len(spec.derived_formulas)}개 컬럼"
-                f"{warning_msg}\n\n"
-                f"=== 상위 10행 미리보기 ===\n"
-                f"{result.sample_preview_text}"
+            self.app.set_result_text(
+                self._ui("agg_msg_result_body").format(
+                    name=os.path.basename(result.out_path),
+                    folder=os.path.dirname(result.out_path),
+                    rows=f"{result.final_rows:,}",
+                    keys=", ".join(spec.group_by_keys),
+                    rollup=self._ui("agg_msg_rollup_on" if spec.rollup_annual else "agg_msg_rollup_off"),
+                    columns=len(self.state.values),
+                    warning=warning,
+                    preview=result.sample_preview_text,
+                )
             )
-            self.app.set_result_text(summary)
 
-            info_box_msg = f"데이터 집계가 성공적으로 완료되었습니다.\n\n저장 위치:\n{out_path}"
+            message = self._ui("agg_msg_complete").format(path=result.out_path)
             if result.coerced_numbers_count > 0:
-                info_box_msg += f"\n\n(비정상/결측 수치 {result.coerced_numbers_count:,}건이 0으로 보정되었습니다.)"
-            messagebox.showinfo("집계 완료", info_box_msg)
+                message += self._ui("agg_msg_complete_coerced").format(count=result.coerced_numbers_count)
+            messagebox.showinfo(self._ui("agg_msg_complete_title"), message)
 
-        def on_error(err):
-            if isinstance(err, AggregationCancelledError):
-                self.app.set_progress(0, "작업 취소됨")
-                self.app.set_status_log("사용자에 의해 집계가 취소되었습니다.")
-                self.app.set_result_text("집계 작업이 취소되었습니다.")
+        def on_error(error):
+            if isinstance(error, AggregationCancelledError):
+                self.app.set_progress(0, self._ui("agg_msg_cancelled_progress"))
+                self.app.set_status_log(self._ui("agg_msg_cancelled_log"))
+                self.app.set_result_text(self._ui("agg_msg_cancelled_text"))
             else:
-                self.app.set_progress(0, "오류 발생")
-                self.app.set_status_log("집계 오류 발생")
-                messagebox.showerror("집계 오류", f"집계 중 오류가 발생했습니다:\n{err}")
+                self.app.set_progress(0, self._ui("agg_msg_error_progress"))
+                self.app.set_status_log(self._ui("agg_msg_error_log"))
+                messagebox.showerror(
+                    self._ui("agg_msg_error_title"), self._ui("agg_msg_error").format(error=error)
+                )
 
         def on_finished():
             self._is_aggregating = False
             self.btn_run.configure(state="normal")
             self.btn_preview.configure(state="normal")
             self.btn_cancel.configure(state="disabled")
-            if hasattr(self.app, "_refresh_csv_action_state"):
-                self.app._refresh_csv_action_state()
-            if hasattr(self.app, "_refresh_promotion_action_state"):
-                self.app._refresh_promotion_action_state()
+            self._refresh_sibling_tabs()
 
-        from src.background_jobs import JobCallbacks
         started = self.app.job_runner.start(
             "dataset-aggregation",
             worker,
             JobCallbacks(
-                on_progress=lambda pct, msg: self.app.set_progress(pct, msg),
+                on_progress=lambda pct, message: self.app.set_progress(pct, message),
                 on_success=on_success,
                 on_error=on_error,
                 on_finished=on_finished,
@@ -859,3 +1314,8 @@ class AggregatorTabFrame(ttk.Frame):
         )
         if not started:
             on_finished()
+
+    def _refresh_sibling_tabs(self) -> None:
+        for hook in ("_refresh_csv_action_state", "_refresh_promotion_action_state"):
+            if hasattr(self.app, hook):
+                getattr(self.app, hook)()

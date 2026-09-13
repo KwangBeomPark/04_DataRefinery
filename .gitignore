@@ -2,3 +2,7 @@ release/build/
 release/dist/
 **/__pycache__/
 *.py[cod]
+
+# Aggregator output written next to the bundled sample data during testing
+sample_data/*_aggregated_*.xlsx
+sample_data/*_aggregated_*.csv

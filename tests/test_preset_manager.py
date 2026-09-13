@@ -40,7 +40,7 @@ class TestPresetManager(unittest.TestCase):
                     new_column="이익율(%)",
                     numerator_column="영업이익",
                     denominator_column="매출",
-                    multiplier=100.0,
+                    format_type="percent",
                 )
             ],
             filters=[FilterCondition(column="디비전", operator="==", value="TV")],
@@ -67,7 +67,144 @@ class TestPresetManager(unittest.TestCase):
         self.assertEqual(loaded.group_by_keys, ["디비전", "모델"])
         self.assertEqual(loaded.column_groups[0].new_column, "직접비")
         self.assertEqual(loaded.derived_formulas[0].new_column, "이익율(%)")
+        self.assertEqual(loaded.derived_formulas[0].format_type, "percent")
+        self.assertEqual(loaded.derived_formulas[0].multiplier, 1.0)
         self.assertTrue(loaded.rollup_annual)
+
+    def test_measure_functions_and_constant_columns_round_trip_through_the_file(self):
+        preset = AggregationPreset(
+            name="집계함수",
+            group_by_keys=["YYYY", "디비전"],
+            measure_sums=["매출", "수량"],
+            constant_columns={"YYYY": "2026"},
+            measure_functions={"수량": "mean", "매출": "count"},
+        )
+        save_preset(preset, dir_path=self.preset_dir)
+
+        loaded = load_preset("집계함수", dir_path=self.preset_dir)
+
+        self.assertEqual(loaded.measure_functions, {"수량": "mean", "매출": "count"})
+        self.assertEqual(loaded.constant_columns, {"YYYY": "2026"})
+        spec = loaded.to_spec("dummy.csv")
+        self.assertEqual(spec.measure_functions, {"수량": "mean", "매출": "count"})
+        self.assertEqual(spec.constant_columns, {"YYYY": "2026"})
+
+    def test_legacy_preset_without_measure_functions_sums_everything(self):
+        legacy = {"name": "구버전 합계", "group_by_keys": ["디비전"], "measure_sums": ["매출"]}
+
+        restored = AggregationPreset.from_dict(legacy)
+
+        self.assertEqual(restored.measure_functions, {})
+        self.assertEqual(restored.to_spec("dummy.csv").measure_functions, {})
+
+    def test_output_flag_and_value_order_round_trip(self):
+        preset = AggregationPreset(
+            name="출력플래그",
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            column_groups=[ColumnGroupRule("직접비", ["비용1", "비용2"], output=False)],
+            derived_formulas=[DerivedFormulaRule("직접비율", "직접비", "매출", output=True)],
+            value_order=["직접비율", "매출"],
+        )
+
+        restored = AggregationPreset.from_dict(preset.to_dict())
+
+        self.assertFalse(restored.column_groups[0].output)
+        self.assertTrue(restored.derived_formulas[0].output)
+        self.assertEqual(restored.value_order, ["직접비율", "매출"])
+
+    def test_legacy_preset_without_output_flag_defaults_to_true(self):
+        """Presets saved before the flag existed keep emitting every rule column."""
+        legacy = {
+            "name": "구버전",
+            "group_by_keys": ["디비전"],
+            "measure_sums": ["매출"],
+            "column_groups": [{"new_column": "직접비", "source_columns": ["비용1"]}],
+            "derived_formulas": [
+                {"new_column": "율", "numerator_column": "직접비", "denominator_column": "매출"}
+            ],
+        }
+
+        restored = AggregationPreset.from_dict(legacy)
+
+        self.assertTrue(restored.column_groups[0].output)
+        self.assertTrue(restored.derived_formulas[0].output)
+        self.assertEqual(restored.value_order, [])
+        self.assertIsNone(restored.to_spec("dummy.csv").output_order)
+
+    def test_legacy_percent_preset_migrates_to_ratio_multiplier(self):
+        """A pre-number-format percent rule stored ratio x 100; it now loads as the ratio."""
+        legacy = {
+            "name": "구버전 퍼센트",
+            "group_by_keys": ["디비전"],
+            "measure_sums": ["매출", "영업이익"],
+            "derived_formulas": [
+                {
+                    "new_column": "이익율(%)",
+                    "numerator_column": "영업이익",
+                    "denominator_column": "매출",
+                    "multiplier": 100.0,
+                    "format_type": "percent",
+                }
+            ],
+        }
+
+        restored = AggregationPreset.from_dict(legacy)
+
+        rule = restored.derived_formulas[0]
+        self.assertEqual(rule.multiplier, 1.0)
+        self.assertEqual(rule.format_type, "percent")
+
+    def test_percent_preset_already_on_ratio_multiplier_is_untouched(self):
+        preset = AggregationPreset(
+            name="신버전 퍼센트",
+            group_by_keys=["디비전"],
+            measure_sums=["매출", "영업이익"],
+            derived_formulas=[
+                DerivedFormulaRule("이익율(%)", "영업이익", "매출", multiplier=1.0),
+            ],
+        )
+
+        restored = AggregationPreset.from_dict(preset.to_dict())
+
+        self.assertEqual(restored.derived_formulas[0].multiplier, 1.0)
+
+    def test_non_percent_multiplier_is_not_migrated(self):
+        """Only percent columns changed meaning; other format types keep their scale."""
+        legacy = {
+            "name": "지수",
+            "group_by_keys": ["디비전"],
+            "derived_formulas": [
+                {
+                    "new_column": "이익지수",
+                    "numerator_column": "영업이익",
+                    "denominator_column": "매출",
+                    "multiplier": 100.0,
+                    "format_type": "number",
+                }
+            ],
+        }
+
+        restored = AggregationPreset.from_dict(legacy)
+
+        self.assertEqual(restored.derived_formulas[0].multiplier, 100.0)
+
+    def test_preset_without_multiplier_loads_as_ratio(self):
+        legacy = {
+            "name": "승수없음",
+            "group_by_keys": ["디비전"],
+            "derived_formulas": [
+                {
+                    "new_column": "이익율(%)",
+                    "numerator_column": "영업이익",
+                    "denominator_column": "매출",
+                }
+            ],
+        }
+
+        restored = AggregationPreset.from_dict(legacy)
+
+        self.assertEqual(restored.derived_formulas[0].multiplier, 1.0)
 
     def test_list_and_delete_presets(self):
         save_preset(self.sample_preset, dir_path=self.preset_dir)

@@ -29,6 +29,27 @@ class PresetValidationError(PresetError):
     """Raised when a preset JSON has invalid schema or missing required fields."""
 
 
+def _derived_formula_from_dict(item: Dict[str, Any]) -> DerivedFormulaRule:
+    """Rebuild a formula rule from JSON, migrating pre-number-format presets."""
+    multiplier = float(item.get("multiplier", 1.0))
+    format_type = item.get("format_type", "percent")
+
+    # Percent columns used to store 이익율 as ratio x 100 because the literal number
+    # was written into the cell. They now store the plain ratio and let Excel's
+    # 0.00% format scale it, so a legacy 100.0 multiplier would render as 2746.76%.
+    if format_type == "percent" and multiplier == 100.0:
+        multiplier = 1.0
+
+    return DerivedFormulaRule(
+        new_column=item["new_column"],
+        numerator_column=item["numerator_column"],
+        denominator_column=item["denominator_column"],
+        multiplier=multiplier,
+        format_type=format_type,
+        output=bool(item.get("output", True)),
+    )
+
+
 @dataclass
 class AggregationPreset:
     name: str
@@ -39,6 +60,9 @@ class AggregationPreset:
     column_groups: List[ColumnGroupRule] = field(default_factory=list)
     derived_formulas: List[DerivedFormulaRule] = field(default_factory=list)
     filters: List[FilterCondition] = field(default_factory=list)
+    value_order: List[str] = field(default_factory=list)
+    constant_columns: Dict[str, str] = field(default_factory=dict)
+    measure_functions: Dict[str, str] = field(default_factory=dict)
     rollup_annual: bool = False
     month_column: Optional[str] = None
     annual_column_name: str = "연도"
@@ -58,6 +82,9 @@ class AggregationPreset:
             "column_groups": [asdict(cg) for cg in self.column_groups],
             "derived_formulas": [asdict(df) for df in self.derived_formulas],
             "filters": [asdict(f) for f in self.filters],
+            "value_order": list(self.value_order),
+            "constant_columns": dict(self.constant_columns),
+            "measure_functions": dict(self.measure_functions),
             "rollup_annual": self.rollup_annual,
             "month_column": self.month_column,
             "annual_column_name": self.annual_column_name,
@@ -84,6 +111,7 @@ class AggregationPreset:
             ColumnGroupRule(
                 new_column=item["new_column"],
                 source_columns=list(item.get("source_columns", [])),
+                output=bool(item.get("output", True)),
             )
             for item in raw_cgs
             if isinstance(item, dict) and "new_column" in item
@@ -92,13 +120,7 @@ class AggregationPreset:
         # Derived formulas
         raw_dfs = data.get("derived_formulas", [])
         derived_formulas = [
-            DerivedFormulaRule(
-                new_column=item["new_column"],
-                numerator_column=item["numerator_column"],
-                denominator_column=item["denominator_column"],
-                multiplier=float(item.get("multiplier", 100.0)),
-                format_type=item.get("format_type", "percent"),
-            )
+            _derived_formula_from_dict(item)
             for item in raw_dfs
             if isinstance(item, dict) and "new_column" in item and "numerator_column" in item and "denominator_column" in item
         ]
@@ -124,6 +146,9 @@ class AggregationPreset:
             column_groups=column_groups,
             derived_formulas=derived_formulas,
             filters=filters,
+            value_order=list(data.get("value_order", [])),
+            constant_columns={str(k): str(v) for k, v in (data.get("constant_columns") or {}).items()},
+            measure_functions={str(k): str(v) for k, v in (data.get("measure_functions") or {}).items()},
             rollup_annual=bool(data.get("rollup_annual", False)),
             month_column=data.get("month_column"),
             annual_column_name=data.get("annual_column_name", "연도"),
@@ -141,6 +166,9 @@ class AggregationPreset:
             column_groups=list(self.column_groups),
             derived_formulas=list(self.derived_formulas),
             filters=list(self.filters),
+            output_order=list(self.value_order) or None,
+            constant_columns=dict(self.constant_columns),
+            measure_functions=dict(self.measure_functions),
             rollup_annual=self.rollup_annual,
             month_column=self.month_column,
             annual_column_name=self.annual_column_name,
@@ -294,9 +322,14 @@ def validate_preset_against_columns(
     col_set = set(available_columns)
     missing: List[str] = []
 
+    # Columns the preset supplies itself are never expected in the source file.
+    synthetic = set(preset.constant_columns)
+    if preset.rollup_annual:
+        synthetic.add(preset.annual_column_name)
+
     # Check GroupBy keys
     for k in preset.group_by_keys:
-        if k not in col_set:
+        if k not in col_set and k not in synthetic:
             missing.append(k)
 
     # Check Month column if rollup is requested

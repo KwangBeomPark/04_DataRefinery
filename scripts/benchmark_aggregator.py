@@ -72,13 +72,11 @@ def run_benchmark():
                 new_column="이익율(%)",
                 numerator_column="영업이익",
                 denominator_column="매출",
-                multiplier=100.0,
             ),
             DerivedFormulaRule(
                 new_column="직접비율(%)",
                 numerator_column="직접비",
                 denominator_column="매출",
-                multiplier=100.0,
             ),
         ],
         filters=[FilterCondition(column="디비전", operator="in", value=["TV", "Mobile"])],
