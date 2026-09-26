@@ -10,6 +10,7 @@ import openpyxl
 import pandas as pd
 
 from src.csv_processing import (
+    CsvNoTableError,
     CsvProcessingOptions,
     ParsedNumber,
     build_output_path,
@@ -33,6 +34,29 @@ class _Value:
 
 
 class TestOutput(unittest.TestCase):
+    def test_csv_with_no_matching_header_does_not_publish_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'input.csv'
+            source.write_text('Name,Value\nOne,10\n', encoding='utf-8')
+
+            with self.assertRaises(CsvNoTableError):
+                process_csv_file(CsvProcessingOptions(str(source), ',', 'English', 'CSV', 3))
+
+            self.assertEqual(list(Path(directory).glob('processed_output_*')), [])
+
+    def test_excel_with_no_matching_header_does_not_publish_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'input.xlsx'
+            workbook = openpyxl.Workbook()
+            workbook.active.append(['Name', 'Value'])
+            workbook.active.append(['One', 10])
+            workbook.save(source)
+
+            with self.assertRaises(CsvNoTableError):
+                process_csv_file(CsvProcessingOptions(str(source), ',', 'English', 'CSV', 3))
+
+            self.assertEqual(list(Path(directory).glob('processed_output_*')), [])
+
     def test_language_order_defaults_to_english_then_korean_then_polish(self):
         self.assertEqual(tuple(_LANGUAGE_CODES), ('English', '한국어', 'Polski'))
 

@@ -6,4 +6,4 @@ The app writes a small local diagnostic log at `%LOCALAPPDATA%\Data Refinery\log
 
 Issues are public. Do not attach confidential source files, personal data, or screenshots containing customer information. Reproduce the problem with synthetic data where possible.
 
-This issue tracker is a technical bug-report channel. Paid support terms and response times are not defined yet.
+This issue tracker is a technical bug-report channel; response times are not guaranteed.

@@ -483,7 +483,7 @@ def _find_text_header_index(
         for index, row in enumerate(csv.reader(source, delimiter=delimiter)):
             if len(row) == max_columns:
                 return index
-    return 0
+    raise CsvNoTableError()
 
 
 def _excel_stream_row(values: list, worksheet, statistics: ProcessingStatistics) -> list:
@@ -630,7 +630,9 @@ def _process_excel_in_memory(
     rows, encoding = read_file_rows(options.file_path, options.delimiter)
     report(10, f"scanning:{len(rows)}")
 
-    start_index = next((index for index, row in enumerate(rows) if len(row) == options.max_columns), 0)
+    start_index = next((index for index, row in enumerate(rows) if len(row) == options.max_columns), None)
+    if start_index is None:
+        raise CsvNoTableError()
     garbage_skipped = start_index
     if start_index:
         del rows[:start_index]
