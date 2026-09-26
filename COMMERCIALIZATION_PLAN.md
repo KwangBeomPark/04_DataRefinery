@@ -16,7 +16,8 @@ Stage 1 is being implemented first because later testing and beta results need a
 
 - Implemented: pinned Windows/Python dependencies, isolated installer builds, Windows CI, install/uninstall smoke script, signing failure gate, installer checksum, launcher signer verification, canonical release URL, local error IDs/logs, and public bug-report instructions.
 - Verified locally: 358 automated tests, focused Ruff checks, the unsigned isolated test build, release lookup, and signer verification against an existing signed installer.
-- Pending verification: the first GitHub Actions run and a clean-machine packaged-app walkthrough. The current machine can verify signatures but could not access the release certificate's private key to create a new signature (`Bad UID`).
+- Verified in CI: the Windows workflow passed its first run, including package creation and isolated install/uninstall.
+- Pending verification: a clean-machine packaged-app walkthrough with real user actions and display scaling. The current machine can verify signatures but could not access the release certificate's private key to create a new signature (`Bad UID`).
 - Before paid production: resolve signing-key access, obtain the applicable Inno Setup commercial license, define product terms/privacy/support commitments, and run a small user beta. The [Inno Setup licensing guidance](https://jrsoftware.org/isorder.php) says commercial users should purchase a license and includes CI/compiler use in its licensing model.
 
 ## Release procedure
