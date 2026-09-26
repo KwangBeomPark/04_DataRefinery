@@ -26,8 +26,11 @@ mixing their source rules into the promotion model.
 - **Promotion time-series normalization** — validates an Excel template with
   `Promotion_Master` and `Support_Rules`, keeps source rules compact, and
   exports inclusive daily support rows without summing overlapping rules.
-- **Clear, localized workflow** — CSV repair and promotion normalization are
-  separate tabs, with English, Korean, and Polish user interfaces.
+- **Data aggregation** — groups CSV rows, applies filters and per-column
+  aggregation functions, calculates derived measures, previews results, and
+  saves reusable presets.
+- **Clear, localized workflow** — CSV repair, promotion normalization, and
+  aggregation have separate tabs, with English, Korean, and Polish interfaces.
 - **Fast per-user installation** — runs from Local AppData in an `onedir`
   layout, so the launcher does not unpack a single-file bundle on every start.
 - **Update notification** — checks GitHub for a newer stable release in the
@@ -51,9 +54,13 @@ only for the current Windows user; Python and extra libraries are not required.
 1. Download `App04_DataRefinery_Setup_v<version>.exe`.
 2. Run the installer. It creates **Data Refinery** shortcuts in the Start menu
    and on the desktop.
-3. Use **CSV repair** for malformed delimited files, or **Promotion template**
-   for normalized promotion rules and daily support data.
+3. Use **CSV repair** for malformed delimited files, **Promotion template**
+   for promotion rules and daily support data, or **Data aggregator** to group and summarize a CSV file.
 4. Results are saved beside the source data with a `YYYYMMDD_HHMM` timestamp.
+
+To try aggregation without your own data, open `sample_data/monthly_ledger_sample.csv`
+in the **Data aggregator** tab. Add `디비전` as a row group and `매출` as a value,
+preview the result, then save it as CSV or Excel.
 
 ## Development
 

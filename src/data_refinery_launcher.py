@@ -184,9 +184,10 @@ def verify_installer_signature(installer: Path) -> None:
     # incompatible modules ahead of the Windows PowerShell built-in modules.
     windows_root = Path(environment.get("WINDIR", "C:\\Windows"))
     environment["PSModulePath"] = str(windows_root / "System32" / "WindowsPowerShell" / "v1.0" / "Modules")
+    powershell = windows_root / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
     try:
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            [str(powershell), "-NoProfile", "-NonInteractive", "-Command", command],
             check=False,
             capture_output=True,
             text=True,
