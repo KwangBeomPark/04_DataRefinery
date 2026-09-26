@@ -30,8 +30,7 @@ function Invoke-SignBinary {
     }
 
     if (-not $cert) {
-        Write-Warning "Code signing certificate '$CertificateThumbprint' not found in Cert:\CurrentUser\My. Skipping signing."
-        return $false
+        throw "Code signing certificate '$CertificateThumbprint' not found in Cert:\CurrentUser\My."
     }
 
     Write-Host "Signing $FilePath with certificate: $($cert.Subject) [$($cert.Thumbprint)]"
@@ -66,7 +65,7 @@ function Invoke-SignBinary {
         }
         $result = Set-AuthenticodeSignature @signParams
         if ($result.Status -ne "Valid") {
-            Write-Warning "Set-AuthenticodeSignature status: $($result.Status) ($($result.StatusMessage))"
+            throw "Set-AuthenticodeSignature failed: $($result.Status) ($($result.StatusMessage))"
         }
     }
 
@@ -75,7 +74,6 @@ function Invoke-SignBinary {
         Write-Host "Signature successfully verified for: $FilePath" -ForegroundColor Green
         return $true
     } else {
-        Write-Warning "Signature verification returned status: $($verified.Status)"
-        return $false
+        throw "Signature verification failed: $($verified.Status)"
     }
 }

@@ -1,3 +1,16 @@
-pandas
-openpyxl
-pyinstaller
+# Windows x64 / Python 3.13 release environment. Keep the full dependency
+# set pinned so local and CI builds resolve the same package versions.
+altgraph==0.17.5
+et-xmlfile==2.0.0
+numpy==2.5.0
+openpyxl==3.1.5
+packaging==26.2
+pandas==3.0.3
+pefile==2024.8.26
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+python-dateutil==2.9.0.post0
+pywin32-ctypes==0.2.3
+setuptools==82.0.1
+six==1.17.0
+tzdata==2026.2

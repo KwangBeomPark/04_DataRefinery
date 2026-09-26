@@ -787,7 +787,6 @@ def aggregate_dataset(
     plan = _build_measure_plan(spec, all_measure_cols, rule_columns)
 
     file_size = os.path.getsize(file_path)
-    processed_bytes = 0
     total_coerced = 0
     chunk_accumulators: List[pd.DataFrame] = []
 

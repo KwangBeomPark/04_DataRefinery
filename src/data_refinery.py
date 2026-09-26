@@ -7,6 +7,7 @@ import webbrowser
 from pathlib import Path
 
 from src.background_jobs import BackgroundJobRunner, JobCallbacks
+from src.diagnostics import record_error
 from src.csv_processing import (
     CsvNoDataError,
     CsvNoTableError,
@@ -228,6 +229,7 @@ _UI_TEXT["en"].update({
     "hide_updates": "Hide updates",
     "checking_updates": "Checking GitHub for updates…",
     "update_current": "You have the latest version.",
+    "update_failed": "Could not check for updates. Try again later.",
     "update_off": "Automatic update checks are off.",
     "update_available": "Version {version} is available.",
     "download_update": "Download update",
@@ -257,6 +259,7 @@ _UI_TEXT["en"].update({
     "promo_daily_file": "• Daily support: {name}",
     "promo_issue_more": "• … and {count} more issue(s).",
     "promo_excel_limit": "Excel output is limited to {limit:,} data rows. Choose CSV for this template.",
+    "error_id": "\n\nError ID: {id}. Include this ID if you contact support.",
 })
 _UI_TEXT["ko"].update({
     "task_label": "작업 방식",
@@ -267,6 +270,7 @@ _UI_TEXT["ko"].update({
     "hide_updates": "업데이트 숨기기",
     "checking_updates": "GitHub에서 새 버전을 확인하는 중…",
     "update_current": "현재 최신 버전을 사용하고 있습니다.",
+    "update_failed": "업데이트를 확인하지 못했습니다. 나중에 다시 시도해 주세요.",
     "update_off": "새 버전 자동 확인이 꺼져 있습니다.",
     "update_available": "새 버전 {version}을 사용할 수 있습니다.",
     "download_update": "업데이트 다운로드",
@@ -296,6 +300,7 @@ _UI_TEXT["ko"].update({
     "promo_daily_file": "• 일별 지원금: {name}",
     "promo_issue_more": "• 그 외 {count}개 문제",
     "promo_excel_limit": "Excel은 데이터 행을 최대 {limit:,}개까지만 저장할 수 있습니다. 이 템플릿은 CSV를 선택하세요.",
+    "error_id": "\n\n오류 ID: {id}. 문의할 때 이 ID를 알려 주세요.",
 })
 _UI_TEXT["pl"].update({
     "task_label": "Zadanie",
@@ -306,6 +311,7 @@ _UI_TEXT["pl"].update({
     "hide_updates": "Ukryj aktualizacje",
     "checking_updates": "Sprawdzanie aktualizacji na GitHubie…",
     "update_current": "Używasz najnowszej wersji.",
+    "update_failed": "Nie udało się sprawdzić aktualizacji. Spróbuj ponownie później.",
     "update_off": "Automatyczne sprawdzanie aktualizacji jest wyłączone.",
     "update_available": "Dostępna jest wersja {version}.",
     "download_update": "Pobierz aktualizację",
@@ -335,6 +341,7 @@ _UI_TEXT["pl"].update({
     "promo_daily_file": "• Dzienna dopłata: {name}",
     "promo_issue_more": "• … oraz {count} kolejnych problemów.",
     "promo_excel_limit": "Excel zapisuje najwyżej {limit:,} wierszy danych. Wybierz CSV dla tego szablonu.",
+    "error_id": "\n\nIdentyfikator błędu: {id}. Podaj go podczas kontaktu z pomocą.",
 })
 
 # --- Data aggregator tab -------------------------------------------------
@@ -1448,7 +1455,9 @@ class DataRefineryApp:
         self.log_text.set(done)
 
     def _on_promotion_error(self, error):
-        messagebox.showerror(self._ui("promo_result_title"), str(error))
+        messagebox.showerror(
+            self._ui("promo_result_title"), str(error) + self.report_error("promotion_export", error)
+        )
         self.log_text.set(self._ui("promo_result_title"))
 
     def _finish_promotion_processing(self):
@@ -1590,9 +1599,12 @@ class DataRefineryApp:
             self._update_settings["last_update_check"] = ""
 
         def worker(_report):
-            release = check_for_update(__version__, self._update_settings)
+            failures = []
+            release = check_for_update(
+                __version__, self._update_settings, on_error=failures.append
+            )
             save_settings(self._update_settings)
-            return release
+            return release, failures[0] if failures else None
 
         self._jobs.start(
             "update-check",
@@ -1600,12 +1612,22 @@ class DataRefineryApp:
             JobCallbacks(
                 on_progress=lambda _percent, _detail: None,
                 on_success=self._finish_update_check,
-                on_error=lambda _error: self._finish_update_check(None),
+                on_error=self._finish_update_error,
                 on_finished=lambda: None,
             ),
         )
 
-    def _finish_update_check(self, release):
+    def _finish_update_error(self, error):
+        record_error("update_check", error)
+        self._update_state = "failed"
+        self._update_version = None
+        self._refresh_update_status()
+
+    def _finish_update_check(self, outcome):
+        release, error = outcome
+        if error is not None:
+            self._finish_update_error(error)
+            return
         if release is None:
             self._update_state = "current"
             self._update_version = None
@@ -1623,6 +1645,7 @@ class DataRefineryApp:
             "idle": "checking_updates",
             "checking": "checking_updates",
             "current": "update_current",
+            "failed": "update_failed",
             "off": "update_off",
             "available": "update_available",
         }.get(self._update_state)
@@ -1649,6 +1672,10 @@ class DataRefineryApp:
         if key in text:
             return text[key]
         return _UI_TEXT["en"].get(key, key)
+
+    def report_error(self, operation, error):
+        error_id = record_error(operation, error)
+        return self._ui("error_id").format(id=error_id)
 
     def _apply_language(self, event=None):
         """Refresh all user-facing labels while keeping the chosen data settings."""
@@ -1892,7 +1919,8 @@ class DataRefineryApp:
         else:
             messagebox.showerror(
                 self._ui("error_title"),
-                self._ui("error_message").format(error=str(error)),
+                self._ui("error_message").format(error=str(error))
+                + self.report_error("csv_processing", error),
             )
             self.log_text.set(self._ui("error_title"))
 

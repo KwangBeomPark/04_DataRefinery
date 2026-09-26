@@ -1,6 +1,5 @@
 """Unit tests for preset_manager module."""
 
-import json
 import os
 from pathlib import Path
 import tempfile

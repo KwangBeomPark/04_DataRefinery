@@ -1,18 +1,22 @@
 import io
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.data_refinery_launcher import (
     APPLICATION_NAME_PATTERN,
     INSTALLER_NAME_PATTERN,
     InstallerAsset,
     LauncherError,
+    TRUSTED_SIGNER_THUMBPRINT,
     _version_from_name,
     download_installer,
     fetch_latest_installer,
     find_installed_executable,
+    verify_installer_signature,
 )
 
 
@@ -47,15 +51,16 @@ class TestLauncher(unittest.TestCase):
     def test_release_lookup_accepts_only_the_official_setup_asset(self):
         asset_name = "App04_DataRefinery_Setup_v1.6.0.exe"
         payload = {
+            "tag_name": "v1.6.0",
             "assets": [
                 {
                     "name": asset_name,
-                    "browser_download_url": "https://github.com/KwangBeomPark/DataRefinery/releases/download/v1.6.0/" + asset_name,
+                    "browser_download_url": "https://github.com/KwangBeomPark/04_DataRefinery/releases/download/v1.6.0/" + asset_name,
                     "size": 123,
                 },
                 {
                     "name": "source.zip",
-                    "browser_download_url": "https://github.com/KwangBeomPark/DataRefinery/archive/v1.6.0.zip",
+                    "browser_download_url": "https://github.com/KwangBeomPark/04_DataRefinery/archive/v1.6.0.zip",
                     "size": 456,
                 },
             ]
@@ -68,6 +73,7 @@ class TestLauncher(unittest.TestCase):
 
     def test_release_lookup_rejects_an_untrusted_download_location(self):
         payload = {
+            "tag_name": "v1.6.0",
             "assets": [
                 {
                     "name": "App04_DataRefinery_Setup_v1.6.0.exe",
@@ -80,12 +86,25 @@ class TestLauncher(unittest.TestCase):
         with self.assertRaises(LauncherError):
             fetch_latest_installer(lambda request, timeout: _Response(json.dumps(payload).encode("utf-8")))
 
+    def test_release_lookup_rejects_a_mismatched_tag(self):
+        name = "App04_DataRefinery_Setup_v1.6.0.exe"
+        payload = {
+            "tag_name": "v1.6.1",
+            "assets": [{
+                "name": name,
+                "browser_download_url": f"https://github.com/KwangBeomPark/04_DataRefinery/releases/download/v1.6.1/{name}",
+                "size": 123,
+            }],
+        }
+        with self.assertRaises(LauncherError):
+            fetch_latest_installer(lambda request, timeout: _Response(json.dumps(payload).encode("utf-8")))
+
     def test_download_checks_the_expected_file_size(self):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "setup.exe"
             asset = InstallerAsset(
                 name="App04_DataRefinery_Setup_v1.6.0.exe",
-                url="https://github.com/KwangBeomPark/DataRefinery/releases/download/v1.6.0/App04_DataRefinery_Setup_v1.6.0.exe",
+                url="https://github.com/KwangBeomPark/04_DataRefinery/releases/download/v1.6.0/App04_DataRefinery_Setup_v1.6.0.exe",
                 size=3,
             )
             downloaded = download_installer(asset, destination, lambda request, timeout: _Response(b"abc"))
@@ -99,6 +118,21 @@ class TestLauncher(unittest.TestCase):
         )
         self.assertIsNone(_version_from_name(Path("App04_DataRefinery_v1.6.exe"), APPLICATION_NAME_PATTERN))
         self.assertTrue(INSTALLER_NAME_PATTERN.fullmatch("App04_DataRefinery_Setup_v1.6.0.exe"))
+
+    def test_signature_check_requires_valid_pinned_signer(self):
+        installer = Path("C:/Temp/setup.exe")
+        trusted = json.dumps({"status": "Valid", "thumbprint": TRUSTED_SIGNER_THUMBPRINT})
+        with patch("src.data_refinery_launcher.subprocess.run", return_value=subprocess.CompletedProcess([], 0, trusted)):
+            verify_installer_signature(installer)
+
+        untrusted = json.dumps({"status": "Valid", "thumbprint": "0" * 40})
+        with patch("src.data_refinery_launcher.subprocess.run", return_value=subprocess.CompletedProcess([], 0, untrusted)):
+            with self.assertRaises(LauncherError):
+                verify_installer_signature(installer)
+
+        with patch("src.data_refinery_launcher.subprocess.run", return_value=subprocess.CompletedProcess([], 0, '{"status":"NotSigned"}')):
+            with self.assertRaises(LauncherError):
+                verify_installer_signature(installer)
 
 
 if __name__ == "__main__":

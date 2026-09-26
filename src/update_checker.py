@@ -12,7 +12,7 @@ from typing import Callable
 from urllib.request import Request, urlopen
 
 
-DEFAULT_REPOSITORY = "KwangBeomPark/DataRefinery"
+DEFAULT_REPOSITORY = "KwangBeomPark/04_DataRefinery"
 CHECK_INTERVAL = timedelta(hours=24)
 REQUEST_TIMEOUT_SECONDS = 2
 APPLICATION_NAME = "Data Refinery"
@@ -96,18 +96,28 @@ def fetch_latest_release(repository: str = DEFAULT_REPOSITORY, timeout: int = RE
     return ReleaseInfo(version=version, url=url, notes=str(payload.get("body", "")))
 
 
-def check_for_update(current_version: str, settings: dict, now: datetime | None = None, fetcher: Callable = fetch_latest_release) -> ReleaseInfo | None:
+def check_for_update(
+    current_version: str,
+    settings: dict,
+    now: datetime | None = None,
+    fetcher: Callable = fetch_latest_release,
+    on_error: Callable[[Exception], None] | None = None,
+) -> ReleaseInfo | None:
     """Return a newer release or None. Network failures deliberately stay silent."""
     now = now or datetime.now(timezone.utc)
     if not should_check(settings, now):
         return None
-    settings["last_update_check"] = now.isoformat()
     try:
         release = fetcher()
-    except Exception:
+    except Exception as error:
+        if on_error is not None:
+            on_error(error)
         return None
     if release is None:
+        if on_error is not None:
+            on_error(ValueError("Release response was invalid."))
         return None
+    settings["last_update_check"] = now.isoformat()
     current = version_key(current_version)
     latest = version_key(release.version)
     return release if current is not None and latest is not None and latest > current else None

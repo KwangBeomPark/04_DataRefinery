@@ -44,7 +44,7 @@ Data Refinery는 복잡하거나 깨진 원본 데이터를 분석에 바로 쓸
 최신 릴리즈의 설치 파일 하나만 내려받으면 됩니다. 현재 Windows 사용자
 계정에만 설치되며 Python이나 별도 라이브러리는 필요하지 않습니다.
 
-👉 **[최신 설치 파일 다운로드](https://github.com/KwangBeomPark/DataRefinery/releases/latest)**
+👉 **[최신 설치 파일 다운로드](https://github.com/KwangBeomPark/04_DataRefinery/releases/latest)**
 
 1. `App04_DataRefinery_Setup_v<version>.exe` 파일을 다운로드합니다.
 2. 설치 파일을 실행하면 시작 메뉴와 바탕화면에 **Data Refinery** 바로가기가 만들어집니다.
@@ -73,3 +73,5 @@ Windows 설치 파일 빌드:
 ```powershell
 .\scripts\build_release.ps1
 ```
+
+처리 오류가 나타나면 오류 ID와 함께 [문제 신고 안내](SUPPORT.md)를 확인해 주세요. 진단 로그는 PC에만 저장되며 원본 파일 내용은 기록하지 않습니다.

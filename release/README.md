@@ -30,12 +30,14 @@ not follow this prefix rule.
 1. Update `__version__` in `src/data_refinery.py`.
 2. Update the release notes and both README files when necessary.
 3. Run `python -m unittest discover -s tests -v`.
-4. Run `.\scripts\build_release.ps1` with Inno Setup 6.7+ or 7 installed.
-5. Verify `release/dist/App04_DataRefinery_v<version>/App04_DataRefinery_v<version>.exe` exists.
-6. Verify `release/dist/installer/App04_DataRefinery_Setup_v<version>.exe` installs to
+4. Run `ruff check --select E4,E7,E9,F src tests`.
+5. Run `.\scripts\build_release.ps1` with Inno Setup 6.7+ or 7 installed. This creates a fresh Python 3.13 virtual environment from the pinned `requirements.txt`. A missing or invalid release signature aborts the build.
+6. Verify the application EXE and installer both have valid Authenticode signatures from the expected publisher. Check the generated `.exe.sha256` file against the installer.
+7. Verify `release/dist/installer/App04_DataRefinery_Setup_v<version>.exe` installs to
    `%LOCALAPPDATA%\Programs\Data Refinery` without an administrator prompt.
-7. Create Git tag `v<version>` and upload only that setup executable to the
-   matching GitHub release.
+8. Test upgrade and uninstall on a clean Windows machine, then create Git tag `v<version>` and upload the setup executable and its `.sha256` file to the matching GitHub release.
+
+The one-file launcher, when distributed, must be built with `.\scripts\build_launcher.ps1` and signed. It accepts only an exact release asset URL and installer version, then verifies the downloaded installer's Windows signature against the pinned release certificate. When the certificate changes, update the launcher's trusted thumbprint and ship a new signed launcher before releases use the replacement certificate.
 
 ## Rename migration
 

@@ -46,7 +46,7 @@ only when it is needed for analysis.
 Download the single setup file from the latest release. It installs the app
 only for the current Windows user; Python and extra libraries are not required.
 
-👉 **[Download the latest installer](https://github.com/KwangBeomPark/DataRefinery/releases/latest)**
+👉 **[Download the latest installer](https://github.com/KwangBeomPark/04_DataRefinery/releases/latest)**
 
 1. Download `App04_DataRefinery_Setup_v<version>.exe`.
 2. Run the installer. It creates **Data Refinery** shortcuts in the Start menu
@@ -78,3 +78,5 @@ Build the Windows installer with:
 ```powershell
 .\scripts\build_release.ps1
 ```
+
+If a processing error appears, include its error ID in a [bug report](SUPPORT.md). Diagnostic logs remain on the local PC and do not include source file contents.

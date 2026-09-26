@@ -1156,7 +1156,8 @@ class AggregatorTabFrame(ttk.Frame):
         except Exception as error:
             messagebox.showerror(
                 self._ui("agg_msg_preview_error_title"),
-                self._ui("agg_msg_preview_error").format(error=error),
+                self._ui("agg_msg_preview_error").format(error=error)
+                + self.app.report_error("aggregation_preview", error),
             )
             return
 
@@ -1292,7 +1293,9 @@ class AggregatorTabFrame(ttk.Frame):
                 self.app.set_progress(0, self._ui("agg_msg_error_progress"))
                 self.app.set_status_log(self._ui("agg_msg_error_log"))
                 messagebox.showerror(
-                    self._ui("agg_msg_error_title"), self._ui("agg_msg_error").format(error=error)
+                    self._ui("agg_msg_error_title"),
+                    self._ui("agg_msg_error").format(error=error)
+                    + self.app.report_error("aggregation", error),
                 )
 
         def on_finished():

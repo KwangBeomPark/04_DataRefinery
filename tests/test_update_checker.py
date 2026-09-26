@@ -48,6 +48,20 @@ class TestUpdateChecker(unittest.TestCase):
             settings,
             fetcher=lambda: (_ for _ in ()).throw(OSError("offline")),
         ))
+        self.assertNotIn("last_update_check", settings)
+
+    def test_network_errors_can_be_reported_without_caching_success(self):
+        errors = []
+        settings = {"update_check_enabled": True}
+        self.assertIsNone(check_for_update(
+            "1.6.0",
+            settings,
+            fetcher=lambda: (_ for _ in ()).throw(OSError("offline")),
+            on_error=errors.append,
+        ))
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], OSError)
+        self.assertNotIn("last_update_check", settings)
 
     def test_migrates_legacy_update_preference(self):
         with tempfile.TemporaryDirectory() as directory:

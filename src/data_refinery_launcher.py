@@ -16,7 +16,9 @@ from urllib.request import Request, urlopen
 
 
 APPLICATION_NAME = "Data Refinery"
-REPOSITORY = "KwangBeomPark/DataRefinery"
+REPOSITORY = "KwangBeomPark/04_DataRefinery"
+# Rotate this value only after verifying a replacement release-signing certificate.
+TRUSTED_SIGNER_THUMBPRINT = "E9C72CF5090840A1805296525D56BE680622A7FD"
 INSTALLER_NAME_PATTERN = re.compile(r"App04_DataRefinery_Setup_v(\d+)\.(\d+)\.(\d+)\.exe\Z")
 APPLICATION_NAME_PATTERN = re.compile(r"App04_DataRefinery_v(\d+)\.(\d+)\.(\d+)\.exe\Z")
 INSTALLER_ARGUMENTS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS")
@@ -88,12 +90,14 @@ def find_installed_executable(
     return max(candidates, key=lambda path: _version_from_name(path, APPLICATION_NAME_PATTERN) or (0, 0, 0))
 
 
-def _is_trusted_installer_url(value: str) -> bool:
+def _is_trusted_installer_url(value: str, name: str, tag: str) -> bool:
     parsed = urlparse(value)
     return (
         parsed.scheme == "https"
         and parsed.netloc.casefold() == "github.com"
-        and parsed.path.startswith(f"/{REPOSITORY}/releases/download/")
+        and parsed.path == f"/{REPOSITORY}/releases/download/{tag}/{name}"
+        and not parsed.query
+        and not parsed.fragment
     )
 
 
@@ -115,7 +119,8 @@ def fetch_latest_installer(
         raise LauncherError("GitHub에서 최신 설치 정보를 가져오지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도하세요.") from error
 
     assets = payload.get("assets")
-    if not isinstance(assets, list):
+    tag = str(payload.get("tag_name", ""))
+    if not isinstance(assets, list) or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         raise LauncherError("최신 릴리스에 설치 파일 정보가 없습니다.")
 
     matches = []
@@ -125,7 +130,14 @@ def fetch_latest_installer(
         name = str(asset.get("name", ""))
         url = str(asset.get("browser_download_url", ""))
         size = asset.get("size", 0)
-        if INSTALLER_NAME_PATTERN.fullmatch(name) and _is_trusted_installer_url(url) and isinstance(size, int) and size > 0:
+        match = INSTALLER_NAME_PATTERN.fullmatch(name)
+        if (
+            match
+            and f"v{'.'.join(match.groups())}" == tag
+            and _is_trusted_installer_url(url, name, tag)
+            and isinstance(size, int)
+            and size > 0
+        ):
             matches.append(InstallerAsset(name=name, url=url, size=size))
 
     if len(matches) != 1:
@@ -146,6 +158,8 @@ def download_installer(
             while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
                 output.write(chunk)
                 received += len(chunk)
+                if received > asset.size:
+                    raise LauncherError("설치 파일 크기가 릴리스 정보와 다릅니다.")
     except Exception as error:
         destination.unlink(missing_ok=True)
         raise LauncherError("설치 파일을 내려받지 못했습니다. 인터넷 연결을 확인한 뒤 다시 시도하세요.") from error
@@ -154,6 +168,42 @@ def download_installer(
         destination.unlink(missing_ok=True)
         raise LauncherError("설치 파일 다운로드가 완전하지 않습니다. 다시 시도하세요.")
     return destination
+
+
+def verify_installer_signature(installer: Path) -> None:
+    """Require a valid Windows signature from the pinned release certificate."""
+    escaped_path = str(installer).replace("'", "''")
+    command = (
+        f"$signature = Get-AuthenticodeSignature -LiteralPath '{escaped_path}'; "
+        "@{status = [string]$signature.Status; "
+        "thumbprint = [string]$signature.SignerCertificate.Thumbprint} "
+        "| ConvertTo-Json -Compress"
+    )
+    environment = os.environ.copy()
+    # A launcher started from PowerShell 7 can inherit a module path that puts
+    # incompatible modules ahead of the Windows PowerShell built-in modules.
+    windows_root = Path(environment.get("WINDIR", "C:\\Windows"))
+    environment["PSModulePath"] = str(windows_root / "System32" / "WindowsPowerShell" / "v1.0" / "Modules")
+    try:
+        result = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            env=environment,
+        )
+        signature = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise LauncherError("설치 파일의 디지털 서명을 확인하지 못했습니다.") from error
+    if (
+        result.returncode != 0
+        or not isinstance(signature, dict)
+        or signature.get("status") != "Valid"
+        or str(signature.get("thumbprint", "")).upper() != TRUSTED_SIGNER_THUMBPRINT
+    ):
+        raise LauncherError("설치 파일의 디지털 서명이 공식 배포 인증서와 일치하지 않습니다.")
 
 
 def install_latest_release(installer: Path) -> None:
@@ -224,6 +274,8 @@ def run_launcher() -> int:
         busy.set_message("Data Refinery 최신 설치 파일을 내려받는 중입니다…")
         with tempfile.TemporaryDirectory(prefix="DataRefinery-") as temp_directory:
             installer = download_installer(asset, Path(temp_directory) / asset.name)
+            busy.set_message("설치 파일의 디지털 서명을 확인하는 중입니다…")
+            verify_installer_signature(installer)
             busy.set_message("다운로드가 끝났습니다. Data Refinery를 설치하는 중입니다…")
             install_latest_release(installer)
 
