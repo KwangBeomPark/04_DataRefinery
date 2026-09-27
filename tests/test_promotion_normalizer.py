@@ -84,6 +84,54 @@ class TestPromotionNormalizer(unittest.TestCase):
             self.assertEqual(list(Path(directory).glob("promotion_*")), [source])
             self.assertEqual(list(Path(directory).glob(".*.tmp")), [])
 
+    def test_removes_published_and_staged_outputs_when_second_publish_replace_fails(self):
+        masters, rules = self._valid_records()
+        data, issues = validate_records(masters, rules)
+        self.assertFalse(issues)
+
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            source = directory_path / "promotion_input.xlsx"
+            source_content = b"original source template content"
+            source.write_bytes(source_content)
+
+            sentinel = directory_path / "unrelated_sentinel.txt"
+            sentinel_content = "sentinel content must remain untouched"
+            sentinel.write_text(sentinel_content, encoding="utf-8")
+
+            original_replace = Path.replace
+            replace_calls = 0
+            first_target = None
+            first_target_existed_before_failure = False
+
+            def fake_replace(self_path, target, *args, **kwargs):
+                nonlocal replace_calls, first_target, first_target_existed_before_failure
+                replace_calls += 1
+                if replace_calls == 1:
+                    first_target = Path(target)
+                    result = original_replace(self_path, target, *args, **kwargs)
+                    first_target_existed_before_failure = first_target.exists()
+                    return result
+                if replace_calls == 2:
+                    raise OSError("simulated publish failure on second replace")
+                return original_replace(self_path, target, *args, **kwargs)
+
+            with patch.object(Path, "replace", new=fake_replace):
+                with self.assertRaisesRegex(OSError, "simulated publish failure on second replace"):
+                    export_normalized(data, source, timestamp=datetime(2030, 1, 2, 3, 4))
+
+            self.assertEqual(replace_calls, 2)
+            self.assertTrue(first_target_existed_before_failure)
+            self.assertIsNotNone(first_target)
+            self.assertFalse(first_target.exists())
+            self.assertTrue(source.exists())
+            self.assertEqual(source.read_bytes(), source_content)
+            self.assertTrue(sentinel.exists())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), sentinel_content)
+            self.assertEqual(list(directory_path.glob("promotion_*")), [source])
+            self.assertEqual(list(directory_path.glob(".*.tmp")), [])
+            self.assertEqual(sorted(p.name for p in directory_path.iterdir()), sorted([source.name, sentinel.name]))
+
     def test_reports_duplicate_ids_missing_master_and_invalid_dates(self):
         masters, rules = self._valid_records()
         masters.append({**masters[0], "promotion_name": "Duplicate"})
