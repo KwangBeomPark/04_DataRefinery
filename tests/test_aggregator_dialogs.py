@@ -246,6 +246,43 @@ class TestPreviewDialog(DialogTestCase):
         finally:
             dialog.destroy()
 
+    def test_displays_persistent_sample_numeric_explanation(self):
+        dialog = PreviewDialog(
+            self.root, self.ui, ["디비전", "매출"], [["TV", "1,000"]], numeric_columns=["매출"]
+        )
+        try:
+            self.assertEqual(dialog.note.cget("text"), self.ui("agg_preview_note"))
+            self.assertIn("2,000", dialog.note.cget("text"))
+
+            # Calling set_summary updates summary while leaving the note persistent
+            dialog.set_summary("4 sampled rows shown · the full run produces 4 rows")
+            self.assertEqual(dialog.summary.cget("text"), "4 sampled rows shown · the full run produces 4 rows")
+            self.assertEqual(dialog.note.cget("text"), self.ui("agg_preview_note"))
+        finally:
+            dialog.destroy()
+
+    def test_explanation_is_localized_across_all_supported_languages(self):
+        from src.data_refinery import _UI_TEXT
+
+        for lang, expected_substr in [
+            ("en", "up to the first 2,000 source rows"),
+            ("ko", "최대 2,000행"),
+            ("pl", "maksymalnie pierwszych 2 000 wierszach"),
+        ]:
+            with self.subTest(language=lang):
+                dialog = PreviewDialog(
+                    self.root,
+                    lambda key, l=lang: _UI_TEXT[l].get(key, key),
+                    ["디비전", "매출"],
+                    [["TV", "1,000"]],
+                )
+                try:
+                    text = dialog.note.cget("text")
+                    self.assertEqual(text, _UI_TEXT[lang]["agg_preview_note"])
+                    self.assertIn(expected_substr, text)
+                finally:
+                    dialog.destroy()
+
 
 class TestDescribeFilter(unittest.TestCase):
     def test_scalar_and_list_values(self):

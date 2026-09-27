@@ -282,7 +282,9 @@ class PreviewDialog(tk.Toplevel):
 
     A wide result is unreadable as monospaced text: columns drift, long numbers
     wrap, and nothing can be resized. A Treeview gives real columns the user can
-    widen, and keeps the cell strings identical to what the file will contain.
+    widen, and formats cell values using the export number formats (though numeric
+    values reflect up to the first 2,000 source rows and may differ from the saved
+    full result).
     """
 
     def __init__(
@@ -295,7 +297,7 @@ class PreviewDialog(tk.Toplevel):
     ):
         super().__init__(parent)
         self.title(ui("agg_preview_title"))
-        self.geometry("820x420")
+        self.geometry("820x440")
         self.transient(parent.winfo_toplevel())
         self.configure(background=PALETTE["surface"])
         self._ui = ui
@@ -303,10 +305,19 @@ class PreviewDialog(tk.Toplevel):
         body = ttk.Frame(self, style="Dialog.TFrame", padding=(14, 12))
         body.pack(fill="both", expand=True)
         body.columnconfigure(0, weight=1)
-        body.rowconfigure(1, weight=1)
+        body.rowconfigure(2, weight=1)
 
         self.summary = ttk.Label(body, style="Muted.TLabel", anchor="w")
-        self.summary.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self.summary.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 2))
+
+        self.note = ttk.Label(
+            body,
+            text=ui("agg_preview_note"),
+            style="Help.TLabel",
+            anchor="w",
+            wraplength=780,
+        )
+        self.note.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
 
         numeric = set(numeric_columns)
         self.table = ttk.Treeview(body, columns=list(columns), show="headings", style="FieldList.Treeview")
@@ -316,12 +327,12 @@ class PreviewDialog(tk.Toplevel):
             self.table.column(name, width=width, anchor="e" if name in numeric else "w", stretch=False)
         for values in rows:
             self.table.insert("", "end", values=list(values))
-        self.table.grid(row=1, column=0, sticky="nsew")
+        self.table.grid(row=2, column=0, sticky="nsew")
 
         vertical = ttk.Scrollbar(body, orient="vertical", command=self.table.yview)
-        vertical.grid(row=1, column=1, sticky="ns")
+        vertical.grid(row=2, column=1, sticky="ns")
         horizontal = ttk.Scrollbar(body, orient="horizontal", command=self.table.xview)
-        horizontal.grid(row=2, column=0, sticky="ew")
+        horizontal.grid(row=3, column=0, sticky="ew")
         self.table.configure(yscrollcommand=vertical.set, xscrollcommand=horizontal.set)
 
         buttons = ttk.Frame(self, style="Dialog.TFrame", padding=(14, 0, 14, 12))

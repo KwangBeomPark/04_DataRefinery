@@ -353,7 +353,7 @@ def format_preview_rows(
     group_keys: Sequence[str],
     rows: int = 10,
 ) -> Tuple[List[str], List[List[str]]]:
-    """Column names and per-cell display strings, formatted exactly as the file will be."""
+    """Column names and per-cell display strings, formatted using the file's number display formats."""
     shown = _preview_display_frame(frame, spec, group_keys, rows)
     headers = [str(column) for column in shown.columns]
 
