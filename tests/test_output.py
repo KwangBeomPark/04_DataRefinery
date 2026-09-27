@@ -10,6 +10,7 @@ import openpyxl
 import pandas as pd
 
 from src.csv_processing import (
+    CsvColumnOverflowError,
     CsvNoTableError,
     CsvProcessingOptions,
     ParsedNumber,
@@ -34,6 +35,46 @@ class _Value:
 
 
 class TestOutput(unittest.TestCase):
+    def test_extra_column_warning_is_localized_and_actionable(self):
+        app = DataRefineryApp.__new__(DataRefineryApp)
+        app.language = _Value('한국어')
+        app.log_text = _Value()
+
+        with mock.patch('src.data_refinery.messagebox.showwarning') as warning:
+            app._on_csv_error(CsvColumnOverflowError(2, 3, 2))
+
+        message = warning.call_args.args[1]
+        self.assertIn('데이터 행 2', message)
+        self.assertIn('열이 3개', message)
+        self.assertIn('결과는 저장하지 않았습니다', message)
+
+    def test_csv_extra_columns_fail_without_publishing_partial_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'input.csv'
+            source.write_text('Id,Value\n1,10\n2,20,EXTRA\n', encoding='utf-8')
+
+            with self.assertRaises(CsvColumnOverflowError) as caught:
+                process_csv_file(CsvProcessingOptions(str(source), ',', 'English', 'CSV', 2))
+
+            self.assertEqual((caught.exception.record_number, caught.exception.actual, caught.exception.expected), (2, 3, 2))
+            self.assertEqual(list(Path(directory).glob('processed_output_*')), [])
+            self.assertEqual(list(Path(directory).glob('.*.tmp')), [])
+
+    def test_excel_extra_columns_fail_without_publishing_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'input.xlsx'
+            workbook = openpyxl.Workbook()
+            workbook.active.append(['Id', 'Value'])
+            workbook.active.append([1, 10])
+            workbook.active.append([2, 20, 'EXTRA'])
+            workbook.save(source)
+
+            with self.assertRaises(CsvColumnOverflowError) as caught:
+                process_csv_file(CsvProcessingOptions(str(source), ',', 'English', 'CSV', 2))
+
+            self.assertEqual((caught.exception.record_number, caught.exception.actual, caught.exception.expected), (2, 3, 2))
+            self.assertEqual(list(Path(directory).glob('processed_output_*')), [])
+
     def test_csv_with_no_matching_header_does_not_publish_output(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / 'input.csv'

@@ -41,6 +41,18 @@ class CsvNoDataError(ValueError):
     """The source has a header but no data rows."""
 
 
+class CsvColumnOverflowError(ValueError):
+    """A data record contains fields that would otherwise be discarded."""
+
+    def __init__(self, record_number: int, actual: int, expected: int):
+        self.record_number = record_number
+        self.actual = actual
+        self.expected = expected
+        super().__init__(
+            f"Data record {record_number} has {actual} columns; expected {expected}."
+        )
+
+
 @dataclass(frozen=True)
 class CsvProcessingOptions:
     file_path: str
@@ -422,11 +434,13 @@ def build_output_path(file_path: str, output_format: str, timestamp: datetime | 
     return candidate
 
 
-def _normalise_row(row: list, max_columns: int) -> list:
+def _normalise_row(row: list, max_columns: int, record_number: int = 0) -> list:
+    if len(row) > max_columns:
+        raise CsvColumnOverflowError(record_number, len(row), max_columns)
     normalised = list(row)
     if len(normalised) < max_columns:
         normalised.extend([""] * (max_columns - len(normalised)))
-    return normalised[:max_columns]
+    return normalised
 
 
 def _column_names(header_row: list) -> list[str]:
@@ -573,7 +587,7 @@ def _process_text_stream(
                     raise ValueError(
                         "The result exceeds Excel's row limit. Select CSV output."
                     )
-                normalised = _normalise_row(row, options.max_columns)
+                normalised = _normalise_row(row, options.max_columns, body_row_count + 1)
                 converted = [
                     _convert_value(value, options.number_mode, processing)
                     for value in normalised
@@ -646,7 +660,8 @@ def _process_excel_in_memory(
     column_names = _column_names(header_row)
     pandas = _get_pandas()
     frame = pandas.DataFrame(
-        (_normalise_row(row, options.max_columns) for row in rows[1:]),
+        (_normalise_row(row, options.max_columns, index)
+         for index, row in enumerate(rows[1:], start=1)),
         columns=column_names,
     )
     del rows

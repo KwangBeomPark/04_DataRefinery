@@ -9,6 +9,7 @@ from pathlib import Path
 from src.background_jobs import BackgroundJobRunner, JobCallbacks
 from src.diagnostics import record_error
 from src.csv_processing import (
+    CsvColumnOverflowError,
     CsvNoDataError,
     CsvNoTableError,
     CsvProcessingOptions,
@@ -82,6 +83,7 @@ _UI_TEXT = {
         "no_table_message": "선택한 열 개수와 맞는 행이 없습니다.",
         "no_data_title": "데이터가 없습니다",
         "no_data_message": "열 이름은 찾았지만 정리할 데이터 행이 없습니다.",
+        "column_overflow_message": "데이터 행 {row}에 열이 {actual}개 있지만 선택한 표의 열 개수는 {expected}개입니다. 원본 파일 또는 열 개수 설정을 확인해 주세요. 결과는 저장하지 않았습니다.",
         "error_title": "처리 중 오류",
         "error_message": "파일을 정리하지 못했습니다.\n\n{error}",
         "summary_saved": "저장 완료 · {name}",
@@ -142,6 +144,7 @@ _UI_TEXT = {
         "no_table_message": "No rows match the selected number of columns.",
         "no_data_title": "No data rows found",
         "no_data_message": "A header was found, but there are no data rows to clean.",
+        "column_overflow_message": "Data row {row} has {actual} columns, but the selected table has {expected}. Check the source file or column count. No result was saved.",
         "error_title": "Processing error",
         "error_message": "The file could not be cleaned.\n\n{error}",
         "summary_saved": "Saved · {name}",
@@ -202,6 +205,7 @@ _UI_TEXT = {
         "no_table_message": "Żaden wiersz nie pasuje do wybranej liczby kolumn.",
         "no_data_title": "Brak wierszy danych",
         "no_data_message": "Znaleziono nagłówek, ale nie ma danych do uporządkowania.",
+        "column_overflow_message": "Wiersz danych {row} ma {actual} kolumn, a wybrana tabela ma {expected}. Sprawdź plik źródłowy lub liczbę kolumn. Wynik nie został zapisany.",
         "error_title": "Błąd przetwarzania",
         "error_message": "Nie udało się uporządkować pliku.\n\n{error}",
         "summary_saved": "Zapisano · {name}",
@@ -1916,6 +1920,16 @@ class DataRefineryApp:
         elif isinstance(error, CsvNoDataError):
             messagebox.showwarning(self._ui("no_data_title"), self._ui("no_data_message"))
             self.log_text.set(self._ui("no_data_title"))
+        elif isinstance(error, CsvColumnOverflowError):
+            messagebox.showwarning(
+                self._ui("columns_title"),
+                self._ui("column_overflow_message").format(
+                    row=error.record_number,
+                    actual=error.actual,
+                    expected=error.expected,
+                ),
+            )
+            self.log_text.set(self._ui("columns_title"))
         else:
             messagebox.showerror(
                 self._ui("error_title"),
