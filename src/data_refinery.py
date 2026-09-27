@@ -27,6 +27,7 @@ from src.promotion_normalizer import (
     preview_daily_rows,
 )
 from src.aggregator_ui import AggregatorTabFrame
+from src.file_reveal import open_containing_folder
 from src.update_checker import check_for_update, load_settings, save_settings
 from src.ui_components import PALETTE, UpdateMenu
 
@@ -257,12 +258,16 @@ _UI_TEXT["en"].update({
     "promo_overlap": "Overlapping rule pairs for the same model: {count}. They are kept separately.",
     "promo_saving": "Creating compact and daily support files…",
     "promo_done": "Created {rows} daily support rows.",
+    "promo_summary_location": "Location: {path}",
     "promo_summary_title": "Files created",
     "promo_master_file": "• Promotion master: {name}",
     "promo_rules_file": "• Support rules: {name}",
     "promo_daily_file": "• Daily support: {name}",
     "promo_issue_more": "• … and {count} more issue(s).",
     "promo_excel_limit": "Excel output is limited to {limit:,} data rows. Choose CSV for this template.",
+    "promo_open_folder": "Open output folder",
+    "promo_msg_open_failed_title": "Could not open",
+    "promo_msg_open_failed": "The folder or file could not be opened:\n{path}",
     "error_id": "\n\nError ID: {id}. Include this ID if you contact support.",
 })
 _UI_TEXT["ko"].update({
@@ -298,12 +303,16 @@ _UI_TEXT["ko"].update({
     "promo_overlap": "같은 모델에서 겹치는 지원 규칙 쌍: {count}개 · 각각 별도로 유지됩니다.",
     "promo_saving": "기준 파일과 일별 지원금 파일을 만드는 중…",
     "promo_done": "일별 지원금 행 {rows}개를 만들었습니다.",
+    "promo_summary_location": "저장 위치: {path}",
     "promo_summary_title": "생성된 파일",
     "promo_master_file": "• 프로모션 마스터: {name}",
     "promo_rules_file": "• 지원 규칙: {name}",
     "promo_daily_file": "• 일별 지원금: {name}",
     "promo_issue_more": "• 그 외 {count}개 문제",
     "promo_excel_limit": "Excel은 데이터 행을 최대 {limit:,}개까지만 저장할 수 있습니다. 이 템플릿은 CSV를 선택하세요.",
+    "promo_open_folder": "결과 폴더 열기",
+    "promo_msg_open_failed_title": "열 수 없음",
+    "promo_msg_open_failed": "폴더 또는 파일을 열지 못했습니다:\n{path}",
     "error_id": "\n\n오류 ID: {id}. 문의할 때 이 ID를 알려 주세요.",
 })
 _UI_TEXT["pl"].update({
@@ -339,12 +348,16 @@ _UI_TEXT["pl"].update({
     "promo_overlap": "Nakładające się pary reguł dla tego samego modelu: {count}. Są zachowane osobno.",
     "promo_saving": "Tworzenie plików źródłowych i dziennych dopłat…",
     "promo_done": "Utworzono {rows} dziennych wierszy dopłat.",
+    "promo_summary_location": "Lokalizacja: {path}",
     "promo_summary_title": "Utworzone pliki",
     "promo_master_file": "• Master promocji: {name}",
     "promo_rules_file": "• Reguły dopłat: {name}",
     "promo_daily_file": "• Dzienna dopłata: {name}",
     "promo_issue_more": "• … oraz {count} kolejnych problemów.",
     "promo_excel_limit": "Excel zapisuje najwyżej {limit:,} wierszy danych. Wybierz CSV dla tego szablonu.",
+    "promo_open_folder": "Otwórz folder wynikowy",
+    "promo_msg_open_failed_title": "Nie można otworzyć",
+    "promo_msg_open_failed": "Nie udało się otworzyć folderu lub pliku:\n{path}",
     "error_id": "\n\nIdentyfikator błędu: {id}. Podaj go podczas kontaktu z pomocą.",
 })
 
@@ -844,6 +857,8 @@ class DataRefineryApp:
         self.root = root
         self.language = tk.StringVar(value="English")
         self._last_result = None
+        self._last_promotion_result = None
+        self._last_promotion_source_path = None
         self._promotion_data = None
         self._csv_processing = False
         self._promotion_processing = False
@@ -1213,6 +1228,7 @@ class DataRefineryApp:
         self.promotion_file_section.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         self.promotion_file_section.columnconfigure(0, weight=1)
         self.promotion_filepath = tk.StringVar()
+        self.promotion_filepath.trace_add("write", self._on_promotion_filepath_change)
         self.promotion_path_entry = ttk.Entry(
             self.promotion_file_section,
             textvariable=self.promotion_filepath,
@@ -1259,13 +1275,21 @@ class DataRefineryApp:
         ttk.Label(self.promotion_action_area, textvariable=self.promotion_output_hint, style="Footer.TLabel").grid(
             row=1, column=0, sticky="w"
         )
+        self.promotion_open_folder_button = ttk.Button(
+            self.promotion_action_area,
+            command=self.open_promotion_output_folder,
+            style="Secondary.TButton",
+            state="disabled",
+        )
+        self.promotion_open_folder_button.grid(row=1, column=1, padx=(0, 8), sticky="e")
+        self.btn_promo_open_folder = self.promotion_open_folder_button
         self.promotion_process_button = ttk.Button(
             self.promotion_action_area,
             command=self.process_promotion_template,
             style="Primary.TButton",
             state="disabled",
         )
-        self.promotion_process_button.grid(row=1, column=1, sticky="e")
+        self.promotion_process_button.grid(row=1, column=2, sticky="e")
 
         # Progress bar (advances during processing)
         self.progress = ttk.Progressbar(main, mode="determinate", maximum=100, style="App.Horizontal.TProgressbar")
@@ -1343,12 +1367,40 @@ class DataRefineryApp:
         except OSError as error:
             messagebox.showerror(self._ui("promo_file_section"), str(error))
 
+    @staticmethod
+    def _is_same_template(path1, path2) -> bool:
+        if not path1 or not path2:
+            return False
+        try:
+            return os.path.normcase(os.path.abspath(str(path1))) == os.path.normcase(os.path.abspath(str(path2)))
+        except Exception:
+            return str(path1) == str(path2)
+
+    def _clear_promotion_result(self):
+        self._last_promotion_result = None
+        self._last_promotion_source_path = None
+        self._refresh_promotion_folder_button_state()
+        if self._selected_task_id() == "promotion":
+            if self._promotion_data is not None:
+                self._show_promotion_preview(self._promotion_data)
+            else:
+                self._set_result_text(self._ui("promo_initial_result"))
+                self.log_text.set(self._ui("promo_initial_result"))
+
+    def _on_promotion_filepath_change(self, *args):
+        new_path = self.promotion_filepath.get()
+        if self._last_promotion_source_path and not self._is_same_template(new_path, self._last_promotion_source_path):
+            self._clear_promotion_result()
+        self._refresh_promotion_action_state()
+
     def browse_promotion_template(self):
         filename = filedialog.askopenfilename(
             title=self._ui("promo_select_title"),
             filetypes=(("Excel template", "*.xlsx"),),
         )
         if filename:
+            if not self._is_same_template(filename, self._last_promotion_source_path):
+                self._clear_promotion_result()
             self._promotion_data = None
             self.promotion_filepath.set(filename)
             self._refresh_promotion_action_state()
@@ -1447,18 +1499,79 @@ class DataRefineryApp:
         message = self._ui("promo_saving") if detail == "saving" else None
         self._set_progress(percent, message)
 
-    def _on_promotion_success(self, result):
-        done = self._ui("promo_done").format(rows=f"{result.daily_rows:,}")
-        self._set_progress(100, done)
-        self._set_result_text("\n".join((
+    def _refresh_promotion_folder_button_state(self):
+        button = getattr(self, "promotion_open_folder_button", None)
+        if button is None:
+            return
+        is_ready = bool(
+            self._last_promotion_result is not None
+            and not getattr(self, "_promotion_processing", False)
+        )
+        button.configure(state="normal" if is_ready else "disabled")
+
+    def open_promotion_output_folder(self) -> bool:
+        if not self._last_promotion_result:
+            return False
+        daily_path = (
+            getattr(self._last_promotion_result, "daily_path", None)
+            or (self._last_promotion_result.get("daily_path") if isinstance(self._last_promotion_result, dict) else None)
+        )
+        if not daily_path:
+            return False
+        target = str(daily_path)
+        if not open_containing_folder(target):
+            self._warn_promotion_open_failed(target)
+            return False
+        return True
+
+    def _warn_promotion_open_failed(self, path: str):
+        messagebox.showwarning(
+            self._ui("promo_msg_open_failed_title"),
+            self._ui("promo_msg_open_failed").format(path=path),
+        )
+
+    def _format_promotion_result_summary(self, result):
+        daily_rows = getattr(result, "daily_rows", None)
+        if daily_rows is None and isinstance(result, dict):
+            daily_rows = result.get("daily_rows", 0)
+        daily_rows_str = f"{int(daily_rows):,}" if daily_rows is not None else "0"
+
+        master_path = getattr(result, "master_path", None) or (result.get("master_path") if isinstance(result, dict) else "")
+        rules_path = getattr(result, "rules_path", None) or (result.get("rules_path") if isinstance(result, dict) else "")
+        daily_path = getattr(result, "daily_path", None) or (result.get("daily_path") if isinstance(result, dict) else "")
+        overlap = getattr(result, "overlapping_rule_pairs", None)
+        if overlap is None and isinstance(result, dict):
+            overlap = result.get("overlapping_rule_pairs", 0)
+
+        master_name = Path(master_path).name if master_path else ""
+        rules_name = Path(rules_path).name if rules_path else ""
+        daily_name = Path(daily_path).name if daily_path else ""
+        output_dir = str(Path(daily_path).parent.resolve()) if daily_path else ""
+
+        done = self._ui("promo_done").format(rows=daily_rows_str)
+        lines = [
             done,
+            self._ui("promo_summary_location").format(path=output_dir),
             "",
             self._ui("promo_summary_title"),
-            self._ui("promo_master_file").format(name=result.master_path.name),
-            self._ui("promo_rules_file").format(name=result.rules_path.name),
-            self._ui("promo_daily_file").format(name=result.daily_path.name),
-            self._ui("promo_overlap").format(count=result.overlapping_rule_pairs),
-        )))
+            self._ui("promo_master_file").format(name=master_name),
+            self._ui("promo_rules_file").format(name=rules_name),
+            self._ui("promo_daily_file").format(name=daily_name),
+            self._ui("promo_overlap").format(count=overlap if overlap is not None else 0),
+        ]
+        return "\n".join(lines)
+
+    def _on_promotion_success(self, result):
+        self._last_promotion_result = result
+        self._last_promotion_source_path = self.promotion_filepath.get()
+        self._refresh_promotion_folder_button_state()
+        daily_rows = getattr(result, "daily_rows", None)
+        if daily_rows is None and isinstance(result, dict):
+            daily_rows = result.get("daily_rows", 0)
+        daily_rows_str = f"{int(daily_rows):,}" if daily_rows is not None else "0"
+        done = self._ui("promo_done").format(rows=daily_rows_str)
+        self._set_progress(100, done)
+        self._set_result_text(self._format_promotion_result_summary(result))
         self.log_text.set(done)
 
     def _on_promotion_error(self, error):
@@ -1480,8 +1593,10 @@ class DataRefineryApp:
         self.promotion_output_combo.configure(state="readonly" if enabled else "disabled")
         if enabled:
             self._refresh_promotion_action_state()
+            self._refresh_promotion_folder_button_state()
         else:
             self.promotion_process_button.configure(state="disabled")
+            self.promotion_open_folder_button.configure(state="disabled")
 
     def _language_code(self):
         language = getattr(self, 'language', None)
@@ -1562,7 +1677,14 @@ class DataRefineryApp:
         if self._selected_task_id() == "promotion":
             self.result_section.configure(text=self._ui("promo_result_title"))
             self._update_promotion_output_hint()
-            if self._promotion_data is None:
+            if self._last_promotion_result is not None:
+                self._set_result_text(self._format_promotion_result_summary(self._last_promotion_result))
+                daily_rows = (
+                    getattr(self._last_promotion_result, "daily_rows", None)
+                    or (self._last_promotion_result.get("daily_rows") if isinstance(self._last_promotion_result, dict) else 0)
+                )
+                self.log_text.set(self._ui("promo_done").format(rows=f"{int(daily_rows):,}"))
+            elif self._promotion_data is None:
                 self._set_result_text(self._ui("promo_initial_result"))
                 self.log_text.set(self._ui("promo_initial_result"))
             else:
@@ -1727,6 +1849,7 @@ class DataRefineryApp:
         self.promotion_output_combo.configure(values=text['promo_output_options'])
         self.promotion_output_format.set(text['promo_output_options'][1 if promotion_output_id == 'Excel (.xlsx)' else 0])
         self.promotion_output_help.configure(text=text['promo_output_help'])
+        self.promotion_open_folder_button.configure(text=text['promo_open_folder'])
         self.promotion_process_button.configure(text=text['promo_process'])
 
         self.combo_format.configure(values=text['number_options'])

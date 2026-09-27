@@ -272,7 +272,7 @@ class TestPreviewDialog(DialogTestCase):
             with self.subTest(language=lang):
                 dialog = PreviewDialog(
                     self.root,
-                    lambda key, l=lang: _UI_TEXT[l].get(key, key),
+                    lambda key, language=lang: _UI_TEXT[language].get(key, key),
                     ["디비전", "매출"],
                     [["TV", "1,000"]],
                 )
