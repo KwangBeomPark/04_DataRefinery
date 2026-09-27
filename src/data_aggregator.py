@@ -190,6 +190,37 @@ def _read_header(file_path: str, delimiter: str, encoding: str) -> List[str]:
     return header
 
 
+def _reject_overwide_rows(
+    file_path: str,
+    delimiter: str,
+    encoding: str,
+    expected_columns: int,
+    cancel_event: Optional[threading.Event] = None,
+) -> None:
+    """Check every logical CSV record without loading the whole file into memory.
+
+    Pandas can silently discard excess fields when usecols is set, or shift all
+    columns when the first data record has an excess field. Validate widths
+    independently before allowing an aggregate output to be published.
+    """
+    with open(file_path, "r", encoding=encoding, newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter, strict=True)
+        try:
+            next(reader, None)  # The header was already checked by _read_header.
+            for row in reader:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise AggregationCancelledError("Aggregation was cancelled by user.")
+                if len(row) > expected_columns:
+                    raise AggregatorError(
+                        f"CSV line {reader.line_num} has {len(row)} columns; "
+                        f"the header has {expected_columns}. No output was saved."
+                    )
+        except csv.Error as error:
+            raise AggregatorError(
+                f"Malformed CSV near line {reader.line_num}: {error}"
+            ) from error
+
+
 def _validate_constant_columns(spec: "AggregationSpec", header: Sequence[str]) -> None:
     """Reject constant columns that would shadow a source column or the annual rollup column."""
     header_set = set(header)
@@ -749,6 +780,8 @@ def aggregate_dataset(
     missing_cols = [c for c in needed_cols if c not in header_set]
     if missing_cols:
         raise ColumnNotFoundError(f"Columns not found in dataset: {', '.join(missing_cols)}")
+
+    _reject_overwide_rows(file_path, delimiter, encoding, len(header), cancel_event)
 
     # 2. Setup group keys and measure keys
     effective_group_keys = list(spec.group_by_keys)

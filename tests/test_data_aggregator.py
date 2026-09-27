@@ -541,6 +541,48 @@ class TestDataAggregator(unittest.TestCase):
         self.assertEqual(tv_row["매출"], 1000.0)  # 1000 + 0
         self.assertEqual(tv_row["비용1"], 700.0)  # 500 + 200
 
+    def test_rejects_overwide_rows(self):
+        """Both first-row and later extra fields must fail without output."""
+        for bad_row, expected_line in ((1, 2), (2, 3)):
+            with self.subTest(bad_row=bad_row):
+                overwide_csv = os.path.join(self.temp_dir.name, f"overwide_{bad_row}.csv")
+                out_path = os.path.join(self.temp_dir.name, f"output_{bad_row}.csv")
+                rows = ["TV,1000,500", "Mobile,2000,1000"]
+                rows[bad_row - 1] += ",EXTRA"
+                with open(overwide_csv, "w", encoding="utf-8") as handle:
+                    handle.write("디비전,매출,비용1\n" + "\n".join(rows) + "\n")
+
+                spec = AggregationSpec(
+                    file_path=overwide_csv,
+                    group_by_keys=["디비전"],
+                    measure_sums=["매출", "비용1"],
+                    output_format="csv",
+                    output_path=out_path,
+                )
+                with self.assertRaisesRegex(
+                    AggregatorError, f"CSV line {expected_line} has 4 columns"
+                ):
+                    aggregate_dataset(spec)
+                self.assertFalse(os.path.exists(out_path))
+
+    def test_quoted_comma_does_not_count_as_extra_column(self):
+        source = os.path.join(self.temp_dir.name, "quoted.csv")
+        output = os.path.join(self.temp_dir.name, "quoted_output.csv")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write('디비전,매출\n"TV, Home",100\n')
+
+        result = aggregate_dataset(AggregationSpec(
+            file_path=source,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=output,
+        ))
+        self.assertEqual(result.out_path, output)
+        frame = pd.read_csv(output)
+        self.assertEqual(frame.loc[0, "디비전"], "TV, Home")
+        self.assertEqual(frame.loc[0, "매출"], 100)
+
 
 class TestConstantColumns(unittest.TestCase):
     """Literal group columns: a fixed label stamped onto every output row."""
