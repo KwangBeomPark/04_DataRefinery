@@ -219,6 +219,18 @@ def _sheet_records(worksheet, required_columns: tuple[str, ...]) -> tuple[list[d
     missing = [column for column in required_columns if column not in headers]
     if missing:
         return [], tuple(ValidationIssue(worksheet.title, 1, column, "Required column is missing.") for column in missing)
+    seen_headers: set[str] = set()
+    duplicate_headers: list[str] = []
+    for header in headers:
+        if not header:
+            continue
+        if header in seen_headers:
+            if header not in duplicate_headers:
+                duplicate_headers.append(header)
+        else:
+            seen_headers.add(header)
+    if duplicate_headers:
+        return [], tuple(ValidationIssue(worksheet.title, 1, column, "Duplicate column header.") for column in duplicate_headers)
 
     records = []
     for values in rows[1:]:

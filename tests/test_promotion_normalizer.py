@@ -8,8 +8,11 @@ from unittest.mock import patch
 from src.promotion_normalizer import (
     DAILY_SUPPORT_COLUMNS,
     EXCEL_MAX_DATA_ROWS,
+    PROMOTION_MASTER_COLUMNS,
+    SUPPORT_RULE_COLUMNS,
     PromotionTemplateData,
     export_normalized,
+    load_template,
     preview_daily_rows,
     validate_records,
 )
@@ -137,3 +140,82 @@ class TestPromotionNormalizer(unittest.TestCase):
             source.touch()
             with self.assertRaisesRegex(ValueError, "Excel"):
                 export_normalized(data, source, daily_format="Excel (.xlsx)")
+
+    def _create_template_file(
+        self,
+        path: Path,
+        master_headers: list,
+        master_rows: list,
+        rules_headers: list,
+        rules_rows: list,
+    ) -> None:
+        import openpyxl
+
+        workbook = openpyxl.Workbook()
+        ws_master = workbook.active
+        ws_master.title = "Promotion_Master"
+        ws_master.append(master_headers)
+        for row in master_rows:
+            ws_master.append(row)
+
+        ws_rules = workbook.create_sheet("Support_Rules")
+        ws_rules.append(rules_headers)
+        for row in rules_rows:
+            ws_rules.append(row)
+
+        workbook.save(path)
+
+    def test_rejects_duplicate_required_headers_in_promotion_master(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template_path = Path(directory) / "duplicate_master.xlsx"
+            self._create_template_file(
+                template_path,
+                list(PROMOTION_MASTER_COLUMNS) + ["promotion_id"],
+                [["PROMO-001", "January support", "Dealer", "Cash", "", "PROMO-002"]],
+                list(SUPPORT_RULE_COLUMNS),
+                [["RULE-001", "PROMO-002", "MODEL-A", "2026-01-03", "2026-01-07", "100.00", "PLN"]],
+            )
+            data, issues = load_template(template_path)
+            self.assertIsNone(data)
+            self.assertEqual(len(issues), 1)
+            self.assertEqual(issues[0].sheet, "Promotion_Master")
+            self.assertEqual(issues[0].row, 1)
+            self.assertEqual(issues[0].column, "promotion_id")
+            self.assertIn("Duplicate column header", issues[0].message)
+
+    def test_rejects_duplicate_required_headers_in_support_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template_path = Path(directory) / "duplicate_rules.xlsx"
+            self._create_template_file(
+                template_path,
+                list(PROMOTION_MASTER_COLUMNS),
+                [["PROMO-001", "January support", "Dealer", "Cash", ""]],
+                list(SUPPORT_RULE_COLUMNS) + ["support_rule_id"],
+                [["RULE-001", "PROMO-001", "MODEL-A", "2026-01-03", "2026-01-07", "100.00", "PLN", "RULE-002"]],
+            )
+            data, issues = load_template(template_path)
+            self.assertIsNone(data)
+            self.assertEqual(len(issues), 1)
+            self.assertEqual(issues[0].sheet, "Support_Rules")
+            self.assertEqual(issues[0].row, 1)
+            self.assertEqual(issues[0].column, "support_rule_id")
+            self.assertIn("Duplicate column header", issues[0].message)
+
+    def test_loads_valid_template_with_extra_blank_columns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            template_path = Path(directory) / "valid_template.xlsx"
+            self._create_template_file(
+                template_path,
+                list(PROMOTION_MASTER_COLUMNS) + ["", None, "   "],
+                [["PROMO-001", "January support", "Dealer", "Cash", "", None, "", None]],
+                list(SUPPORT_RULE_COLUMNS) + [None, ""],
+                [["RULE-001", "PROMO-001", "MODEL-A", "2026-01-03", "2026-01-07", "100.00", "PLN", None, None]],
+            )
+            data, issues = load_template(template_path)
+            self.assertFalse(issues)
+            self.assertIsNotNone(data)
+            self.assertEqual(len(data.master_rows), 1)
+            self.assertEqual(data.master_rows[0]["promotion_id"], "PROMO-001")
+            self.assertEqual(len(data.support_rules), 1)
+            self.assertEqual(data.support_rules[0]["support_rule_id"], "RULE-001")
+            self.assertEqual(data.estimated_daily_rows, 5)
