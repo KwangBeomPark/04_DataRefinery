@@ -1024,10 +1024,38 @@ class DataRefineryApp:
         style.layout("App.TNotebook.Tab", [])
         # Segmented control: the selected task reads as the card the content
         # below belongs to, the others recede into the page.
-        style.configure("TaskTab.TButton", background=page_bg, foreground=muted, font=("Segoe UI", 10), padding=(18, 10), borderwidth=0, focuscolor=page_bg)
-        style.map("TaskTab.TButton", background=[("active", "#E3EAF2"), ("pressed", "#DAE3ED")], foreground=[("active", text)])
-        style.configure("TaskTab.Selected.TButton", background=surface, foreground=accent, font=("Segoe UI Semibold", 10), padding=(18, 10), borderwidth=0, focuscolor=surface)
-        style.map("TaskTab.Selected.TButton", background=[("active", surface), ("pressed", surface)], foreground=[("active", accent)])
+        style.configure(
+            "TaskTab.TButton",
+            background=page_bg,
+            foreground=muted,
+            font=("Segoe UI", 10),
+            padding=(18, 10),
+            borderwidth=0,
+            focuscolor=accent,
+            focusthickness=1,
+        )
+        style.map(
+            "TaskTab.TButton",
+            background=[("active", "#E3EAF2"), ("pressed", "#DAE3ED")],
+            foreground=[("active", text)],
+            focuscolor=[("focus", accent)],
+        )
+        style.configure(
+            "TaskTab.Selected.TButton",
+            background=surface,
+            foreground=accent,
+            font=("Segoe UI Semibold", 10),
+            padding=(18, 10),
+            borderwidth=0,
+            focuscolor=accent,
+            focusthickness=1,
+        )
+        style.map(
+            "TaskTab.Selected.TButton",
+            background=[("active", surface), ("pressed", surface)],
+            foreground=[("active", accent)],
+            focuscolor=[("focus", accent)],
+        )
 
         style.configure("Status.TFrame", background=surface)
         style.configure("Status.TLabel", background=surface, foreground=muted, font=("Segoe UI", 9))

@@ -4,6 +4,7 @@ import shutil
 import tempfile
 import time
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from src.aggregator_dialogs import PreviewDialog
 from src.aggregator_fields import DIMENSION, MEASURE, VALUES
 from src.data_aggregator import AggregationCancelledError, ColumnGroupRule, DerivedFormulaRule, FilterCondition
 from src.data_refinery import DataRefineryApp
+from src.ui_components import PALETTE
 from src.ui_dnd import DragPayload
 
 COLUMNS = ["월", "국가", "디비전", "수량", "매출", "비용1", "비용2", "비용3"]
@@ -60,6 +62,53 @@ class TestAggregatorShell(AggregatorTestCase):
         self.app._select_task_tab(self.app.csv_tab)
         self.assertEqual(self.app._selected_task_id(), "csv")
         self.assertEqual(self.app.csv_tab_button.cget("style"), "TaskTab.Selected.TButton")
+
+    def test_task_tab_button_focus_styles(self):
+        style = ttk.Style(self.root)
+
+        # Unselected task tab button focus styling
+        unselected_style = "TaskTab.TButton"
+        unselected_focus_color = style.lookup(unselected_style, "focuscolor", state=["focus"])
+        self.assertEqual(unselected_focus_color, PALETTE["accent"])
+        self.assertNotEqual(unselected_focus_color, PALETTE["page_bg"])
+        self.assertEqual(str(style.lookup(unselected_style, "borderwidth")), "0")
+
+        # Selected task tab button focus styling
+        selected_style = "TaskTab.Selected.TButton"
+        selected_focus_color = style.lookup(selected_style, "focuscolor", state=["focus"])
+        self.assertEqual(selected_focus_color, PALETTE["accent"])
+        self.assertNotEqual(selected_focus_color, PALETTE["surface"])
+        self.assertEqual(str(style.lookup(selected_style, "borderwidth")), "0")
+
+        # Tab buttons reflect selected vs unselected styles
+        self.assertEqual(self.app.csv_tab_button.cget("style"), selected_style)
+        self.assertEqual(self.app.promotion_tab_button.cget("style"), unselected_style)
+        self.assertEqual(self.app.aggregator_tab_button.cget("style"), unselected_style)
+
+        # In focus state, unselected button resolves to visible accent focuscolor
+        self.app.promotion_tab_button.state(["focus"])
+        self.assertTrue(self.app.promotion_tab_button.instate(["focus"]))
+        self.assertEqual(
+            style.lookup(
+                self.app.promotion_tab_button.cget("style"),
+                "focuscolor",
+                state=self.app.promotion_tab_button.state(),
+            ),
+            PALETTE["accent"],
+        )
+
+        # After tab switch, newly selected tab also has visible focus state
+        self.app._select_task_tab(self.app.promotion_tab)
+        self.assertEqual(self.app.promotion_tab_button.cget("style"), selected_style)
+        self.app.promotion_tab_button.state(["focus"])
+        self.assertEqual(
+            style.lookup(
+                self.app.promotion_tab_button.cget("style"),
+                "focuscolor",
+                state=self.app.promotion_tab_button.state(),
+            ),
+            PALETTE["accent"],
+        )
 
     def test_language_switch_updates_all_three_tabs(self):
         self.app.language.set("English")
