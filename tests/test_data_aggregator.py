@@ -5,11 +5,13 @@ import re
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 import pandas as pd
 from openpyxl import load_workbook
 
 from src.data_aggregator import (
     AGGREGATION_FUNCTIONS,
+    _apply_excel_number_formats,
     AggregationCancelledError,
     AggregationSpec,
     AggregatorError,
@@ -1372,6 +1374,347 @@ class TestPreviewRows(unittest.TestCase):
 
         self.assertEqual(headers, ["디비전", "매출"])
         self.assertEqual(body, [])
+
+
+class TestAggregationCancellationSafety(unittest.TestCase):
+    """Deterministic regression tests for cancellation safety after chunk reading."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.csv_path = os.path.join(self.temp_dir.name, "cancel_source.csv")
+        data = [
+            ["202601", "TV", "OLED65", "1000", "350"],
+            ["202601", "TV", "OLED55", "800", "280"],
+            ["202602", "Mobile", "GalaxyS", "3000", "1100"],
+            ["202603", "Mobile", "GalaxyS", "4000", "1450"],
+        ]
+        columns = ["월", "디비전", "모델", "매출", "영업이익"]
+        pd.DataFrame(data, columns=columns).to_csv(self.csv_path, index=False, encoding="utf-8-sig")
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _staged_tmp_files(self) -> list:
+        return [f for f in os.listdir(self.temp_dir.name) if ".tmp" in f]
+
+    def test_cancellation_before_staging_csv_preserves_sentinel(self):
+        """Cancellation set after chunk reading but before staging starts preserves CSV destination."""
+        dest_path = os.path.join(self.temp_dir.name, "existing_destination.csv")
+        sentinel_text = "SENTINEL_CSV_CONTENT_DO_NOT_OVERWRITE\n1,2,3\n"
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(sentinel_text)
+
+        cancel_evt = threading.Event()
+
+        def progress_cb(cur, total, msg):
+            if msg and "Merging group aggregations" in msg:
+                cancel_evt.set()
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with self.assertRaises(AggregationCancelledError):
+            aggregate_dataset(spec, progress_callback=progress_cb, cancel_event=cancel_evt)
+
+        # Sentinel file preserved unchanged
+        with open(dest_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), sentinel_text)
+
+        # Staged file is not left behind
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_before_staging_xlsx_preserves_sentinel(self):
+        """Cancellation set after chunk reading but before staging starts preserves XLSX destination."""
+        dest_path = os.path.join(self.temp_dir.name, "existing_destination.xlsx")
+        sentinel_bytes = b"SENTINEL_XLSX_BYTES_DO_NOT_OVERWRITE"
+        with open(dest_path, "wb") as f:
+            f.write(sentinel_bytes)
+
+        cancel_evt = threading.Event()
+
+        def progress_cb(cur, total, msg):
+            if msg and "Merging group aggregations" in msg:
+                cancel_evt.set()
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="xlsx",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with self.assertRaises(AggregationCancelledError):
+            aggregate_dataset(spec, progress_callback=progress_cb, cancel_event=cancel_evt)
+
+        with open(dest_path, "rb") as f:
+            self.assertEqual(f.read(), sentinel_bytes)
+
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_before_save_via_progress_callback_preserves_sentinel(self):
+        """Cancellation set right when saving is announced aborts before staging."""
+        dest_path = os.path.join(self.temp_dir.name, "existing_destination.csv")
+        sentinel_text = "SENTINEL_BEFORE_SAVE\n"
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(sentinel_text)
+
+        cancel_evt = threading.Event()
+
+        def progress_cb(cur, total, msg):
+            if msg and "Saving result" in msg:
+                cancel_evt.set()
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with self.assertRaises(AggregationCancelledError):
+            aggregate_dataset(spec, progress_callback=progress_cb, cancel_event=cancel_evt)
+
+        with open(dest_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), sentinel_text)
+
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_triggered_during_staged_csv_writing_preserves_sentinel(self):
+        """Cancellation triggered while saving staged CSV removes staged file and preserves destination."""
+        dest_path = os.path.join(self.temp_dir.name, "destination.csv")
+        sentinel_text = "CSV_DESTINATION_SENTINEL_ORIGINAL\n"
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(sentinel_text)
+
+        cancel_evt = threading.Event()
+        staged_paths = []
+        real_to_csv = pd.DataFrame.to_csv
+
+        def mock_to_csv(df_self, target_path, *args, **kwargs):
+            real_to_csv(df_self, target_path, *args, **kwargs)
+            staged_paths.append(str(target_path))
+            self.assertTrue(os.path.exists(target_path))
+            cancel_evt.set()
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with patch.object(pd.DataFrame, "to_csv", side_effect=mock_to_csv, autospec=True):
+            with self.assertRaises(AggregationCancelledError):
+                aggregate_dataset(spec, cancel_event=cancel_evt)
+
+        self.assertEqual(len(staged_paths), 1)
+        self.assertFalse(os.path.exists(staged_paths[0]))
+        with open(dest_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), sentinel_text)
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_triggered_during_staged_csv_partial_write_preserves_sentinel(self):
+        """Interrupted staged CSV writing with partial contents cleans up without altering destination."""
+        dest_path = os.path.join(self.temp_dir.name, "destination_partial.csv")
+        sentinel_text = "CSV_PARTIAL_TEST_SENTINEL\n"
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(sentinel_text)
+
+        cancel_evt = threading.Event()
+        staged_paths = []
+
+        def mock_partial_to_csv(df_self, target_path, *args, **kwargs):
+            with open(target_path, "w", encoding="utf-8") as f:
+                f.write("partial,broken,csv\n1,2,3\n")
+            staged_paths.append(str(target_path))
+            cancel_evt.set()
+            raise AggregationCancelledError("Aggregation was cancelled by user.")
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with patch.object(pd.DataFrame, "to_csv", side_effect=mock_partial_to_csv, autospec=True):
+            with self.assertRaises(AggregationCancelledError):
+                aggregate_dataset(spec, cancel_event=cancel_evt)
+
+        self.assertEqual(len(staged_paths), 1)
+        self.assertFalse(os.path.exists(staged_paths[0]))
+        with open(dest_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), sentinel_text)
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_triggered_during_staged_xlsx_formatting_preserves_sentinel(self):
+        """Cancellation triggered while applying number formats removes staged file and preserves destination."""
+        dest_path = os.path.join(self.temp_dir.name, "destination.xlsx")
+        sentinel_bytes = b"XLSX_SENTINEL_PRESERVE_ME"
+        with open(dest_path, "wb") as f:
+            f.write(sentinel_bytes)
+
+        cancel_evt = threading.Event()
+
+        def mock_apply_formats(worksheet, output_columns, formats, cancel_event=None):
+            cancel_evt.set()
+            _apply_excel_number_formats(worksheet, output_columns, formats, cancel_evt)
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="xlsx",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with patch("src.data_aggregator._apply_excel_number_formats", side_effect=mock_apply_formats):
+            with self.assertRaises(AggregationCancelledError):
+                aggregate_dataset(spec, cancel_event=cancel_evt)
+
+        with open(dest_path, "rb") as f:
+            self.assertEqual(f.read(), sentinel_bytes)
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_during_staged_xlsx_to_excel_preserves_sentinel(self):
+        """Cancellation triggered during final_df.to_excel in XLSX save cleans up and preserves destination."""
+        dest_path = os.path.join(self.temp_dir.name, "destination_to_excel.xlsx")
+        sentinel_bytes = b"XLSX_TO_EXCEL_SENTINEL"
+        with open(dest_path, "wb") as f:
+            f.write(sentinel_bytes)
+
+        cancel_evt = threading.Event()
+        real_to_excel = pd.DataFrame.to_excel
+
+        def mock_to_excel(df_self, writer, *args, **kwargs):
+            real_to_excel(df_self, writer, *args, **kwargs)
+            cancel_evt.set()
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="xlsx",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with patch.object(pd.DataFrame, "to_excel", side_effect=mock_to_excel, autospec=True):
+            with self.assertRaises(AggregationCancelledError):
+                aggregate_dataset(spec, cancel_event=cancel_evt)
+
+        with open(dest_path, "rb") as f:
+            self.assertEqual(f.read(), sentinel_bytes)
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_before_atomic_replace_xlsx_preserves_sentinel(self):
+        """Cancellation set after XLSX staged save completes but before os.replace removes staged file."""
+        dest_path = os.path.join(self.temp_dir.name, "destination_replace.xlsx")
+        sentinel_bytes = b"XLSX_REPLACE_SENTINEL"
+        with open(dest_path, "wb") as f:
+            f.write(sentinel_bytes)
+
+        cancel_evt = threading.Event()
+        real_exit = pd.ExcelWriter.__exit__
+        seen_tmp_files = []
+
+        def mock_excel_writer_exit(writer_self, *args, **kwargs):
+            res = real_exit(writer_self, *args, **kwargs)
+            tmp_files = [f for f in os.listdir(self.temp_dir.name) if f.endswith(".tmp.xlsx")]
+            if tmp_files:
+                seen_tmp_files.extend(tmp_files)
+            cancel_evt.set()
+            return res
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="xlsx",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with patch.object(pd.ExcelWriter, "__exit__", side_effect=mock_excel_writer_exit, autospec=True):
+            with self.assertRaises(AggregationCancelledError):
+                aggregate_dataset(spec, cancel_event=cancel_evt)
+
+        self.assertEqual(len(seen_tmp_files), 1)
+        with open(dest_path, "rb") as f:
+            self.assertEqual(f.read(), sentinel_bytes)
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_before_atomic_replace_csv_preserves_sentinel(self):
+        """Cancellation set after CSV staged file write completes but before os.replace removes staged file."""
+        dest_path = os.path.join(self.temp_dir.name, "destination_replace.csv")
+        sentinel_text = "CSV_REPLACE_SENTINEL\n"
+        with open(dest_path, "w", encoding="utf-8") as f:
+            f.write(sentinel_text)
+
+        cancel_evt = threading.Event()
+        real_to_csv = pd.DataFrame.to_csv
+        seen_tmp_files = []
+
+        def mock_to_csv(df_self, target_path, *args, **kwargs):
+            real_to_csv(df_self, target_path, *args, **kwargs)
+            tmp_files = [f for f in os.listdir(self.temp_dir.name) if f.endswith(".tmp.csv")]
+            seen_tmp_files.extend(tmp_files)
+            cancel_evt.set()
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=dest_path,
+            chunksize=2,
+        )
+
+        with patch.object(pd.DataFrame, "to_csv", side_effect=mock_to_csv, autospec=True):
+            with self.assertRaises(AggregationCancelledError):
+                aggregate_dataset(spec, cancel_event=cancel_evt)
+
+        self.assertEqual(len(seen_tmp_files), 1)
+        with open(dest_path, "r", encoding="utf-8") as f:
+            self.assertEqual(f.read(), sentinel_text)
+        self.assertEqual(self._staged_tmp_files(), [])
+
+    def test_cancellation_without_existing_destination_creates_no_output(self):
+        """When destination does not exist initially, cancellation creates no partial file."""
+        dest_path = os.path.join(self.temp_dir.name, "never_created.csv")
+        self.assertFalse(os.path.exists(dest_path))
+
+        cancel_evt = threading.Event()
+        cancel_evt.set()
+
+        spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=dest_path,
+        )
+
+        with self.assertRaises(AggregationCancelledError):
+            aggregate_dataset(spec, cancel_event=cancel_evt)
+
+        self.assertFalse(os.path.exists(dest_path))
+        self.assertEqual(self._staged_tmp_files(), [])
 
 
 if __name__ == "__main__":

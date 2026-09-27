@@ -293,13 +293,18 @@ def _apply_excel_number_formats(
     worksheet: Any,
     output_columns: Sequence[str],
     formats: Dict[str, str],
+    cancel_event: Optional[threading.Event] = None,
 ) -> None:
     """Stamp number formats on the data cells; row 1 holds the header and stays untouched."""
     for position, col in enumerate(output_columns, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise AggregationCancelledError("Aggregation was cancelled by user.")
         number_format = formats.get(col)
         if not number_format:
             continue
         for row in worksheet.iter_rows(min_row=2, min_col=position, max_col=position):
+            if cancel_event is not None and cancel_event.is_set():
+                raise AggregationCancelledError("Aggregation was cancelled by user.")
             for cell in row:
                 cell.number_format = number_format
 
@@ -879,6 +884,9 @@ def aggregate_dataset(
     if not chunk_accumulators:
         raise EmptyResultError("No data matched the filter conditions or the dataset was empty.")
 
+    if cancel_event is not None and cancel_event.is_set():
+        raise AggregationCancelledError("Aggregation was cancelled by user.")
+
     # 4. Final aggregation across all chunks
     if progress_callback:
         progress_callback(total_chunks, total_chunks, "Merging group aggregations...")
@@ -935,24 +943,38 @@ def aggregate_dataset(
     else:
         out_path = default_output_path(file_path, spec.output_format)
 
+    # Check cancellation before staging starts
+    if cancel_event is not None and cancel_event.is_set():
+        raise AggregationCancelledError("Aggregation was cancelled by user.")
+
     # 9. Atomic save
     tmp_path = _temporary_output_path(out_path)
-    if progress_callback:
-        progress_callback(total_chunks, total_chunks, f"Saving result to {os.path.basename(out_path)}...")
-
     try:
+        if cancel_event is not None and cancel_event.is_set():
+            raise AggregationCancelledError("Aggregation was cancelled by user.")
+        if progress_callback:
+            progress_callback(total_chunks, total_chunks, f"Saving result to {os.path.basename(out_path)}...")
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise AggregationCancelledError("Aggregation was cancelled by user.")
         if spec.output_format.lower() == "xlsx":
             with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
                 final_df.to_excel(writer, index=False, sheet_name=_AGGREGATED_SHEET_NAME)
+                if cancel_event is not None and cancel_event.is_set():
+                    raise AggregationCancelledError("Aggregation was cancelled by user.")
                 _apply_excel_number_formats(
                     writer.book[_AGGREGATED_SHEET_NAME],
                     final_output_cols,
                     _column_number_formats(spec, final_output_cols, effective_group_keys),
+                    cancel_event=cancel_event,
                 )
         else:
             # CSV has no formatting layer, so it carries the raw values: a percent
             # column lands as 0.2747, the same number the .xlsx cell stores.
             final_df.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise AggregationCancelledError("Aggregation was cancelled by user.")
 
         # Atomic replace directly
         os.replace(tmp_path, out_path)
