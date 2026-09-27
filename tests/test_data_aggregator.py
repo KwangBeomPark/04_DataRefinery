@@ -1717,5 +1717,84 @@ class TestAggregationCancellationSafety(unittest.TestCase):
         self.assertEqual(self._staged_tmp_files(), [])
 
 
+class TestAggregationSaveFailures(unittest.TestCase):
+    """Deterministic regression tests for aggregation save failures."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.csv_path = os.path.join(self.temp_dir.name, "source.csv")
+        data = [
+            ["202601", "TV", "1000"],
+            ["202602", "Mobile", "2000"],
+        ]
+        columns = ["월", "디비전", "매출"]
+        pd.DataFrame(data, columns=columns).to_csv(self.csv_path, index=False, encoding="utf-8-sig")
+
+        self.dest_path = os.path.join(self.temp_dir.name, "destination.csv")
+        self.sentinel_bytes = b"PREEXISTING_SENTINEL_BYTES_PRESERVED\n"
+        with open(self.dest_path, "wb") as f:
+            f.write(self.sentinel_bytes)
+
+        self.spec = AggregationSpec(
+            file_path=self.csv_path,
+            group_by_keys=["디비전"],
+            measure_sums=["매출"],
+            output_format="csv",
+            output_path=self.dest_path,
+        )
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _staged_tmp_csv_files(self) -> list:
+        return [f for f in os.listdir(self.temp_dir.name) if f.endswith(".tmp.csv")]
+
+    def test_staged_csv_write_partial_bytes_disk_full_preserves_sentinel(self):
+        """CSV staged write produces partial bytes then raises OSError disk full."""
+        staged_paths = []
+
+        def mock_partial_to_csv(df_self, target_path, *args, **kwargs):
+            staged_paths.append(str(target_path))
+            with open(target_path, "wb") as f:
+                f.write(b"partial,csv,bytes\n")
+            self.assertTrue(os.path.exists(target_path))
+            raise OSError("disk full")
+
+        with patch.object(pd.DataFrame, "to_csv", side_effect=mock_partial_to_csv, autospec=True):
+            with self.assertRaises(OSError):
+                aggregate_dataset(self.spec)
+
+        self.assertEqual(len(staged_paths), 1)
+        self.assertTrue(staged_paths[0].endswith(".tmp.csv"))
+        self.assertFalse(os.path.exists(staged_paths[0]))
+        with open(self.dest_path, "rb") as f:
+            self.assertEqual(f.read(), self.sentinel_bytes)
+        self.assertEqual(self._staged_tmp_csv_files(), [])
+
+    def test_staged_csv_replace_publish_denied_preserves_sentinel(self):
+        """Staged CSV is fully written but os.replace raises OSError publish denied."""
+        real_replace = os.replace
+        replaced_calls = []
+
+        def mock_replace(src, dst, *args, **kwargs):
+            if str(src).endswith(".tmp.csv"):
+                replaced_calls.append((str(src), str(dst)))
+                self.assertTrue(os.path.exists(src))
+                self.assertGreater(os.path.getsize(src), 0)
+                raise OSError("publish denied")
+            return real_replace(src, dst, *args, **kwargs)
+
+        with patch.object(os, "replace", side_effect=mock_replace):
+            with self.assertRaises(OSError):
+                aggregate_dataset(self.spec)
+
+        self.assertEqual(len(replaced_calls), 1)
+        self.assertEqual(replaced_calls[0][1], os.path.abspath(self.dest_path))
+        self.assertFalse(os.path.exists(replaced_calls[0][0]))
+        with open(self.dest_path, "rb") as f:
+            self.assertEqual(f.read(), self.sentinel_bytes)
+        self.assertEqual(self._staged_tmp_csv_files(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
