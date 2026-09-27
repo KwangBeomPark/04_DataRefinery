@@ -1127,5 +1127,299 @@ class TestSpecBuilding(AggregatorTestCase):
             os.unlink(path)
 
 
+class TestFieldListKeyboardAccessibility(AggregatorTestCase):
+    """Deterministic tests for keyboard navigation and interaction in aggregator lists."""
+
+    def test_treeviews_are_keyboard_focusable(self):
+        for view in (
+            self.tab.view_dimensions,
+            self.tab.view_measures,
+            self.tab.view_rows,
+            self.tab.view_values,
+        ):
+            self.assertIn(str(view.tree.cget("takefocus")), ("1", "True"))
+
+    def test_focus_outline_toggles_and_preserves_drop_target_state(self):
+        view = self.tab.view_dimensions
+        self.assertEqual(view.cget("highlightbackground"), PALETTE["border"])
+
+        view.tree.event_generate("<FocusIn>")
+        self.assertEqual(view.cget("highlightbackground"), PALETTE["accent"])
+
+        view.tree.event_generate("<FocusOut>")
+        self.assertEqual(view.cget("highlightbackground"), PALETTE["border"])
+
+        view.set_drop_active(True)
+        self.assertEqual(view.cget("highlightbackground"), PALETTE["drop_target"])
+
+        view.tree.event_generate("<FocusIn>")
+        self.assertEqual(view.cget("highlightbackground"), PALETTE["accent"])
+
+        # Preserves drop target state on FocusOut
+        view.tree.event_generate("<FocusOut>")
+        self.assertEqual(view.cget("highlightbackground"), PALETTE["drop_target"])
+
+        view.set_drop_active(False)
+        self.assertEqual(view.cget("highlightbackground"), PALETTE["border"])
+
+    def _press_key(self, view, key: str) -> None:
+        self.app._select_task_tab(self.tab)
+        self.root.deiconify()
+        self.root.update()
+        view.tree.focus_force()
+        self.root.update()
+        try:
+            seq = key if key.startswith("<") else f"<{key}>"
+            view.tree.event_generate(seq, when="now")
+            self.root.update()
+        finally:
+            try:
+                self.root.withdraw()
+                self.root.update()
+            except tk.TclError:
+                pass
+
+    def test_return_key_on_dimension_row_places_into_rows(self):
+        self.load_schema()
+        self.assertNotIn("국가", self.tab.view_rows.names())
+
+        self.tab.view_dimensions.select_name("국가")
+        self._press_key(self.tab.view_dimensions, "Return")
+
+        self.assertIn("국가", self.tab.view_rows.names())
+        self.assertNotIn("국가", self.tab.view_dimensions.names())
+
+    def test_return_key_on_measure_row_places_into_values(self):
+        self.load_schema()
+        self.assertNotIn("매출", self.tab.view_values.names())
+
+        self.tab.view_measures.select_name("매출")
+        self._press_key(self.tab.view_measures, "Return")
+
+        self.assertIn("매출", self.tab.view_values.names())
+        self.assertNotIn("매출", self.tab.view_measures.names())
+
+    def test_return_or_delete_on_placed_row_removes_it(self):
+        self.load_schema()
+
+        # Place dimension and test removing with Return
+        self.tab._place_as_row("국가")
+        self.assertIn("국가", self.tab.view_rows.names())
+        self.tab.view_rows.select_name("국가")
+        self._press_key(self.tab.view_rows, "Return")
+        self.assertNotIn("국가", self.tab.view_rows.names())
+        self.assertIn("국가", self.tab.view_dimensions.names())
+
+        # Place dimension and test removing with Delete
+        self.tab._place_as_row("디비전")
+        self.assertIn("디비전", self.tab.view_rows.names())
+        self.tab.view_rows.select_name("디비전")
+        self._press_key(self.tab.view_rows, "Delete")
+        self.assertNotIn("디비전", self.tab.view_rows.names())
+        self.assertIn("디비전", self.tab.view_dimensions.names())
+
+        # Place measure and test removing with Return
+        self.tab._place_as_value("매출")
+        self.assertIn("매출", self.tab.view_values.names())
+        self.tab.view_values.select_name("매출")
+        self._press_key(self.tab.view_values, "Return")
+        self.assertNotIn("매출", self.tab.view_values.names())
+        self.assertIn("매출", self.tab.view_measures.names())
+
+        # Place measure and test removing with Delete
+        self.tab._place_as_value("수량")
+        self.assertIn("수량", self.tab.view_values.names())
+        self.tab.view_values.select_name("수량")
+        self._press_key(self.tab.view_values, "Delete")
+        self.assertNotIn("수량", self.tab.view_values.names())
+        self.assertIn("수량", self.tab.view_measures.names())
+
+    def test_delete_key_ignores_non_removable_source_fields(self):
+        self.load_schema()
+        self.tab.view_dimensions.select_name("국가")
+        dispatched_dim = []
+        self.tab.view_dimensions.tree.bind("<Delete>", lambda _e: dispatched_dim.append(True), add="+")
+        self._press_key(self.tab.view_dimensions, "Delete")
+        self.assertEqual(dispatched_dim, [True])
+        self.assertIn("국가", self.tab.view_dimensions.names())
+        self.assertNotIn("국가", self.tab.view_rows.names())
+
+        self.tab.view_measures.select_name("매출")
+        dispatched_meas = []
+        self.tab.view_measures.tree.bind("<Delete>", lambda _e: dispatched_meas.append(True), add="+")
+        self._press_key(self.tab.view_measures, "Delete")
+        self.assertEqual(dispatched_meas, [True])
+        self.assertIn("매출", self.tab.view_measures.names())
+        self.assertNotIn("매출", self.tab.view_values.names())
+
+    def test_focus_in_on_unselected_dimension_initializes_to_first_field(self):
+        self.load_schema()
+        self.app._select_task_tab(self.tab)
+        self.tab.view_dimensions.tree.selection_set()
+        self.tab.view_dimensions.tree.focus("")
+        self.assertIsNone(self.tab.view_dimensions.selected_name())
+
+        self.root.deiconify()
+        self.root.update()
+        try:
+            self.tab.view_dimensions.tree.focus_force()
+            self.root.update()
+            first_name = self.tab.view_dimensions.names()[0]
+            self.assertEqual(self.tab.view_dimensions.selected_name(), first_name)
+            self.assertEqual(self.tab.view_dimensions.tree.selection(), ("row0",))
+            self.assertEqual(self.tab.view_dimensions.tree.focus(), "row0")
+        finally:
+            try:
+                self.root.withdraw()
+                self.root.update()
+            except tk.TclError:
+                pass
+
+    def test_focus_in_preserves_existing_dimension_selection(self):
+        self.load_schema()
+        self.app._select_task_tab(self.tab)
+        dim_name = self.tab.view_dimensions.names()[2]  # "디비전"
+        self.tab.view_dimensions.select_name(dim_name)
+        self.assertEqual(self.tab.view_dimensions.selected_name(), dim_name)
+
+        self.root.deiconify()
+        self.root.update()
+        try:
+            self.tab.view_dimensions.tree.focus_force()
+            self.root.update()
+            self.assertEqual(self.tab.view_dimensions.selected_name(), dim_name)
+            self.assertEqual(self.tab.view_dimensions.selected_index(), 2)
+            self.assertEqual(self.tab.view_dimensions.tree.selection(), ("row2",))
+            self.assertEqual(self.tab.view_dimensions.tree.focus(), "row2")
+        finally:
+            try:
+                self.root.withdraw()
+                self.root.update()
+            except tk.TclError:
+                pass
+
+    def test_focus_in_on_empty_rows_list_leaves_it_unselected(self):
+        self.load_schema()
+        self.app._select_task_tab(self.tab)
+        self.assertEqual(self.tab.view_rows.size(), 0)
+
+        self.root.deiconify()
+        self.root.update()
+        try:
+            self.tab.view_rows.tree.focus_force()
+            self.root.update()
+            self.assertEqual(self.tab.view_rows.tree.selection(), ())
+            self.assertEqual(self.tab.view_rows.tree.focus(), "")
+            self.assertIsNone(self.tab.view_rows.selected_name())
+        finally:
+            try:
+                self.root.withdraw()
+                self.root.update()
+            except tk.TclError:
+                pass
+
+    def test_repeatedly_placing_fields_with_return_from_dimensions_until_empty(self):
+        """Pressing Return repeatedly on a focused source list continuously places fields until empty."""
+        self.load_schema()
+        self.app._select_task_tab(self.tab)
+        dim_names = list(self.tab.view_dimensions.names())
+        self.assertGreater(len(dim_names), 0)
+
+        self.root.deiconify()
+        self.root.update()
+        try:
+            self.tab.view_dimensions.tree.focus_force()
+            self.root.update()
+
+            for expected_name in dim_names:
+                # Treeview keeps focus and sensible selection points to the next surviving row
+                self.assertEqual(self.tab.view_dimensions.selected_name(), expected_name)
+                self.assertEqual(self.root.focus_get(), self.tab.view_dimensions.tree)
+
+                self.tab.view_dimensions.tree.event_generate("<Return>", when="now")
+                self.root.update()
+                self.assertIn(expected_name, self.tab.view_rows.names())
+
+            # All dimensions have been placed; source list transitions to empty
+            self.assertEqual(self.tab.view_dimensions.size(), 0)
+            self.assertIsNone(self.tab.view_dimensions.selected_name())
+            self.assertIsNone(self.tab.view_dimensions.selected_index())
+            self.assertEqual(self.tab.view_dimensions.tree.selection(), ())
+            self.assertEqual(self.tab.view_dimensions.tree.focus(), "")
+
+            # Further Return on empty list does nothing
+            self.tab.view_dimensions.tree.event_generate("<Return>", when="now")
+            self.root.update()
+            self.assertEqual(self.tab.view_dimensions.size(), 0)
+            self.assertEqual(len(self.tab.view_rows.names()), len(dim_names))
+        finally:
+            try:
+                self.root.withdraw()
+                self.root.update()
+            except tk.TclError:
+                pass
+
+    def test_continuing_down_and_return_in_placed_rows_after_delete_and_empty_transition(self):
+        """Down/Return/Delete navigation continues smoothly in placed rows after deletions, through empty."""
+        self.load_schema()
+        self.app._select_task_tab(self.tab)
+
+        for d in ("월", "국가", "디비전"):
+            self.tab._place_as_row(d)
+        self.assertEqual(self.tab.view_rows.names(), ["월", "국가", "디비전"])
+
+        self.root.deiconify()
+        self.root.update()
+        try:
+            self.tab.view_rows.tree.focus_force()
+            self.root.update()
+
+            self.assertEqual(self.tab.view_rows.selected_name(), "월")
+            self.assertEqual(self.tab.view_rows.selected_index(), 0)
+
+            # Move Down to index 1 ("국가")
+            self.tab.view_rows.tree.event_generate("<Down>", when="now")
+            self.root.update()
+            self.assertEqual(self.tab.view_rows.selected_name(), "국가")
+            self.assertEqual(self.tab.view_rows.selected_index(), 1)
+
+            # Delete "국가"
+            self.tab.view_rows.tree.event_generate("<Delete>", when="now")
+            self.root.update()
+            self.assertEqual(self.tab.view_rows.names(), ["월", "디비전"])
+            # Focus and selection point to surviving row at index 1 ("디비전")
+            self.assertEqual(self.tab.view_rows.selected_name(), "디비전")
+            self.assertEqual(self.tab.view_rows.selected_index(), 1)
+
+            # Remove "디비전" with Return
+            self.tab.view_rows.tree.event_generate("<Return>", when="now")
+            self.root.update()
+            self.assertEqual(self.tab.view_rows.names(), ["월"])
+            # Clamped to last surviving row at index 0 ("월")
+            self.assertEqual(self.tab.view_rows.selected_name(), "월")
+            self.assertEqual(self.tab.view_rows.selected_index(), 0)
+
+            # Delete "월" (transition to empty)
+            self.tab.view_rows.tree.event_generate("<Delete>", when="now")
+            self.root.update()
+            self.assertEqual(self.tab.view_rows.names(), [])
+            self.assertEqual(self.tab.view_rows.size(), 0)
+            self.assertIsNone(self.tab.view_rows.selected_name())
+            self.assertIsNone(self.tab.view_rows.selected_index())
+            self.assertEqual(self.tab.view_rows.tree.selection(), ())
+            self.assertEqual(self.tab.view_rows.tree.focus(), "")
+
+            # Delete on empty placed rows list does nothing and causes no error
+            self.tab.view_rows.tree.event_generate("<Delete>", when="now")
+            self.root.update()
+            self.assertEqual(self.tab.view_rows.size(), 0)
+        finally:
+            try:
+                self.root.withdraw()
+                self.root.update()
+            except tk.TclError:
+                pass
+
+
 if __name__ == "__main__":
     unittest.main()

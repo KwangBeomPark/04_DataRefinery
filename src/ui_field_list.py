@@ -123,6 +123,8 @@ class FieldListView(tk.Frame):
         self._show_remove = show_remove
         self._empty_hint = empty_hint
         self._items: List[FieldListItem] = []
+        self._drop_active = False
+        self._focused = False
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -134,6 +136,7 @@ class FieldListView(tk.Frame):
             selectmode="browse",
             height=height,
             style="FieldList.Treeview",
+            takefocus=True,
         )
         self.tree.grid(row=0, column=0, sticky="nsew")
         self.tree.column("#0", anchor="w", stretch=True, minwidth=60, width=120)
@@ -161,6 +164,8 @@ class FieldListView(tk.Frame):
         self.tree.tag_configure("month", foreground=PALETTE["accent"])
         self.tree.tag_configure("hint", foreground=PALETTE["muted"])
 
+        self.tree.bind("<FocusIn>", self._on_focus_in, add="+")
+        self.tree.bind("<FocusOut>", self._on_focus_out, add="+")
         self.tree.bind("<Button-1>", self._on_click, add="+")
         self.tree.bind("<Double-Button-1>", self._on_double_click, add="+")
         self.tree.bind("<Return>", self._on_return, add="+")
@@ -183,12 +188,46 @@ class FieldListView(tk.Frame):
     # ------------------------------------------------------------------
     # Content
     # ------------------------------------------------------------------
+    def _has_keyboard_focus(self) -> bool:
+        if self._focused:
+            return True
+        if not self.winfo_exists():
+            return False
+        try:
+            return self.tree.focus_get() == self.tree
+        except (tk.TclError, AttributeError):
+            return False
+
     def set_items(self, items: Sequence[FieldListItem]) -> None:
-        keep = self.selected_name()
+        prev_name = self.selected_name()
+        prev_index = self.selected_index()
+        is_focused = self._has_keyboard_focus()
+
         self._items = list(items)
         self._render()
-        if keep:
-            self.select_name(keep)
+
+        if prev_name is not None and prev_name in self.names():
+            self.select_name(prev_name)
+            if is_focused:
+                try:
+                    idx = self.names().index(prev_name)
+                    self.tree.see(self._iid(idx))
+                except (tk.TclError, ValueError):
+                    pass
+        elif is_focused:
+            if self._items:
+                target_index = min(max(0, prev_index if prev_index is not None else 0), len(self._items) - 1)
+                self.select_index(target_index)
+                try:
+                    self.tree.see(self._iid(target_index))
+                except tk.TclError:
+                    pass
+            else:
+                try:
+                    self.tree.selection_set()
+                    self.tree.focus("")
+                except tk.TclError:
+                    pass
 
     def set_empty_hint(self, hint: str) -> None:
         """Update the placeholder shown when there is nothing in the list."""
@@ -245,11 +284,25 @@ class FieldListView(tk.Frame):
     # ------------------------------------------------------------------
     # Selection
     # ------------------------------------------------------------------
+    def _is_valid_iid(self, iid: str) -> bool:
+        if not iid or iid == "hint":
+            return False
+        idx = self._index_of_iid(iid)
+        if idx is None or not (0 <= idx < len(self._items)):
+            return False
+        try:
+            return bool(self.tree.exists(iid))
+        except tk.TclError:
+            return False
+
     def selected_index(self) -> Optional[int]:
-        selection = self.tree.selection()
-        if not selection:
-            return None
-        return self._index_of_iid(selection[0])
+        for iid in self.tree.selection():
+            if self._is_valid_iid(iid):
+                return self._index_of_iid(iid)
+        focused = self.tree.focus()
+        if focused and self._is_valid_iid(focused):
+            return self._index_of_iid(focused)
+        return None
 
     def selected_name(self) -> Optional[str]:
         index = self.selected_index()
@@ -258,8 +311,13 @@ class FieldListView(tk.Frame):
     def select_index(self, index: int) -> None:
         if 0 <= index < len(self._items):
             iid = self._iid(index)
-            self.tree.selection_set(iid)
-            self.tree.focus(iid)
+            try:
+                if self.tree.exists(iid):
+                    self.tree.selection_set(iid)
+                    self.tree.focus(iid)
+                    self.tree.see(iid)
+            except tk.TclError:
+                pass
 
     def select_name(self, name: str) -> None:
         for index, item in enumerate(self._items):
@@ -306,8 +364,56 @@ class FieldListView(tk.Frame):
         self._draggable = draggable
 
     def set_drop_active(self, active: bool) -> None:
-        colour = PALETTE["drop_target"] if active else PALETTE["border"]
-        self.configure(highlightbackground=colour, highlightcolor=colour)
+        self._drop_active = active
+        self._update_border()
+
+    def _update_border(self) -> None:
+        if not self.winfo_exists():
+            return
+        colour = PALETTE["accent"] if self._focused else (
+            PALETTE["drop_target"] if self._drop_active else PALETTE["border"]
+        )
+        try:
+            self.configure(highlightbackground=colour, highlightcolor=colour)
+        except tk.TclError:
+            pass
+
+    def _on_focus_in(self, _event: tk.Event) -> None:
+        self._focused = True
+        self._update_border()
+        if not self._items:
+            try:
+                if "hint" in self.tree.selection():
+                    self.tree.selection_set()
+                if self.tree.focus() == "hint":
+                    self.tree.focus("")
+            except tk.TclError:
+                pass
+            return
+
+        valid_sel = [iid for iid in self.tree.selection() if self._is_valid_iid(iid)]
+        cur_focus = self.tree.focus()
+        has_valid_focus = self._is_valid_iid(cur_focus)
+        has_valid_sel = len(valid_sel) > 0
+
+        if not has_valid_sel and not has_valid_focus:
+            self.select_index(0)
+        elif has_valid_sel and not has_valid_focus:
+            try:
+                self.tree.focus(valid_sel[0])
+                self.tree.see(valid_sel[0])
+            except tk.TclError:
+                pass
+        elif has_valid_focus and not has_valid_sel:
+            try:
+                self.tree.selection_set(cur_focus)
+                self.tree.see(cur_focus)
+            except tk.TclError:
+                pass
+
+    def _on_focus_out(self, _event: tk.Event) -> None:
+        self._focused = False
+        self._update_border()
 
     # ------------------------------------------------------------------
     # Hover hint (rule definitions and truncated names)
@@ -405,6 +511,7 @@ class FieldListView(tk.Frame):
     def _on_return(self, event: tk.Event):
         index = self.selected_index()
         if index is not None and self._on_activate is not None:
+            self._hide_tip()
             self._on_activate(self._items[index])
             return "break"
         return None
