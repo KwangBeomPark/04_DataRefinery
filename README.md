@@ -15,26 +15,48 @@ The application is deliberately designed as a home for additional data
 normalizers. Pricing and other business-data templates can be added without
 mixing their source rules into the promotion model.
 
-## Current capabilities
+## Current capabilities (v1.11.1)
 
-- **CSV structure repair** — restores records split by unquoted line breaks,
-  detects delimiters and encodings, removes invalid leading rows, and exports a
-  one-record-per-line CSV or Excel file.
+- **CSV structure repair & malformed row safety** — restores records split by
+  unquoted line breaks, detects delimiters and encodings, removes invalid leading
+  rows, rejects overwide rows exceeding the expected column count with clear row-number
+  diagnostics without creating partial output files, and exports clean CSV/Excel files.
 - **English and Polish numbers** — recognizes `1,234.56`, `1 234,56`, and
   `1.234,56` safely while preserving decimal precision and Excel-safe large
   values.
-- **Promotion time-series normalization** — validates an Excel template with
-  `Promotion_Master` and `Support_Rules`, keeps source rules compact, and
-  exports inclusive daily support rows without summing overlapping rules.
-- **Data aggregation** — groups CSV rows, applies filters and per-column
-  aggregation functions, calculates derived measures, previews results, and
-  saves reusable presets.
+- **Promotion time-series normalization & failure handling** — validates an Excel
+  template with `Promotion_Master` and `Support_Rules`, rejects templates with duplicate
+  non-empty column headers, preserves results across tab navigation, and uses staged
+  writes with compensating cleanup to remove already-published outputs if a later publish step
+  fails (this is not an all-files crash-atomic transaction and does not restore pre-existing files).
+- **Data aggregation with failure handling** — groups CSV rows, applies filters and
+  per-column aggregation functions, calculates derived measures, validates input
+  rows for overwide columns prior to aggregation, provides clear sample-only preview
+  labeling, attempts cleanup of temporary files across normal cancellation or save-failure
+  paths (without guaranteeing cleanup if removal itself fails), and saves reusable presets.
+- **Keyboard-accessible field lists** — field lists in data aggregation support full
+  keyboard focus with visible accent focus rings, automatic first-row focus initialization,
+  continuous Return/Delete placement and removal, and selection preservation across
+  rerenders.
 - **Clear, localized workflow** — CSV repair, promotion normalization, and
   aggregation have separate tabs, with English, Korean, and Polish interfaces.
 - **Fast per-user installation** — runs from Local AppData in an `onedir`
   layout, so the launcher does not unpack a single-file bundle on every start.
 - **Update notification** — checks GitHub for a newer stable release in the
   background, with a 24-hour cache and a user-controlled toggle.
+
+## Quality and verification status
+
+- **Automated test suite & CI**: 440 automated tests pass locally across CSV processing,
+  promotion normalization, data aggregation, keyboard navigation, and failure-handling paths,
+  alongside CI-selected Ruff lint checks. Windows CI validates linting, tests, builds an unsigned test
+  installer and launcher, and runs a silent install/uninstall smoke test on an ephemeral runner
+  (this is not release signature or checksum verification).
+- **Manual QA & readiness caveats**: While automated mapped-widget interactions and core
+  data pipelines are verified by tests, full installed-application keyboard-only workflows,
+  high-DPI display scaling (125%/150%), and end-to-end multi-language UI layout checks
+  remain unverified pending manual desktop QA. This release is a desktop quality hardening
+  update and is not a commercial product launch.
 
 ## Data model direction
 
@@ -51,7 +73,7 @@ only for the current Windows user; Python and extra libraries are not required.
 
 👉 **[Download the latest installer](https://github.com/KwangBeomPark/04_DataRefinery/releases/latest)**
 
-1. Download `App04_DataRefinery_Setup_v<version>.exe`.
+1. Download `App04_DataRefinery_Setup_v1.11.1.exe`.
 2. Run the installer. It creates **Data Refinery** shortcuts in the Start menu
    and on the desktop.
 3. Use **CSV repair** for malformed delimited files, **Promotion template**

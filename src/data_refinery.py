@@ -31,7 +31,7 @@ from src.file_reveal import open_containing_folder
 from src.update_checker import check_for_update, load_settings, save_settings
 from src.ui_components import PALETTE, UpdateMenu
 
-__version__ = "1.11.0"
+__version__ = "1.11.1"
 
 _LANGUAGE_CODES = {
     "English": "en",
