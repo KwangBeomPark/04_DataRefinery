@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 import re
+from PyInstaller.utils.hooks import collect_all
 
 
 project_root = Path(SPECPATH).parents[1]
@@ -11,14 +12,22 @@ if match is None:
     raise RuntimeError('Could not find __version__ in data_refinery.py')
 release_executable_name = f"App04_DataRefinery_v{match.group(1)}"
 
+duckdb_datas, duckdb_binaries, duckdb_hiddenimports = collect_all('duckdb')
+
 a = Analysis(
     [str(app_source)],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=duckdb_binaries,
     datas=[
         (str(project_root / 'assets'), 'assets'),
-    ],
-    hiddenimports=[],
+    ] + duckdb_datas,
+    hiddenimports=[
+        'duckdb',
+        'win32com',
+        'win32com.client',
+        'pythoncom',
+        'pywintypes',
+    ] + duckdb_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

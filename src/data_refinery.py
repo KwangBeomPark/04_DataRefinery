@@ -27,11 +27,12 @@ from src.promotion_normalizer import (
     preview_daily_rows,
 )
 from src.aggregator_ui import AggregatorTabFrame
+from src.dataset_ui import DatasetPublisherTabFrame
 from src.file_reveal import open_containing_folder
 from src.update_checker import check_for_update, load_settings, save_settings
 from src.ui_components import PALETTE, UpdateMenu
 
-__version__ = "1.11.1"
+__version__ = "1.12.0"
 
 _LANGUAGE_CODES = {
     "English": "en",
@@ -227,8 +228,9 @@ _UI_TEXT = {
 
 _UI_TEXT["en"].update({
     "task_label": "Task",
-    "task_options": ("CSV repair", "Promotion template", "Data aggregator"),
+    "task_options": ("CSV repair", "Promotion template", "Data aggregator", "Dataset publisher"),
     "agg_initial_result": "Select a CSV file to inspect columns, configure group keys and measures, or load a saved preset.",
+    "pub_initial_result": "Manage multi-period datasets, inspect period accumulation/replacements, and publish clean CSVs for Excel.",
     "update_enabled": "Check for updates automatically",
     "check_updates": "Check now",
     "hide_updates": "Hide updates",
@@ -272,8 +274,9 @@ _UI_TEXT["en"].update({
 })
 _UI_TEXT["ko"].update({
     "task_label": "작업 방식",
-    "task_options": ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서"),
+    "task_options": ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서", "데이터셋 배포"),
     "agg_initial_result": "대용량 CSV 파일을 선택하여 컬럼을 분석하고, 행 그룹과 합산 항목을 지정하거나 저장된 프리셋을 불러오세요.",
+    "pub_initial_result": "데이터셋별 기간 누적, 수정 기간 교체, 수치/무결성 검수 및 Excel용 공유 폴더 배포를 관리합니다.",
     "update_enabled": "새 버전 자동 확인",
     "check_updates": "지금 확인",
     "hide_updates": "업데이트 숨기기",
@@ -317,8 +320,9 @@ _UI_TEXT["ko"].update({
 })
 _UI_TEXT["pl"].update({
     "task_label": "Zadanie",
-    "task_options": ("Naprawa CSV", "Szablon promocji", "Agregacja danych"),
+    "task_options": ("Naprawa CSV", "Szablon promocji", "Agregacja danych", "Publikacja zestawów danych"),
     "agg_initial_result": "Wybierz plik CSV, aby przeanalizować kolumny, skonfigurować grupowanie lub wczytać szablon.",
+    "pub_initial_result": "Zarządzaj zestawami danych, sprawdzaj akumulację/wymianę okresów i publikuj pliki CSV dla programu Excel.",
     "update_enabled": "Sprawdzaj aktualizacje automatycznie",
     "check_updates": "Sprawdź teraz",
     "hide_updates": "Ukryj aktualizacje",
@@ -1100,6 +1104,14 @@ class DataRefineryApp:
         )
         self.aggregator_tab_button.pack(side="left", padx=2)
 
+        self.publisher_tab_button = ttk.Button(
+            self.task_tabs,
+            command=lambda: self._select_task_tab(self.publisher_tab),
+            style="TaskTab.TButton",
+            width=18,
+        )
+        self.publisher_tab_button.pack(side="left", padx=2)
+
         # Utility controls (Right side)
         util_frame = ttk.Frame(top_bar, style="App.TFrame")
         util_frame.pack(side="right")
@@ -1133,9 +1145,11 @@ class DataRefineryApp:
         self.csv_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 6, 0, 0))
         self.promotion_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 6, 0, 0))
         self.aggregator_tab = AggregatorTabFrame(self.notebook, self, padding=(0, 6, 0, 0))
+        self.publisher_tab = DatasetPublisherTabFrame(self.notebook, self, padding=(0, 6, 0, 0))
         self.notebook.add(self.csv_tab)
         self.notebook.add(self.promotion_tab)
         self.notebook.add(self.aggregator_tab)
+        self.notebook.add(self.publisher_tab)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_task_tab_change)
 
         self.file_section = ttk.LabelFrame(self.csv_tab, style="Card.TLabelframe", padding=(18, 14))
@@ -1638,6 +1652,8 @@ class DataRefineryApp:
             return "promotion"
         if sel == str(self.aggregator_tab):
             return "aggregator"
+        if hasattr(self, "publisher_tab") and sel == str(self.publisher_tab):
+            return "publisher"
         return "csv"
 
     def _select_task_tab(self, tab):
@@ -1656,6 +1672,10 @@ class DataRefineryApp:
         self.aggregator_tab_button.configure(
             style="TaskTab.Selected.TButton" if tid == "aggregator" else "TaskTab.TButton"
         )
+        if hasattr(self, "publisher_tab_button"):
+            self.publisher_tab_button.configure(
+                style="TaskTab.Selected.TButton" if tid == "publisher" else "TaskTab.TButton"
+            )
 
     @staticmethod
     def _has_positive_column_count(value):
@@ -1721,6 +1741,10 @@ class DataRefineryApp:
             self.result_section.configure(text=self._ui("task_options")[2])
             self._set_result_text(self._ui("agg_initial_result"))
             self.log_text.set(self._ui("task_options")[2])
+        elif self._selected_task_id() == "publisher":
+            self.result_section.configure(text=self._ui("task_options")[3])
+            self._set_result_text(self._ui("pub_initial_result"))
+            self.log_text.set(self._ui("task_options")[3])
         else:
             self.result_section.configure(text=self._ui("result_title"))
             if self._last_result is None:
@@ -1858,9 +1882,13 @@ class DataRefineryApp:
         self.notebook.tab(self.csv_tab, text=text['task_options'][0])
         self.notebook.tab(self.promotion_tab, text=text['task_options'][1])
         self.notebook.tab(self.aggregator_tab, text=text['task_options'][2])
+        if hasattr(self, "publisher_tab"):
+            self.notebook.tab(self.publisher_tab, text=text['task_options'][3])
         self.csv_tab_button.configure(text=text['task_options'][0])
         self.promotion_tab_button.configure(text=text['task_options'][1])
         self.aggregator_tab_button.configure(text=text['task_options'][2])
+        if hasattr(self, "publisher_tab_button"):
+            self.publisher_tab_button.configure(text=text['task_options'][3])
         self.update_menu.set_texts(
             status="",
             check=text['check_updates'],

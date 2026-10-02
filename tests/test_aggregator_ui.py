@@ -51,13 +51,17 @@ class AggregatorTestCase(unittest.TestCase):
 
 
 class TestAggregatorShell(AggregatorTestCase):
-    def test_three_tabs_exist_and_switch(self):
-        self.assertEqual(len(self.app.notebook.tabs()), 3)
+    def test_four_tabs_exist_and_switch(self):
+        self.assertEqual(len(self.app.notebook.tabs()), 4)
 
         self.app._select_task_tab(self.app.aggregator_tab)
         self.assertEqual(self.app._selected_task_id(), "aggregator")
         self.assertEqual(self.app.aggregator_tab_button.cget("style"), "TaskTab.Selected.TButton")
         self.assertEqual(self.app.csv_tab_button.cget("style"), "TaskTab.TButton")
+
+        self.app._select_task_tab(self.app.publisher_tab)
+        self.assertEqual(self.app._selected_task_id(), "publisher")
+        self.assertEqual(self.app.publisher_tab_button.cget("style"), "TaskTab.Selected.TButton")
 
         self.app._select_task_tab(self.app.csv_tab)
         self.assertEqual(self.app._selected_task_id(), "csv")
@@ -110,18 +114,21 @@ class TestAggregatorShell(AggregatorTestCase):
             PALETTE["accent"],
         )
 
-    def test_language_switch_updates_all_three_tabs(self):
+    def test_language_switch_updates_task_tabs(self):
         self.app.language.set("English")
         self.app._apply_language()
         self.assertEqual(self.app.aggregator_tab_button.cget("text"), "Data aggregator")
+        self.assertEqual(self.app.publisher_tab_button.cget("text"), "Dataset publisher")
 
         self.app.language.set("한국어")
         self.app._apply_language()
         self.assertEqual(self.app.aggregator_tab_button.cget("text"), "데이터 집계·슬라이서")
+        self.assertEqual(self.app.publisher_tab_button.cget("text"), "데이터셋 배포")
 
         self.app.language.set("Polski")
         self.app._apply_language()
         self.assertEqual(self.app.aggregator_tab_button.cget("text"), "Agregacja danych")
+        self.assertEqual(self.app.publisher_tab_button.cget("text"), "Publikacja zestawów danych")
 
     def test_language_switch_translates_aggregator_controls(self):
         self.app.language.set("English")

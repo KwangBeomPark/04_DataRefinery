@@ -15,7 +15,7 @@ The application is deliberately designed as a home for additional data
 normalizers. Pricing and other business-data templates can be added without
 mixing their source rules into the promotion model.
 
-## Current capabilities (v1.11.1)
+## Current capabilities (v1.12.0)
 
 - **CSV structure repair & malformed row safety** — restores records split by
   unquoted line breaks, detects delimiters and encodings, removes invalid leading
@@ -38,8 +38,15 @@ mixing their source rules into the promotion model.
   keyboard focus with visible accent focus rings, automatic first-row focus initialization,
   continuous Return/Delete placement and removal, and selection preservation across
   rerenders.
+- **Dataset accumulation, review, and publishing** — DuckDB accumulates monthly CSV data,
+  replaces revised periods, and shows period, row-count, numeric-total, and validation
+  changes before approval. Approved snapshots publish as CSV to a shared folder. The
+  generated Excel analysis template connects Power Query to that shared path so consumers
+  can refresh and change pivots with Microsoft 365 Excel's built-in features. If Excel
+  automation is unavailable on the creator PC, the app creates a manual connection guide.
 - **Clear, localized workflow** — CSV repair, promotion normalization, and
-  aggregation have separate tabs, with English, Korean, and Polish interfaces.
+  aggregation have separate tabs, with English, Korean, and Polish interfaces. The new
+  dataset-publishing screen is currently Korean-focused.
 - **Fast per-user installation** — runs from Local AppData in an `onedir`
   layout, so the launcher does not unpack a single-file bundle on every start.
 - **Update notification** — checks GitHub for a newer stable release in the
@@ -47,9 +54,11 @@ mixing their source rules into the promotion model.
 
 ## Quality and verification status
 
-- **Automated test suite & CI**: 440 automated tests pass locally across CSV processing,
-  promotion normalization, data aggregation, keyboard navigation, and failure-handling paths,
-  alongside CI-selected Ruff lint checks. Windows CI validates linting, tests, builds an unsigned test
+- **Automated test suite & CI**: 493 tests cover CSV processing, promotion normalization,
+  data aggregation, dataset accumulation and publishing, Excel template generation,
+  keyboard navigation, and failure handling; 492 pass and one optional Excel COM test is
+  skipped by default. The optional end-to-end Excel test was also run successfully on the
+  release workstation. CI-selected Ruff checks pass. Windows CI validates linting, tests, builds an unsigned test
   installer and launcher, and runs a silent install/uninstall smoke test on an ephemeral runner
   (this is not release signature or checksum verification).
 - **Manual QA & readiness caveats**: While automated mapped-widget interactions and core
@@ -73,11 +82,12 @@ only for the current Windows user; Python and extra libraries are not required.
 
 👉 **[Download the latest installer](https://github.com/KwangBeomPark/04_DataRefinery/releases/latest)**
 
-1. Download `App04_DataRefinery_Setup_v1.11.1.exe`.
+1. Download `App04_DataRefinery_Setup_v1.12.0.exe`.
 2. Run the installer. It creates **Data Refinery** shortcuts in the Start menu
    and on the desktop.
 3. Use **CSV repair** for malformed delimited files, **Promotion template**
-   for promotion rules and daily support data, or **Data aggregator** to group and summarize a CSV file.
+   for promotion rules and daily support data, **Data aggregator** to group and summarize a CSV file,
+   or **Dataset publisher** to accumulate, review, and publish period data for Excel.
 4. Results are saved beside the source data with a `YYYYMMDD_HHMM` timestamp.
 
 To try aggregation without your own data, open `sample_data/monthly_ledger_sample.csv`
