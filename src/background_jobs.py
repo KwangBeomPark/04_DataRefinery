@@ -63,28 +63,37 @@ class BackgroundJobRunner:
 
     def poll(self) -> None:
         self._poll_scheduled = False
-        while True:
-            try:
-                name, kind, payload = self._events.get_nowait()
-            except queue.Empty:
-                break
+        try:
+            while True:
+                try:
+                    name, kind, payload = self._events.get_nowait()
+                except queue.Empty:
+                    break
 
-            callbacks = self._callbacks.get(name)
-            if callbacks is None:
-                continue
-            if kind == "progress":
-                percent, detail = payload
-                callbacks.on_progress(percent, detail)
-                continue
+                callbacks = self._callbacks.get(name)
+                if callbacks is None:
+                    continue
+                if kind == "progress":
+                    percent, detail = payload
+                    try:
+                        callbacks.on_progress(percent, detail)
+                    except Exception:
+                        pass
+                    continue
 
-            try:
-                if kind == "success":
-                    callbacks.on_success(payload)
-                else:
-                    callbacks.on_error(payload)
-            finally:
-                self._callbacks.pop(name, None)
-                callbacks.on_finished()
-
-        if self._callbacks:
-            self._request_poll(self._poll_interval_ms)
+                try:
+                    if kind == "success":
+                        callbacks.on_success(payload)
+                    else:
+                        callbacks.on_error(payload)
+                except Exception:
+                    pass
+                finally:
+                    self._callbacks.pop(name, None)
+                    try:
+                        callbacks.on_finished()
+                    except Exception:
+                        pass
+        finally:
+            if self._callbacks:
+                self._request_poll(self._poll_interval_ms)

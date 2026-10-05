@@ -6,3 +6,5 @@ release/dist/
 # Aggregator output written next to the bundled sample data during testing
 sample_data/*_aggregated_*.xlsx
 sample_data/*_aggregated_*.csv
+
+scratch/

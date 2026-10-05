@@ -50,6 +50,13 @@ class DatasetDefinition:
     encoding: str = "auto"
     delimiter: str = ","
     merge_mode: str = "union"  # "union" or "error"
+    include_keywords: List[str] = field(default_factory=list)
+    exclude_keywords: List[str] = field(default_factory=list)
+    keyword_mode: str = "or"  # "and" or "or"
+    include_subfolders: bool = False
+    excluded_files: List[str] = field(default_factory=list)
+    baseline_columns: List[str] = field(default_factory=list)
+    number_format: str = "auto"  # "auto", "1,234.56", "1 234,56", "1.234,56"
     created_at: str = field(default_factory=_utc_now_iso)
     updated_at: str = field(default_factory=_utc_now_iso)
     last_inspected_at: Optional[str] = None
@@ -84,6 +91,13 @@ class DatasetDefinition:
         encoding: str = "auto",
         delimiter: str = ",",
         merge_mode: str = "union",
+        include_keywords: Optional[List[str]] = None,
+        exclude_keywords: Optional[List[str]] = None,
+        keyword_mode: str = "or",
+        include_subfolders: bool = False,
+        excluded_files: Optional[List[str]] = None,
+        baseline_columns: Optional[List[str]] = None,
+        number_format: str = "auto",
     ) -> DatasetDefinition:
         clean_name = re.sub(r"[^\w\-_]", "_", name.strip()) or "dataset"
         unique_id = f"{clean_name}_{uuid.uuid4().hex[:8]}"
@@ -102,6 +116,13 @@ class DatasetDefinition:
             encoding=encoding,
             delimiter=delimiter,
             merge_mode=merge_mode,
+            include_keywords=include_keywords or [],
+            exclude_keywords=exclude_keywords or [],
+            keyword_mode=keyword_mode,
+            include_subfolders=include_subfolders,
+            excluded_files=excluded_files or [],
+            baseline_columns=baseline_columns or [],
+            number_format=number_format,
             created_at=now,
             updated_at=now,
         )
@@ -120,6 +141,13 @@ class DatasetDefinition:
             "delimiter": self.delimiter,
             "encoding": self.encoding,
             "merge_mode": self.merge_mode,
+            "include_keywords": sorted(self.include_keywords),
+            "exclude_keywords": sorted(self.exclude_keywords),
+            "keyword_mode": self.keyword_mode,
+            "include_subfolders": self.include_subfolders,
+            "excluded_files": sorted(self.excluded_files),
+            "baseline_columns": self.baseline_columns,
+            "number_format": self.number_format,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 

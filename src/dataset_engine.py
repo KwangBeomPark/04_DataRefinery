@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import duckdb
 
+from src.csv_processing import detect_encoding, detect_encoding_precise
 from src.dataset_config import DatasetDefinition, DatasetRegistry
 
 
@@ -54,6 +55,9 @@ class ScannedFile:
     row_count_estimate: int = 0
     status: str = "pending"  # 'new_period', 'modified_period', 'unchanged', 'conflict', 'empty'
     status_detail: str = ""
+    encoding: str = "utf-8"
+    header_status: str = "ok"  # 'ok', 'order_mismatch', 'missing_columns', 'extra_columns', 'empty'
+    header_detail: str = ""
 
 
 @dataclass
@@ -97,6 +101,37 @@ class InspectionResult:
     warnings: List[str]
     errors: List[str]
     is_valid: bool
+
+
+def make_numeric_sql_expr(clean_col: str, number_format: str = "auto") -> str:
+    """Return SQL expression to parse a numeric column safely into DECIMAL(38,6).
+    
+    Handles US/standard ('1,234.56') and European/Polish ('1 234,56' or '1234,56') formats
+    without 100x magnification bugs.
+    """
+    x = f'TRIM(CAST("{clean_col}" AS VARCHAR))'
+    fmt = (number_format or "auto").lower()
+    # Use direct Python unicode characters for spaces (U+00A0 and U+202F)
+    sp = " .\xa0\u202f"
+    eu_convert = f"REPLACE(regexp_replace({x}, '[{sp}]', '', 'g'), ',', '.')"
+    us_convert = f"REPLACE({x}, ',', '')"
+
+    if fmt in ("1 234,56", "1.234,56", "polish", "eu", "european"):
+        body = eu_convert
+    elif fmt in ("1,234.56", "us", "standard"):
+        body = us_convert
+    else:  # auto
+        # Disambiguate comma:
+        # 1. Obvious EU: contains thousands space/dot before comma (e.g. '1 234,56', '1.234,56')
+        # 2. Obvious EU decimal without thousands: single comma followed by 1, 2, or 4+ digits (e.g. '1234,5', '1234,56', '1234,5678')
+        # 3. Otherwise (including comma thousands like '10,000' or '1,234,567'): treat as US thousands!
+        body = f"""CASE 
+            WHEN regexp_matches({x}, '^[+-]?[0-9]{{1,3}}([{sp}][0-9]{{3}})+(,[0-9]+)$') THEN {eu_convert}
+            WHEN regexp_matches({x}, '^[+-]?[0-9]+,[0-9]{{1,2}}$') THEN {eu_convert}
+            WHEN regexp_matches({x}, '^[+-]?[0-9]+,[0-9]{{4,}}$') THEN {eu_convert}
+            ELSE {us_convert}
+        END"""
+    return f"TRY_CAST({body} AS DECIMAL(38,6))"
 
 
 def calculate_file_hash(path: Path | str, chunk_size: int = 65536) -> str:
@@ -148,7 +183,7 @@ def normalize_period_value(val: Any) -> Optional[str]:
         if 1 <= month <= 12:
             return f"{year}-{month:02d}"
 
-    return s
+    return None
 
 
 def extract_period_from_filename(filename: str) -> Optional[str]:
@@ -278,9 +313,9 @@ class DatasetEngine:
                 norm_periods = set()
                 for r in rows:
                     if r[0] is not None:
-                        val = normalize_period_value(r[0])
-                        if val:
-                            norm_periods.add(val)
+                        raw_v = str(r[0]).strip()
+                        val = normalize_period_value(raw_v)
+                        norm_periods.add(val if val else raw_v)
                 if norm_periods:
                     return sorted(list(norm_periods))
             finally:
@@ -315,9 +350,9 @@ class DatasetEngine:
                                 if row is None:
                                     break
                                 if len(row) > target_idx:
-                                    norm = normalize_period_value(row[target_idx])
-                                    if norm:
-                                        found_periods.add(norm)
+                                    raw_v = str(row[target_idx]).strip()
+                                    norm = normalize_period_value(raw_v)
+                                    found_periods.add(norm if norm else raw_v)
                             if found_periods:
                                 return sorted(list(found_periods))
                 except Exception:
@@ -340,17 +375,43 @@ class DatasetEngine:
             )
 
         pattern = self.dataset.file_pattern or "*.csv"
-        matching_files = sorted(list(input_dir.glob(pattern)), key=lambda p: p.name)
+        if getattr(self.dataset, "include_subfolders", False):
+            raw_matching = list(input_dir.rglob(pattern))
+        else:
+            raw_matching = list(input_dir.glob(pattern))
+        raw_matching = sorted([p for p in raw_matching if p.is_file()], key=lambda p: p.name)
+
+        # Keyword filtering
+        inc_kw = [k.strip().lower() for k in (getattr(self.dataset, "include_keywords", None) or []) if k.strip()]
+        exc_kw = [k.strip().lower() for k in (getattr(self.dataset, "exclude_keywords", None) or []) if k.strip()]
+        exc_files = set(getattr(self.dataset, "excluded_files", None) or [])
+        kw_mode = (getattr(self.dataset, "keyword_mode", "or") or "or").lower()
+
+        matching_files: List[Path] = []
+        for p in raw_matching:
+            if p.name in exc_files:
+                continue
+            name_lower = p.name.lower()
+            if exc_kw and any(k in name_lower for k in exc_kw):
+                continue
+            if inc_kw:
+                if kw_mode == "and":
+                    if not all(k in name_lower for k in inc_kw):
+                        continue
+                else:  # "or"
+                    if not any(k in name_lower for k in inc_kw):
+                        continue
+            matching_files.append(p)
 
         existing_periods = set(self.get_existing_periods())
         ingested_map = self.get_ingested_files_map()
 
         scanned: List[ScannedFile] = []
         period_to_files: Dict[str, List[Path]] = {}
+        baseline = getattr(self.dataset, "baseline_columns", None) or []
+        baseline_set = set(baseline)
 
         for p in matching_files:
-            if not p.is_file():
-                continue
             stat = p.stat()
             if stat.st_size == 0:
                 scanned.append(
@@ -365,11 +426,49 @@ class DatasetEngine:
                         row_count_estimate=0,
                         status="conflict",
                         status_detail="0바이트 빈 파일입니다 (처리 제외).",
+                        encoding="unknown",
+                        header_status="empty",
+                        header_detail="0바이트 빈 파일",
                     )
                 )
                 continue
 
             fhash = calculate_file_hash(p)
+
+            # Determine encoding
+            file_enc = detect_encoding(str(p))
+
+            # Check header
+            header_status = "ok"
+            header_detail = "정상"
+            header_cols: List[str] = []
+            try:
+                with open(p, "r", encoding=file_enc, errors="replace") as f:
+                    reader = csv.reader(f, delimiter=self.dataset.delimiter or ",")
+                    first_row = next(reader, None)
+                    if first_row:
+                        header_cols = [c.strip().lstrip("\ufeff") for c in first_row if c.strip()]
+            except Exception:
+                pass
+
+            if baseline and header_cols:
+                # Required columns: period, keys, numerics
+                required = set()
+                if self.dataset.period_column:
+                    required.add(self.dataset.period_column)
+                required.update(self.dataset.key_columns)
+                required.update(self.dataset.numeric_columns)
+
+                missing_req = required - set(header_cols)
+                if missing_req:
+                    header_status = "missing_columns"
+                    header_detail = f"필수 열 누락: {', '.join(sorted(missing_req))}"
+                elif header_cols != baseline:
+                    header_status = "order_mismatch"
+                    header_detail = "순서 다름 (이름 기준 정렬)"
+                else:
+                    header_status = "ok"
+                    header_detail = f"✓ {len(header_cols)}열 일치"
 
             # Determine all periods in file
             file_periods = self._extract_periods_from_file(p)
@@ -385,6 +484,12 @@ class DatasetEngine:
             # Estimate row count quickly
             est_rows = max(0, int(stat.st_size / 150))
 
+            init_status = "pending"
+            init_detail = ""
+            if header_status == "missing_columns":
+                init_status = "conflict"
+                init_detail = f"필수 컬럼이 누락되어 적재할 수 없습니다 ({header_detail})."
+
             scanned.append(
                 ScannedFile(
                     file_path=str(p.resolve()),
@@ -395,8 +500,11 @@ class DatasetEngine:
                     period=period_str,
                     periods=file_periods,
                     row_count_estimate=est_rows,
-                    status="pending",
-                    status_detail="",
+                    status=init_status,
+                    status_detail=init_detail,
+                    encoding=file_enc,
+                    header_status=header_status,
+                    header_detail=header_detail,
                 )
             )
 
@@ -693,16 +801,23 @@ class DatasetEngine:
 
     @contextmanager
     def _utf8_csv_path(self, path: Path):
-        """Decode legacy Korean encodings locally without DuckDB extension downloads."""
-        encoding = (self.dataset.encoding or "auto").lower()
-        if encoding not in ("cp949", "euc-kr"):
+        """Decode legacy encodings (CP949, EUC-KR, CP1250, ISO-8859-2, etc.) to temporary UTF-8 CSV."""
+        configured = (self.dataset.encoding or "auto").strip().lower()
+        if configured == "auto":
+            detected = detect_encoding_precise(str(path)).lower()
+        else:
+            detected = configured
+
+        # If already UTF-8 or ASCII, yield directly without conversion
+        if detected in ("utf-8", "utf-8-sig", "ascii", "utf8"):
             yield path
             return
+
         descriptor, filename = tempfile.mkstemp(suffix=".csv", dir=self.db_path.parent)
         os.close(descriptor)
         converted = Path(filename)
         try:
-            with path.open("r", encoding=encoding, newline="") as source:
+            with path.open("r", encoding=detected, errors="replace", newline="") as source:
                 with converted.open("w", encoding="utf-8", newline="") as target:
                     shutil.copyfileobj(source, target, length=65536)
             yield converted
@@ -804,13 +919,12 @@ class DatasetEngine:
         p_min = periods[0] if periods else None
         p_max = periods[-1] if periods else None
 
-        # Numeric column totals: handle commas (e.g. '1,234,567') safely
+        # Numeric column totals: handle commas and European decimal formats safely
         totals: Dict[str, float] = {}
         for num_col in self.dataset.numeric_columns:
             clean_num = self._clean_ident(num_col)
             try:
-                # Strip commas and whitespace before double conversion
-                cast_expr = f"TRY_CAST(REPLACE(TRIM(CAST(\"{clean_num}\" AS VARCHAR)), ',', '') AS DOUBLE)"
+                cast_expr = make_numeric_sql_expr(clean_num, self.dataset.number_format)
                 val = conn.execute(
                     f'SELECT COALESCE(SUM({cast_expr}), 0) FROM dataset_records'
                 ).fetchone()[0]
@@ -835,6 +949,23 @@ class DatasetEngine:
         token: str,
     ) -> InspectionResult:
         """Construct detailed InspectionResult comparing before and after states."""
+        table_exists = conn.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'dataset_records'"
+        ).fetchone()[0] > 0
+        if not table_exists:
+            return InspectionResult(
+                approval_token=token,
+                before_row_count=before.get("row_count", 0),
+                after_row_count=0,
+                before_periods=before.get("periods", []),
+                after_periods=[],
+                per_period_metrics=[],
+                numeric_deltas={},
+                warnings=["데이터셋 테이블(dataset_records)이 생성되지 않았습니다."],
+                errors=["적재된 유효한 데이터가 없습니다."],
+                is_valid=False,
+            )
+
         period_col = self._clean_ident(self.dataset.period_column)
 
         # Check null periods
@@ -867,7 +998,7 @@ class DatasetEngine:
             for num_col in self.dataset.numeric_columns:
                 clean_num = self._clean_ident(num_col)
                 try:
-                    cast_expr = f"TRY_CAST(REPLACE(TRIM(CAST(\"{clean_num}\" AS VARCHAR)), ',', '') AS DOUBLE)"
+                    cast_expr = make_numeric_sql_expr(clean_num, self.dataset.number_format)
                     val = conn.execute(
                         f'SELECT COALESCE(SUM({cast_expr}), 0) FROM dataset_records WHERE "{period_col}" = ?',
                         [p],
@@ -937,10 +1068,11 @@ class DatasetEngine:
             clean_num = self._clean_ident(num_col)
             try:
                 # Detect values that fail TRY_CAST (e.g. non-numeric text)
+                cast_expr = make_numeric_sql_expr(clean_num, self.dataset.number_format)
                 bad_cnt = conn.execute(
                     f'SELECT count(*) FROM dataset_records WHERE "{clean_num}" IS NOT NULL '
                     f'AND TRIM(CAST("{clean_num}" AS VARCHAR)) != \'\' '
-                    f'AND TRY_CAST(REPLACE(TRIM(CAST("{clean_num}" AS VARCHAR)), \',\', \'\') AS DOUBLE) IS NULL'
+                    f'AND ({cast_expr}) IS NULL'
                 ).fetchone()[0]
                 if bad_cnt > 0:
                     errors.append(
@@ -952,10 +1084,11 @@ class DatasetEngine:
             # Detect if column is entirely null in non-empty dataset
             if after["row_count"] > 0:
                 try:
+                    cast_expr = make_numeric_sql_expr(clean_num, self.dataset.number_format)
                     valid_num_cnt = conn.execute(
                         f'SELECT count(*) FROM dataset_records WHERE "{clean_num}" IS NOT NULL '
                         f'AND TRIM(CAST("{clean_num}" AS VARCHAR)) != \'\' '
-                        f'AND TRY_CAST(REPLACE(TRIM(CAST("{clean_num}" AS VARCHAR)), \',\', \'\') AS DOUBLE) IS NOT NULL'
+                        f'AND ({cast_expr}) IS NOT NULL'
                     ).fetchone()[0]
                     if valid_num_cnt == 0:
                         errors.append(f"수치 컬럼 '{num_col}'에 유효한 숫자 데이터가 전혀 없습니다 (전체 NULL 또는 빈값).")
