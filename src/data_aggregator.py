@@ -18,6 +18,7 @@ from src.csv_processing import (
     _EXCEL_MAX_DATA_ROWS,
     detect_delimiter,
     detect_encoding,
+    detect_encoding_precise,
 )
 
 _MONTH_COL_PATTERNS = re.compile(r"(월|month|yyyymm|yearmonth|기간|period|ym)", re.IGNORECASE)
@@ -53,6 +54,15 @@ class EmptyResultError(AggregatorError):
 
 class AggregationCancelledError(AggregatorError):
     """Raised when the aggregation job is cancelled by the user."""
+
+
+class AggregationEncodingError(AggregatorError):
+    """Raised when dataset decoding fails due to an encoding mismatch."""
+
+    def __init__(self, original_error: Exception, suggested_encoding: str = "cp1250"):
+        self.original_error = original_error
+        self.suggested_encoding = suggested_encoding
+        super().__init__(str(original_error))
 
 
 @dataclass(frozen=True)
@@ -94,6 +104,7 @@ class AggregationSpec:
     annual_column_name: str = "연도"
     delimiter: Optional[str] = None
     encoding: Optional[str] = None
+    precise_encoding: bool = False
     number_mode: str = "English"  # "English" or "Polish"
     output_format: str = "xlsx"  # "xlsx" or "csv"
     output_path: Optional[str] = None
@@ -196,6 +207,7 @@ def _reject_overwide_rows(
     encoding: str,
     expected_columns: int,
     cancel_event: Optional[threading.Event] = None,
+    errors: str = "strict",
 ) -> None:
     """Check every logical CSV record without loading the whole file into memory.
 
@@ -203,22 +215,26 @@ def _reject_overwide_rows(
     columns when the first data record has an excess field. Validate widths
     independently before allowing an aggregate output to be published.
     """
-    with open(file_path, "r", encoding=encoding, newline="") as handle:
-        reader = csv.reader(handle, delimiter=delimiter, strict=True)
-        try:
-            next(reader, None)  # The header was already checked by _read_header.
-            for row in reader:
-                if cancel_event is not None and cancel_event.is_set():
-                    raise AggregationCancelledError("Aggregation was cancelled by user.")
-                if len(row) > expected_columns:
-                    raise AggregatorError(
-                        f"CSV line {reader.line_num} has {len(row)} columns; "
-                        f"the header has {expected_columns}. No output was saved."
-                    )
-        except csv.Error as error:
-            raise AggregatorError(
-                f"Malformed CSV near line {reader.line_num}: {error}"
-            ) from error
+    try:
+        with open(file_path, "r", encoding=encoding, errors=errors, newline="") as handle:
+            reader = csv.reader(handle, delimiter=delimiter, strict=True)
+            try:
+                next(reader, None)  # The header was already checked by _read_header.
+                for row in reader:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise AggregationCancelledError("Aggregation was cancelled by user.")
+                    if len(row) > expected_columns:
+                        raise AggregatorError(
+                            f"CSV line {reader.line_num} has {len(row)} columns; "
+                            f"the header has {expected_columns}. No output was saved."
+                        )
+            except csv.Error as error:
+                raise AggregatorError(
+                    f"Malformed CSV near line {reader.line_num}: {error}"
+                ) from error
+    except UnicodeDecodeError as exc:
+        suggested = detect_encoding_precise(file_path, exclude=(encoding, "utf-8", "utf-8-sig"))
+        raise AggregationEncodingError(exc, suggested_encoding=suggested) from exc
 
 
 def _validate_constant_columns(spec: "AggregationSpec", header: Sequence[str]) -> None:
@@ -401,9 +417,11 @@ def default_output_path(file_path: str, output_format: str) -> str:
     return os.path.join(dir_name, f"{base_name}_aggregated_{ts}{ext}")
 
 
-def detect_file_encoding(file_path: str) -> str:
+def detect_file_encoding(file_path: str, precise: bool = False) -> str:
     """Detect encoding using the verified detector from csv_processing."""
     try:
+        if precise:
+            return detect_encoding_precise(file_path)
         return detect_encoding(file_path)
     except Exception:
         return "utf-8"
@@ -423,14 +441,26 @@ def inspect_dataset_schema(
     delim = delimiter or detect_delimiter(file_path) or ","
 
     # Read sample rows using pandas with nrows
-    df_sample = pd.read_csv(
-        file_path,
-        sep=delim,
-        encoding=enc,
-        nrows=sample_rows,
-        dtype=str,
-        keep_default_na=False,
-    )
+    try:
+        df_sample = pd.read_csv(
+            file_path,
+            sep=delim,
+            encoding=enc,
+            nrows=sample_rows,
+            dtype=str,
+            keep_default_na=False,
+        )
+    except UnicodeDecodeError:
+        enc = detect_encoding_precise(file_path, exclude=(enc, "utf-8", "utf-8-sig"))
+        df_sample = pd.read_csv(
+            file_path,
+            sep=delim,
+            encoding=enc,
+            encoding_errors="replace",
+            nrows=sample_rows,
+            dtype=str,
+            keep_default_na=False,
+        )
 
     columns = list(df_sample.columns)
     dimension_candidates: List[str] = []
@@ -746,7 +776,8 @@ def aggregate_dataset(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Source file not found: {file_path}")
 
-    encoding = spec.encoding or detect_file_encoding(file_path)
+    encoding = spec.encoding or detect_file_encoding(file_path, precise=spec.precise_encoding)
+    decode_errors = "replace" if spec.precise_encoding else "strict"
     delimiter = spec.delimiter or detect_delimiter(file_path) or ","
 
     # 1. Determine all required columns for usecols
@@ -786,7 +817,7 @@ def aggregate_dataset(
     if missing_cols:
         raise ColumnNotFoundError(f"Columns not found in dataset: {', '.join(missing_cols)}")
 
-    _reject_overwide_rows(file_path, delimiter, encoding, len(header), cancel_event)
+    _reject_overwide_rows(file_path, delimiter, encoding, len(header), cancel_event, errors=decode_errors)
 
     # 2. Setup group keys and measure keys
     effective_group_keys = list(spec.group_by_keys)
@@ -835,51 +866,56 @@ def aggregate_dataset(
     total_chunks = max(1, file_size // (spec.chunksize * 100))  # rough estimation
     chunk_idx = 0
 
-    with pd.read_csv(
-        file_path,
-        sep=delimiter,
-        encoding=encoding,
-        usecols=usecols_list,
-        chunksize=spec.chunksize,
-        dtype=str,
-        keep_default_na=False,
-    ) as reader:
-        for chunk_df in reader:
-            if cancel_event is not None and cancel_event.is_set():
-                raise AggregationCancelledError("Aggregation was cancelled by user.")
+    try:
+        with pd.read_csv(
+            file_path,
+            sep=delimiter,
+            encoding=encoding,
+            encoding_errors=decode_errors,
+            usecols=usecols_list,
+            chunksize=spec.chunksize,
+            dtype=str,
+            keep_default_na=False,
+        ) as reader:
+            for chunk_df in reader:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise AggregationCancelledError("Aggregation was cancelled by user.")
 
-            chunk_idx += 1
-            if progress_callback:
-                clamped_progress = min(chunk_idx, total_chunks)
-                progress_callback(clamped_progress, total_chunks, f"Processing chunk {chunk_idx}...")
+                chunk_idx += 1
+                if progress_callback:
+                    clamped_progress = min(chunk_idx, total_chunks)
+                    progress_callback(clamped_progress, total_chunks, f"Processing chunk {chunk_idx}...")
 
-            # Apply filters
-            if spec.filters:
-                chunk_df = _apply_filters(chunk_df, spec.filters)
-                if chunk_df.empty:
-                    continue
+                # Apply filters
+                if spec.filters:
+                    chunk_df = _apply_filters(chunk_df, spec.filters)
+                    if chunk_df.empty:
+                        continue
 
-            # Materialise constants before grouping; a constant never changes the granularity.
-            if spec.constant_columns:
-                _apply_constant_columns(chunk_df, spec.constant_columns)
+                # Materialise constants before grouping; a constant never changes the granularity.
+                if spec.constant_columns:
+                    _apply_constant_columns(chunk_df, spec.constant_columns)
 
-            # Handle annual rollup: slice YYYYMM -> YYYY safely as string
-            if spec.rollup_annual and spec.month_column and spec.month_column in chunk_df.columns:
-                # Slicing first 4 chars
-                chunk_df[annual_col] = chunk_df[spec.month_column].astype(str).str.strip().str.slice(0, 4)
+                # Handle annual rollup: slice YYYYMM -> YYYY safely as string
+                if spec.rollup_annual and spec.month_column and spec.month_column in chunk_df.columns:
+                    # Slicing first 4 chars
+                    chunk_df[annual_col] = chunk_df[spec.month_column].astype(str).str.strip().str.slice(0, 4)
 
-            # Convert measure columns to numeric, lay down the per-function scratch
-            # columns, and track coerced errors
-            total_coerced += _prepare_chunk_measures(chunk_df, plan, spec.number_mode)
+                # Convert measure columns to numeric, lay down the per-function scratch
+                # columns, and track coerced errors
+                total_coerced += _prepare_chunk_measures(chunk_df, plan, spec.number_mode)
 
-            # Reduce this chunk with each column's per-chunk function
-            grouped_chunk = _fold_group(chunk_df, effective_group_keys, plan, "chunk")
-            chunk_accumulators.append(grouped_chunk)
+                # Reduce this chunk with each column's per-chunk function
+                grouped_chunk = _fold_group(chunk_df, effective_group_keys, plan, "chunk")
+                chunk_accumulators.append(grouped_chunk)
 
-            # Periodic memory fold: Merge every 10 chunks to prevent memory buildup
-            if len(chunk_accumulators) >= 10:
-                fold_df = pd.concat(chunk_accumulators, ignore_index=True)
-                chunk_accumulators = [_fold_group(fold_df, effective_group_keys, plan, "combine")]
+                # Periodic memory fold: Merge every 10 chunks to prevent memory buildup
+                if len(chunk_accumulators) >= 10:
+                    fold_df = pd.concat(chunk_accumulators, ignore_index=True)
+                    chunk_accumulators = [_fold_group(fold_df, effective_group_keys, plan, "combine")]
+    except UnicodeDecodeError as exc:
+        suggested = detect_encoding_precise(file_path, exclude=(encoding, "utf-8", "utf-8-sig"))
+        raise AggregationEncodingError(exc, suggested_encoding=suggested) from exc
 
     if not chunk_accumulators:
         raise EmptyResultError("No data matched the filter conditions or the dataset was empty.")
@@ -1017,7 +1053,8 @@ def estimate_result_rows(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Source file not found: {file_path}")
 
-    encoding = spec.encoding or detect_file_encoding(file_path)
+    encoding = spec.encoding or detect_file_encoding(file_path, precise=spec.precise_encoding)
+    decode_errors = "replace" if spec.precise_encoding else "strict"
     delimiter = spec.delimiter or detect_delimiter(file_path) or ","
 
     header = _read_header(file_path, delimiter, encoding)
@@ -1050,15 +1087,20 @@ def estimate_result_rows(
 
     if not needed_cols:
         # Nothing read from the file can split the result: every row folds into one group.
-        probe = pd.read_csv(
-            file_path,
-            sep=delimiter,
-            encoding=encoding,
-            usecols=[header[0]],
-            nrows=1,
-            dtype=str,
-            keep_default_na=False,
-        )
+        try:
+            probe = pd.read_csv(
+                file_path,
+                sep=delimiter,
+                encoding=encoding,
+                encoding_errors=decode_errors,
+                usecols=[header[0]],
+                nrows=1,
+                dtype=str,
+                keep_default_na=False,
+            )
+        except UnicodeDecodeError as exc:
+            suggested = detect_encoding_precise(file_path, exclude=(encoding, "utf-8", "utf-8-sig"))
+            raise AggregationEncodingError(exc, suggested_encoding=suggested) from exc
         return (1 if len(probe) else 0), True
 
     seen: Set[Tuple[str, ...]] = set()
@@ -1067,41 +1109,46 @@ def estimate_result_rows(
     total_chunks = max(1, file_size // (spec.chunksize * 100))  # rough estimation
     chunk_idx = 0
 
-    with pd.read_csv(
-        file_path,
-        sep=delimiter,
-        encoding=encoding,
-        usecols=list(needed_cols),
-        chunksize=spec.chunksize,
-        dtype=str,
-        keep_default_na=False,
-    ) as reader:
-        for chunk_df in reader:
-            if cancel_event is not None and cancel_event.is_set():
-                raise AggregationCancelledError("Row estimation was cancelled by user.")
+    try:
+        with pd.read_csv(
+            file_path,
+            sep=delimiter,
+            encoding=encoding,
+            encoding_errors=decode_errors,
+            usecols=list(needed_cols),
+            chunksize=spec.chunksize,
+            dtype=str,
+            keep_default_na=False,
+        ) as reader:
+            for chunk_df in reader:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise AggregationCancelledError("Row estimation was cancelled by user.")
 
-            chunk_idx += 1
-            if progress_callback:
-                clamped_progress = min(chunk_idx, total_chunks)
-                progress_callback(clamped_progress, total_chunks, f"Counting chunk {chunk_idx}...")
+                chunk_idx += 1
+                if progress_callback:
+                    clamped_progress = min(chunk_idx, total_chunks)
+                    progress_callback(clamped_progress, total_chunks, f"Counting chunk {chunk_idx}...")
 
-            if spec.filters:
-                chunk_df = _apply_filters(chunk_df, spec.filters)
-                if chunk_df.empty:
-                    continue
+                if spec.filters:
+                    chunk_df = _apply_filters(chunk_df, spec.filters)
+                    if chunk_df.empty:
+                        continue
 
-            if rolls_up and spec.month_column in chunk_df.columns:
-                chunk_df[annual_col] = chunk_df[spec.month_column].astype(str).str.strip().str.slice(0, 4)
+                if rolls_up and spec.month_column in chunk_df.columns:
+                    chunk_df[annual_col] = chunk_df[spec.month_column].astype(str).str.strip().str.slice(0, 4)
 
-            matched_any = True
-            present_keys = [key for key in distinct_keys if key in chunk_df.columns]
-            if not present_keys:
-                continue  # only constants group the result, so the count stays at one
+                matched_any = True
+                present_keys = [key for key in distinct_keys if key in chunk_df.columns]
+                if not present_keys:
+                    continue  # only constants group the result, so the count stays at one
 
-            for key in chunk_df[present_keys].drop_duplicates().itertuples(index=False, name=None):
-                seen.add(key)
-                if len(seen) >= max_distinct:
-                    return len(seen), False
+                for key in chunk_df[present_keys].drop_duplicates().itertuples(index=False, name=None):
+                    seen.add(key)
+                    if len(seen) >= max_distinct:
+                        return len(seen), False
+    except UnicodeDecodeError as exc:
+        suggested = detect_encoding_precise(file_path, exclude=(encoding, "utf-8", "utf-8-sig"))
+        raise AggregationEncodingError(exc, suggested_encoding=suggested) from exc
 
     if not distinct_keys:
         return (1 if matched_any else 0), True
@@ -1114,7 +1161,8 @@ def preview_aggregation(spec: AggregationSpec, sample_rows: int = 2000) -> Tuple
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Source file not found: {file_path}")
 
-    encoding = spec.encoding or detect_file_encoding(file_path)
+    encoding = spec.encoding or detect_file_encoding(file_path, precise=spec.precise_encoding)
+    decode_errors = "replace" if spec.precise_encoding else "strict"
     delimiter = spec.delimiter or detect_delimiter(file_path) or ","
 
     # Determine needed columns
@@ -1142,15 +1190,20 @@ def preview_aggregation(spec: AggregationSpec, sample_rows: int = 2000) -> Tuple
         # The annual column is derived from the month column, never read.
         needed_cols.discard(spec.annual_column_name)
 
-    sample_df = pd.read_csv(
-        file_path,
-        sep=delimiter,
-        encoding=encoding,
-        usecols=list(needed_cols),
-        nrows=sample_rows,
-        dtype=str,
-        keep_default_na=False,
-    )
+    try:
+        sample_df = pd.read_csv(
+            file_path,
+            sep=delimiter,
+            encoding=encoding,
+            encoding_errors=decode_errors,
+            usecols=list(needed_cols),
+            nrows=sample_rows,
+            dtype=str,
+            keep_default_na=False,
+        )
+    except UnicodeDecodeError as exc:
+        suggested = detect_encoding_precise(file_path, exclude=(encoding, "utf-8", "utf-8-sig"))
+        raise AggregationEncodingError(exc, suggested_encoding=suggested) from exc
 
     if spec.filters:
         sample_df = _apply_filters(sample_df, spec.filters)

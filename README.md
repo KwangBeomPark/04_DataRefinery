@@ -15,7 +15,7 @@ The application is deliberately designed as a home for additional data
 normalizers. Pricing and other business-data templates can be added without
 mixing their source rules into the promotion model.
 
-## Current capabilities (v1.12.0)
+## Current capabilities (v1.13.0)
 
 - **CSV structure repair & malformed row safety** — restores records split by
   unquoted line breaks, detects delimiters and encodings, removes invalid leading
@@ -24,6 +24,11 @@ mixing their source rules into the promotion model.
 - **English and Polish numbers** — recognizes `1,234.56`, `1 234,56`, and
   `1.234,56` safely while preserving decimal precision and Excel-safe large
   values.
+- **Multilingual / Central European encoding & Self-Healing recovery** — detects
+  Central/Eastern European encodings (Windows-1250, ISO-8859-2, CP852) via multi-region
+  sampling (e.g. Polish and Czech special characters). Provides manual encoding selection
+  in the aggregator UI, and offers a one-click interactive recovery prompt when encoding
+  mismatches occur without losing configured rules.
 - **Promotion time-series normalization & failure handling** — validates an Excel
   template with `Promotion_Master` and `Support_Rules`, rejects templates with duplicate
   non-empty column headers, preserves results across tab navigation, and uses staged

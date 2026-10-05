@@ -95,8 +95,58 @@ def normalize_delimiter(delimiter: str) -> str:
     return {"\\t": "\t", "tab": "\t", "TAB": "\t", "Tab": "\t"}.get(delimiter, delimiter)
 
 
+def detect_encoding_precise(file_path: str, exclude: tuple[str, ...] = ()) -> str:
+    """Scan file samples to determine the most plausible encoding, prioritizing regional code pages."""
+    try:
+        file_size = os.path.getsize(file_path)
+    except OSError:
+        file_size = 0
+
+    sample_parts = []
+    try:
+        with open(file_path, "rb") as file:
+            sample_parts.append(file.read(min(file_size or 512 * 1024, 512 * 1024)))
+            if file_size > 1024 * 1024:
+                file.seek(file_size // 2)
+                sample_parts.append(file.read(min(file_size - file_size // 2, 256 * 1024)))
+                if file_size > 2 * 1024 * 1024:
+                    file.seek(max(0, file_size - 256 * 1024))
+                    sample_parts.append(file.read(256 * 1024))
+    except OSError:
+        pass
+
+    raw = b"".join(sample_parts)
+    if not raw:
+        return "utf-8"
+
+    candidates = ["cp1250", "cp949", "cp1252", "iso-8859-2", "cp852"]
+    if "utf-8" not in exclude and "utf-8-sig" not in exclude:
+        candidates = ["utf-8-sig", "utf-8"] + candidates
+
+    best: tuple[str, int] | None = None
+    for encoding in candidates:
+        if encoding in exclude:
+            continue
+        try:
+            text = codecs.getincrementaldecoder(encoding)().decode(raw, final=False)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        suspicious_count = sum(1 for ch in text if ("\x80" <= ch <= "\x9f") or ch == "\ufffd")
+        if best is None or suspicious_count < best[1]:
+            best = (encoding, suspicious_count)
+            if suspicious_count == 0:
+                return encoding
+
+    return best[0] if best is not None else "latin-1"
+
+
 def detect_encoding(file_path: str) -> str:
     """Pick the most plausible text encoding without silently corrupting text."""
+    try:
+        file_size = os.path.getsize(file_path)
+    except OSError:
+        file_size = 0
+
     with open(file_path, "rb") as file:
         raw = file.read(_ENCODING_SAMPLE_BYTES)
 
@@ -110,27 +160,32 @@ def detect_encoding(file_path: str) -> str:
             except UnicodeDecodeError:
                 pass
 
-    def can_decode_prefix(encoding: str) -> bool:
+    def can_decode_bytes(encoding: str, data: bytes) -> bool:
         try:
-            codecs.getincrementaldecoder(encoding)().decode(raw, final=False)
+            codecs.getincrementaldecoder(encoding)().decode(data, final=False)
             return True
         except UnicodeDecodeError:
             return False
 
+    # If the first 1MB is 100% ASCII but file is larger, check subsequent regions
+    # for non-ASCII bytes that might fail UTF-8 decoding.
+    is_pure_ascii = not any(b >= 128 for b in raw)
+    if is_pure_ascii and file_size > _ENCODING_SAMPLE_BYTES:
+        try:
+            with open(file_path, "rb") as file:
+                for ratio in (0.33, 0.66):
+                    file.seek(int(file_size * ratio))
+                    extra = file.read(64 * 1024)
+                    if any(b >= 128 for b in extra) and not can_decode_bytes("utf-8", extra):
+                        return detect_encoding_precise(file_path, exclude=("utf-8", "utf-8-sig"))
+        except OSError:
+            pass
+
     for encoding in ("utf-8-sig", "utf-8"):
-        if can_decode_prefix(encoding):
+        if can_decode_bytes(encoding, raw):
             return encoding
 
-    best: tuple[str, int] | None = None
-    for encoding in ("cp949", "cp1252"):
-        try:
-            text = codecs.getincrementaldecoder(encoding)().decode(raw, final=False)
-        except UnicodeDecodeError:
-            continue
-        suspicious_count = sum(1 for character in text if ("\x80" <= character <= "\x9f") or character == "�")
-        if best is None or suspicious_count < best[1]:
-            best = (encoding, suspicious_count)
-    return best[0] if best is not None else "latin-1"
+    return detect_encoding_precise(file_path, exclude=("utf-8", "utf-8-sig"))
 
 
 def detect_delimiter(file_path: str, sample_rows: int = 50) -> str | None:

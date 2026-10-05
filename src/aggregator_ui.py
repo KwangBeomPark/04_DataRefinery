@@ -34,6 +34,7 @@ from src.aggregator_fields import (
 from src.background_jobs import JobCallbacks
 from src.data_aggregator import (
     AggregationCancelledError,
+    AggregationEncodingError,
     AggregationResult,
     AggregationSpec,
     ColumnGroupRule,
@@ -108,6 +109,7 @@ class AggregatorTabFrame(ttk.Frame):
         self.output_dir_var = tk.StringVar()
         self.output_name_var = tk.StringVar()
         self.search_var = tk.StringVar()
+        self.encoding_var = tk.StringVar()
         self._last_output_path: Optional[str] = None
 
         self._translated: List[tuple] = []  # (widget, option, ui_key)
@@ -147,6 +149,7 @@ class AggregatorTabFrame(ttk.Frame):
                 pass
         self._translate_preset_menu()
         self._translate_function_menu()
+        self._refresh_encoding_dropdown()
         self.refresh_views()
 
     # -------------------------------------------------------------
@@ -241,6 +244,19 @@ class AggregatorTabFrame(ttk.Frame):
         )
         self.btn_preset_menu.grid(row=0, column=6, sticky="ew", padx=(8, 0))
 
+        self._track(ttk.Label(card, style="Field.TLabel"), "agg_encoding_label").grid(
+            row=1, column=4, sticky="e", padx=(24, 8), pady=(_ROW_GAP, 0)
+        )
+        self.combo_encoding = ttk.Combobox(
+            card,
+            textvariable=self.encoding_var,
+            state="readonly",
+            width=16,
+            style="Compact.TCombobox",
+            values=self._encoding_options(),
+        )
+        self.combo_encoding.grid(row=1, column=5, columnspan=2, sticky="ew", pady=(_ROW_GAP, 0))
+
         self._preset_menu = tk.Menu(self, tearoff=False)
         self._preset_menu_items = (
             ("agg_preset_load", self.apply_selected_preset),
@@ -252,6 +268,54 @@ class AggregatorTabFrame(ttk.Frame):
         for _key, command in self._preset_menu_items:
             self._preset_menu.add_command(command=command)
         self._translate_preset_menu()
+
+    def _encoding_options(self) -> List[str]:
+        auto_label = self._ui("agg_encoding_auto")
+        if self._schema and getattr(self._schema, "encoding", None):
+            auto_label = f"{auto_label} ({self._schema.encoding.upper()})"
+        return [
+            auto_label,
+            "UTF-8",
+            "Windows-1250 (체코/폴란드)",
+            "CP949 (한국어)",
+            "Windows-1252 (서유럽)",
+            "ISO-8859-2",
+        ]
+
+    def _selected_encoding(self) -> Optional[str]:
+        val = self.encoding_var.get().strip()
+        auto_label = self._ui("agg_encoding_auto")
+        if not val or val.startswith(auto_label) or val.startswith("Auto") or val.startswith("자동") or val.startswith("Automatyczne"):
+            return None
+        val_upper = val.upper()
+        if "1250" in val_upper:
+            return "cp1250"
+        if "949" in val_upper:
+            return "cp949"
+        if "1252" in val_upper:
+            return "cp1252"
+        if "8859-2" in val_upper:
+            return "iso-8859-2"
+        if "UTF-8" in val_upper:
+            return "utf-8"
+        return val.split()[0].lower()
+
+    def _set_encoding_selection(self, encoding: str) -> None:
+        enc_lower = encoding.lower()
+        opts = self._encoding_options()
+        for opt in opts:
+            if enc_lower in opt.lower():
+                self.encoding_var.set(opt)
+                return
+        self.encoding_var.set(encoding.upper())
+
+    def _refresh_encoding_dropdown(self) -> None:
+        if hasattr(self, "combo_encoding"):
+            current = self.encoding_var.get()
+            opts = self._encoding_options()
+            self.combo_encoding.configure(values=opts)
+            if not current or current.startswith("Auto") or current.startswith("자동") or current.startswith("Automatyczne"):
+                self.encoding_var.set(opts[0])
 
     def _build_function_menu(self) -> None:
         """Right-click a value to choose how it is reduced; sum stays the default."""
@@ -834,6 +898,7 @@ class AggregatorTabFrame(ttk.Frame):
             self.app.set_progress(0, self._ui("agg_msg_schema_progress"))
             schema = inspect_dataset_schema(filename)
             self._schema = schema
+            self._refresh_encoding_dropdown()
             self.state.load_schema(
                 dimensions=schema.dimension_candidates,
                 measures=schema.measure_candidates,
@@ -1058,7 +1123,7 @@ class AggregatorTabFrame(ttk.Frame):
             self.btn_cancel.configure(state="disabled")
             self.app.set_status_log(self._ui("agg_msg_cancel_requested"))
 
-    def _build_spec(self) -> Optional[AggregationSpec]:
+    def _build_spec(self, precise_mode: bool = False, custom_encoding: Optional[str] = None) -> Optional[AggregationSpec]:
         file_path = self.filepath_var.get().strip()
         if not file_path or not os.path.exists(file_path):
             messagebox.showerror(self._ui("agg_msg_need_file_title"), self._ui("agg_msg_need_file"))
@@ -1076,6 +1141,7 @@ class AggregatorTabFrame(ttk.Frame):
             getattr(self.app, "num_format", tk.StringVar()).get()
         )
         column_groups, derived_formulas = self.state.rules_for_spec()
+        chosen_encoding = custom_encoding or self._selected_encoding() or (self._schema.encoding if self._schema else None)
 
         return AggregationSpec(
             file_path=file_path,
@@ -1090,7 +1156,8 @@ class AggregatorTabFrame(ttk.Frame):
             rollup_annual=self.state.uses_year(),
             month_column=self._schema.detected_month_column if self._schema else self.state.month_column,
             delimiter=self._schema.delimiter if self._schema else None,
-            encoding=self._schema.encoding if self._schema else None,
+            encoding=chosen_encoding,
+            precise_encoding=precise_mode,
             number_mode=number_mode,
             output_format=self._output_format(),
             # None lets the engine fall back to its own name next to the source.
@@ -1142,8 +1209,8 @@ class AggregatorTabFrame(ttk.Frame):
     def _refresh_undo_state(self) -> None:
         self.btn_undo.configure(state="normal" if self.state.can_undo() else "disabled")
 
-    def run_preview(self):
-        spec = self._build_spec()
+    def run_preview(self, precise_mode: bool = False, custom_encoding: Optional[str] = None):
+        spec = self._build_spec(precise_mode=precise_mode, custom_encoding=custom_encoding)
         if not spec:
             return
 
@@ -1153,6 +1220,19 @@ class AggregatorTabFrame(ttk.Frame):
             columns, rows = format_preview_rows(
                 preview_df, spec, self._effective_group_keys(spec), rows=_PREVIEW_ROWS
             )
+        except AggregationEncodingError as error:
+            retry = messagebox.askyesno(
+                self._ui("agg_encoding_dialog_title"),
+                self._ui("agg_encoding_dialog_msg").format(
+                    current=spec.encoding or "UTF-8",
+                    suggested=error.suggested_encoding.upper(),
+                ),
+                default=messagebox.YES,
+            )
+            if retry:
+                self._set_encoding_selection(error.suggested_encoding)
+                self.after(50, lambda: self.run_preview(precise_mode=True, custom_encoding=error.suggested_encoding))
+            return
         except Exception as error:
             messagebox.showerror(
                 self._ui("agg_msg_preview_error_title"),
@@ -1230,12 +1310,12 @@ class AggregatorTabFrame(ttk.Frame):
         except tk.TclError:
             pass  # the user closed the preview while the count was running
 
-    def run_aggregation(self):
+    def run_aggregation(self, precise_mode: bool = False, custom_encoding: Optional[str] = None):
         if getattr(self.app, "_csv_processing", False) or getattr(self.app, "_promotion_processing", False):
             messagebox.showinfo(self._ui("agg_msg_busy_title"), self._ui("agg_msg_busy"))
             return
 
-        spec = self._build_spec()
+        spec = self._build_spec(precise_mode=precise_mode, custom_encoding=custom_encoding)
         if not spec:
             return
         if not self._confirm_destination(spec):
@@ -1289,6 +1369,27 @@ class AggregatorTabFrame(ttk.Frame):
                 self.app.set_progress(0, self._ui("agg_msg_cancelled_progress"))
                 self.app.set_status_log(self._ui("agg_msg_cancelled_log"))
                 self.app.set_result_text(self._ui("agg_msg_cancelled_text"))
+            elif isinstance(error, AggregationEncodingError):
+                self.app.set_progress(0, self._ui("agg_msg_error_progress"))
+                self.app.set_status_log(self._ui("agg_msg_error_log"))
+                retry = messagebox.askyesno(
+                    self._ui("agg_encoding_dialog_title"),
+                    self._ui("agg_encoding_dialog_msg").format(
+                        current=spec.encoding or "UTF-8",
+                        suggested=error.suggested_encoding.upper(),
+                    ),
+                    default=messagebox.YES,
+                )
+                if retry:
+                    self._set_encoding_selection(error.suggested_encoding)
+                    self.after(50, lambda: self.run_aggregation(precise_mode=True, custom_encoding=error.suggested_encoding))
+                    return
+                else:
+                    messagebox.showerror(
+                        self._ui("agg_msg_error_title"),
+                        self._ui("agg_msg_error").format(error=error)
+                        + self.app.report_error("aggregation", error),
+                    )
             else:
                 self.app.set_progress(0, self._ui("agg_msg_error_progress"))
                 self.app.set_status_log(self._ui("agg_msg_error_log"))

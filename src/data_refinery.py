@@ -32,7 +32,7 @@ from src.file_reveal import open_containing_folder
 from src.update_checker import check_for_update, load_settings, save_settings
 from src.ui_components import PALETTE, UpdateMenu
 
-__version__ = "1.12.0"
+__version__ = "1.13.0"
 
 _LANGUAGE_CODES = {
     "English": "en",
@@ -412,6 +412,10 @@ _UI_TEXT["en"].update({
     'agg_file_label': 'Source',
     'agg_browse': 'Browse…',
     'agg_file_dialog_title': 'Select a large data file (CSV)',
+    'agg_encoding_label': 'Encoding:',
+    'agg_encoding_auto': 'Auto Detect',
+    'agg_encoding_dialog_title': 'Encoding Notice',
+    'agg_encoding_dialog_msg': "The file contains special characters (e.g. Polish/Czech Central European characters) that could not be decoded with {current}.\n\nWould you like to retry in Precise Mode using {suggested} without encoding errors?",
     'agg_preset_label': 'Preset:',
     'agg_preset_load': 'Load',
     'agg_preset_save': 'Save',
@@ -572,6 +576,10 @@ _UI_TEXT["ko"].update({
     'agg_file_label': '소스',
     'agg_browse': '파일 찾기...',
     'agg_file_dialog_title': '대용량 데이터 파일 선택 (CSV)',
+    'agg_encoding_label': '인코딩:',
+    'agg_encoding_auto': '자동 감지',
+    'agg_encoding_dialog_title': '인코딩 처리 안내',
+    'agg_encoding_dialog_msg': "파일 내에 특수 문자(체코어/폴란드어 등 동유럽 문자)가 포함되어 있어 현재 인코딩({current})으로 처리하지 못했습니다.\n\n인코딩 에러가 나지 않도록 정밀 감지 모드({suggested})로 다시 실행하시겠습니까?",
     'agg_preset_label': '프리셋:',
     'agg_preset_load': '불러오기',
     'agg_preset_save': '저장',
@@ -732,6 +740,10 @@ _UI_TEXT["pl"].update({
     'agg_file_label': 'Źródło',
     'agg_browse': 'Przeglądaj…',
     'agg_file_dialog_title': 'Wybierz duży plik danych (CSV)',
+    'agg_encoding_label': 'Kodowanie:',
+    'agg_encoding_auto': 'Automatyczne',
+    'agg_encoding_dialog_title': 'Informacja o kodowaniu',
+    'agg_encoding_dialog_msg': "Plik zawiera znaki specjalne (np. środkowoeuropejskie: polskie/czeskie), których nie można zdekodować za pomocą {current}.\n\nCzy chcesz spróbować ponownie w trybie precyzyjnym przy użyciu {suggested}?",
     'agg_preset_label': 'Szablon:',
     'agg_preset_load': 'Wczytaj',
     'agg_preset_save': 'Zapisz',
