@@ -55,8 +55,11 @@ After committing a clean main branch and building the unsigned app and launcher,
 run `scripts/finalize_signed_release.ps1` in the interactive Administrator
 PowerShell where SimplySign is logged in. Provide Microsoft SignTool on PATH or
 through `SIGNTOOL_PATH`. The script checks the build version/commit, signs the app
-and launcher, recompiles with Inno Setup SignTool and SignedUninstaller enabled,
-then verifies app, launcher, installer, and cached uninstaller signatures and
+and launcher, and recompiles with Inno Setup SignTool and SignedUninstaller enabled.
+The signing hook preserves Inno's temporary `uninst*.tmp` as an `.exe` before
+the compiler deletes it. Each finalization uses a fresh archive directory to
+prevent an older signed file from satisfying the check. The script then
+verifies app, launcher, installer, and preserved uninstaller signatures and
 timestamps. It writes checksums, `SHA256SUMS.txt`, `build-manifest.json`, and a
 version-specific success/failure result under `release/build`.
 

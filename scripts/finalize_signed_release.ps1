@@ -55,14 +55,13 @@ try {
     )
     $iscc = $isccCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     if (-not $iscc) { throw 'Inno Setup is unavailable.' }
-    New-Item -ItemType Directory -Force -Path 'release\build\signed-uninstaller' | Out-Null
-    $signArgs = Get-InnoReleaseSignArguments -CertificateThumbprint $CertificateThumbprint -TimestampServer $TimestampServer
-    & $iscc '/Q' "/DAppVersion=$Version" "/DAppBundleName=$bundleName" "/DAppExeName=$bundleName.exe" @signArgs 'release\installer\DataRefinery.iss'
+    $archiveDirectory = Join-Path $projectRoot ("release\build\signed-uninstaller\$Version-" + [guid]::NewGuid().ToString('N'))
+    $signArgs = Get-InnoReleaseSignArguments -CertificateThumbprint $CertificateThumbprint -TimestampServer $TimestampServer -UninstallerArchiveDirectory $archiveDirectory
+    & $iscc "/DAppVersion=$Version" "/DAppBundleName=$bundleName" "/DAppExeName=$bundleName.exe" @signArgs 'release\installer\DataRefinery.iss'
     if ($LASTEXITCODE -ne 0) { throw 'Signed installer compilation failed.' }
     $installerPath = Join-Path $projectRoot "release\dist\installer\App04_DataRefinery_Setup_v$Version.exe"
-    $uninstallers = @(Get-ChildItem -LiteralPath 'release\build\signed-uninstaller' -File |
-        Where-Object { $_.Extension -in @('.e32', '.e64', '.exe') })
-    if (-not $uninstallers.Count) { throw 'Signed uninstaller cache was not produced.' }
+    $uninstallers = @(Get-ChildItem -LiteralPath $archiveDirectory -File -Filter 'uninstaller-*.exe')
+    if (-not $uninstallers.Count) { throw 'The signing hook did not preserve the signed uninstaller.' }
     $records = @()
     foreach ($binary in (@($appPath, $launcherPath, $installerPath) + @($uninstallers.FullName))) {
         $signature = Get-AuthenticodeSignature -LiteralPath $binary
