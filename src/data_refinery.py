@@ -1362,6 +1362,9 @@ class DataRefineryApp:
             self._finish_csv_processing()
 
 def main() -> None:
+    if "--version" in sys.argv or "-v" in sys.argv:
+        print(f"Data Refinery v{__version__}")
+        sys.exit(0)
     if "--legacy-tk" in sys.argv:
         root = tk.Tk()
         app = DataRefineryApp(root)

@@ -34,6 +34,20 @@ class TestQtMainWindow(unittest.TestCase):
         self.assertEqual(window.language_code, "ko")
         self.assertEqual(window.tab_widget.tabText(0), "CSV 구조 복구")
 
+    def test_cli_version_flag(self):
+        import io
+        import sys
+        from unittest.mock import patch
+        from src.data_refinery import main
+
+        stdout_buf = io.StringIO()
+        with patch.object(sys, "argv", ["data_refinery", "--version"]):
+            with patch("sys.stdout", stdout_buf):
+                with self.assertRaises(SystemExit) as cm:
+                    main()
+                self.assertEqual(cm.exception.code, 0)
+                self.assertIn(__version__, stdout_buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
