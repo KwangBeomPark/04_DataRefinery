@@ -24,17 +24,14 @@ jobs:
         run: ruff check --select E4,E7,E9,F src tests
       - name: Run tests
         run: python -m unittest discover -s tests -q
-      - name: Check signing hook without private keys
+      - name: Check release pipeline without private keys
         shell: powershell
         run: .\tests\test_release_signing.ps1
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
       - name: Build unsigned test installer
         shell: pwsh
-        run: .\scripts\build_release.ps1 -SkipTests -SkipSign
-      - name: Build unsigned test launcher
-        shell: pwsh
-        run: .\scripts\build_launcher.ps1 -SkipTests -SkipSign
+        run: .\scripts\build.ps1 -SkipTests
       - name: Check install and uninstall
         shell: pwsh
         run: .\scripts\smoke_installer.ps1

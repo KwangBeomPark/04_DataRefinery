@@ -2,7 +2,7 @@
 from pathlib import Path
 
 
-project_root = Path(SPECPATH).parents[1]
+project_root = Path(SPECPATH).parent
 launcher_source = project_root / 'src' / 'data_refinery_launcher.py'
 
 a = Analysis(

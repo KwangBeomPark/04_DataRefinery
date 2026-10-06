@@ -4,7 +4,7 @@ import re
 from PyInstaller.utils.hooks import collect_all
 
 
-project_root = Path(SPECPATH).parents[1]
+project_root = Path(SPECPATH).parent
 app_source = project_root / 'src' / 'data_refinery.py'
 source = (project_root / 'src' / 'version.py').read_text(encoding='utf-8')
 match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)

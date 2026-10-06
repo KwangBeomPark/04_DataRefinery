@@ -7,13 +7,10 @@ $projectRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Pa
 $relativePaths = @(
     '.pytest_cache',
     '.ruff_cache',
-    'release\build\data_refinery',
-    'release\build\launcher',
-    'release\build\layout-check',
-    'release\build\launcher-layout-check',
-    'release\build\root-bytecode-cache',
-    'release\dist\layout-check',
-    'release\dist\launcher-layout-check',
+    'build\app',
+    'build\launcher',
+    'build\venv',
+    'dist',
     'sample_data\monthly_ledger_sample_aggregated_20260913_215528.xlsx',
     'sample_data\월별실적원장_샘플_aggregated_20260912_232308.xlsx',
     'sample_data\월별실적원장_샘플_aggregated_20260912_232456.xlsx'
@@ -39,6 +36,15 @@ foreach ($relativePath in $relativePaths) {
             throw "Cleanup refuses a linked descendant: $resolved"
         }
         $files = @($contents | Where-Object { -not $_.PSIsContainer })
+        if (@($contents | Where-Object { $_.Name -eq 'UserSetting' -or $_.Extension -in @('.pfx','.p12','.key','.duckdb','.db') }).Count) {
+            throw "Cleanup refuses user settings, private certificates or databases: $resolved"
+        }
+    }
+    foreach ($file in @($files | Where-Object { $_.Extension -in @('.exe','.e32','.e64') })) {
+        $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+        if ($signature.SignerCertificate -and $signature.SignerCertificate.Subject -match 'KWANG BEOM PARK') {
+            throw "Preserve signed output before cleanup: $($file.FullName)"
+        }
     }
     $size = ($files | Measure-Object -Property Length -Sum).Sum
     $targets += [pscustomobject]@{

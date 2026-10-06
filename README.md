@@ -127,7 +127,12 @@ python -m unittest discover -s tests -v
 Build the Windows installer with:
 
 ```powershell
-.\scripts\build_release.ps1
+.\scripts\build.ps1
 ```
+
+Unsigned previews are written to `dist/staging`; `release` contains only the latest
+signed official files. In the interactive Administrator PowerShell where
+SimplySign is logged in, run `scripts/sign.ps1` to sign and verify, or add
+`-Publish` to upload a new version. See [release instructions](docs/releasing.md).
 
 If a processing error appears, include its error ID in a [bug report](SUPPORT.md). Diagnostic logs remain on the local PC and do not include source file contents.

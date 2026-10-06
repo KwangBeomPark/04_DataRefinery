@@ -14,7 +14,7 @@ if (-not $versionMatch) {
 }
 $version = $versionMatch.Matches[0].Groups[1].Value
 if (-not $InstallerPath) {
-    $InstallerPath = Join-Path $projectRoot "release\dist\installer\App04_DataRefinery_Setup_v$version.exe"
+    $InstallerPath = Join-Path $projectRoot "dist\staging\App04_DataRefinery_Setup_v$version.exe"
 }
 $installer = (Resolve-Path -LiteralPath $InstallerPath).Path
 $installDir = Join-Path $env:RUNNER_TEMP "DataRefinery-Smoke-$([guid]::NewGuid().ToString('N'))"

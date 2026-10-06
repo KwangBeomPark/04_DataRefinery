@@ -114,7 +114,11 @@ python -m unittest discover -s tests -v
 Windows 설치 파일 빌드:
 
 ```powershell
-.\scripts\build_release.ps1
+.\scripts\build.ps1
 ```
+
+미서명 검증본은 `dist/staging`, 최신 공식 서명 배포본은 `release`에 둡니다.
+SimplySign에 로그인한 관리자 PowerShell에서 `scripts/sign.ps1`로 서명·검증합니다.
+새 버전의 GitHub 게시까지 하려면 `-Publish`를 붙입니다. [배포 절차](docs/releasing.md)를 참고하세요.
 
 처리 오류가 나타나면 오류 ID와 함께 [문제 신고 안내](SUPPORT.md)를 확인해 주세요. 진단 로그는 PC에만 저장되며 원본 파일 내용은 기록하지 않습니다.

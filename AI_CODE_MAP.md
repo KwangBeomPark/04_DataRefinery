@@ -16,7 +16,7 @@
 
 | 용도 | 경로 | 소유 코드 |
 | --- | --- | --- |
-| 앱 설치·번들 라이브러리 | **`%LOCALAPPDATA%\Programs\Data Refinery`** | `release/installer/DataRefinery.iss` |
+| 앱 설치·번들 라이브러리 | **`%LOCALAPPDATA%\Programs\Data Refinery`** | `installer/setup.iss` |
 | 설정·최근 작업·진단 로그 | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting` | `src/app_paths.py` (`update_checker.application_data_directory()` 호환 wrapper) |
 | 데이터셋 설정·로컬 DuckDB 작업 DB | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting\datasets` | `src/dataset_config.py`의 `get_default_storage_dir()` |
 | 공개 CSV·Excel 템플릿 | 데이터셋에 지정한 공유 배포 폴더 | `src/dataset_engine.py`, `src/dataset_excel.py` |
@@ -93,13 +93,14 @@ flowchart TD
 - 프로모션 템플릿: `assets/templates/promotion_template.xlsx`가 유일한 원본이며 UI에서 내보냅니다.
 - 집계 예제: `sample_data/monthly_ledger_sample.csv`, `sample_data/sample_preset.json`.
 - 자산은 개발 시 저장소 `assets/`, PyInstaller onedir에서는 `_internal/assets/`에서 찾습니다.
-- 앱 spec: `release/packaging/data_refinery.spec` (DuckDB·COM·필요 Qt 모듈 포함).
-- 런처 spec: `release/packaging/data_refinery_launcher.spec`.
-- 설치 설계도: `release/installer/DataRefinery.iss`, 앱 식별자는 기존 값을 유지합니다.
-- 빌드: `scripts/build_release.ps1`, 런처: `scripts/build_launcher.ps1`, 서명: `scripts/Signing.ps1`.
-- 설치 파일: `App04_DataRefinery_Setup_v<version>.exe`, 앱: `App04_DataRefinery_v<version>.exe`.
+- 앱 spec: `installer/data_refinery.spec` (DuckDB·COM·필요 Qt 모듈 포함).
+- 런처 spec: `installer/data_refinery_launcher.spec`.
+- 설치 설계도: `installer/setup.iss`, 앱 식별자는 기존 값을 유지합니다. 번들·출력 폴더는 컴파일러 매개변수로 주입합니다.
+- 빌드: `scripts/build.ps1` (앱·런처·미서명 설치 검증본), 서명·공식 스테이징·선택 게시: `scripts/sign.ps1`.
+- 설치 파일: `App04_DataRefinery_Setup_v<version>.exe` / `DataRefinery-Setup.v<version>.exe`, 앱: `App04_DataRefinery_v<version>.exe`.
 - 런처: `App04_DataRefinery_Launcher.exe` (과거 `Luncher` 오타 수정).
-- `release/build/`, `release/dist/`는 Git 제외입니다. 기존 서명 파일·로그·스크립트는 청소 시 보존합니다.
+- `build/`, `dist/`, `release/`, `tools/`는 Git 제외입니다. 최신 공식 파일만 `release/`에, 서명 기록과 보호 파일은 `tools/release-history/`에 보관합니다.
+- 릴리즈 노트 원본은 `docs/release-notes/`, 배포 절차는 `docs/releasing.md`에 있습니다. `SHA256SUMS.txt`는 자기 자신을 제외한 공식 폴더의 모든 파일을 포함합니다.
 
 ## 7. 검증 진입점
 

@@ -1,5 +1,8 @@
-release/build/
-release/dist/
+# Official generated artifacts; release notes are authored in docs/release-notes.
+/release/
+# Disposable compilation environments, caches, onedir bundles and unsigned staging.
+/build/
+/dist/
 **/__pycache__/
 *.py[cod]
 

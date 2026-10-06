@@ -28,21 +28,25 @@ description: Data Refinery (04_DataRefinery) 프로젝트의 새 버전을 릴�
 3. `src/version.py`의 `__version__`을 새 버전으로 변경합니다.
 
 ### 2단계: 릴리즈 노트 자동 작성
-1. `release/RELEASE_NOTES_v<version>.md` 파일을 생성합니다.
+1. `docs/release-notes/RELEASE_NOTES_v<version>.md` 원본을 작성합니다. 최종 서명 단계에서 `release/`에 복사합니다.
 2. 최근 커밋 및 변경된 소스 코드의 핵심 변경 사항(기능 추가, 버그 수정, 안정성 개선)을 깔끔하게 요약하여 작성합니다.
 
 ### 3단계: 바이너리 및 인스톨러 빌드 (SkipSign 모드)
 1. 백엔드 빌드를 수행합니다:
    ```powershell
-   powershell -ExecutionPolicy Bypass -File .\scripts\build_release.ps1 -SkipSign -SkipTests
+   powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
    ```
 2. 빌드 결과물을 확인합니다:
-   - 메인 실행 파일: `release\dist\App04_DataRefinery_v<version>\App04_DataRefinery_v<version>.exe`
-   - 설치 프로그램: `release\dist\installer\App04_DataRefinery_Setup_v<version>.exe`
+   - 메인 실행 파일: `dist\App04_DataRefinery_v<version>\App04_DataRefinery_v<version>.exe`
+   - 설치 검증본: `dist\staging\App04_DataRefinery_Setup_v<version>.exe` 및 `DataRefinery-Setup.v<version>.exe`
+   - 미서명 검증본을 `release/`에 넣지 않는다. 최신 공식 서명본은 유지한다.
 
 ### 4단계: 관리자 모드 전용 디지털 서명 스크립트 준비
-1. 디지털 서명은 Windows 정책상 UAC 관리자 권한(Elevated)이 필수이므로, 에이전트 환경에서 직접 서명하지 않고 독립 실행 스크립트를 생성합니다.
-2. `release\build\sign_v<version>.ps1` 파일을 생성합니다.
+1. 현재 SimplySign/KSP의 검증된 실행 방식은 사용자가 직접 연 관리자 PowerShell입니다. 에이전트 환경에서 직접 서명하지 않고 표준 독립 실행 스크립트를 안내합니다.
+2. 프로젝트의 표준 `scripts/sign.ps1`을 사용합니다. 별도의 버전별 스크립트나 다른 프로젝트의 도구 경로를 하드코딩하지 않습니다.
+3. 서명 도구는 `SIGNTOOL_PATH`, `tools/signtool/signtool.exe`, PATH 또는 Windows SDK에서 찾습니다.
+4. 서명 완료 후 `release/`에는 두 설치 명칭·런처·SHA256SUMS.txt·build-manifest.json·최신 노트만 둡니다. 기록과 보호 파일은 `tools/release-history/`에 둡니다.
+5. 기존에 게시된 버전을 다른 소스 커밋으로 재서명·덮어쓰기하지 않습니다. 소스 버전을 먼저 올리고 빌드합니다.
 
 ### 5단계: 사용자에게 관리자 모드 실행 복붙 명령어 제공 (가장 중요 🚨)
 빌드와 스크립트 준비가 끝나면, 사용자에게 다음 형식으로 **관리자 권한 PowerShell에서 바로 복사하여 붙여넣을 수 있는 원클릭 명령어**를 제공합니다:
@@ -53,6 +57,6 @@ description: Data Refinery (04_DataRefinery) 프로젝트의 새 버전을 릴�
 관리자 권한 PowerShell을 열고 아래 명령어를 복사하여 실행해 주세요:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "C:\Dev\GitHub\04_DataRefinery\release\build\sign_v<version>.ps1"
+powershell -ExecutionPolicy Bypass -File "C:\Dev\GitHub\04_DataRefinery\scripts\sign.ps1" -Publish
 ```
 ```
