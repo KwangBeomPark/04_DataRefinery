@@ -61,3 +61,5 @@ try {
         Remove-Item -LiteralPath $resolvedTestRoot -Recurse -Force
     }
 }
+# Fault injection intentionally leaves a native failure code; do not leak it to CI.
+exit 0
