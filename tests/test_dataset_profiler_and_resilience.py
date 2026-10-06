@@ -1,6 +1,5 @@
 """Unit tests for dataset profiler, European number format parsing, encoding resilience, and schema validation."""
 
-import os
 import tempfile
 from pathlib import Path
 import unittest

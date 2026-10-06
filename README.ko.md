@@ -15,7 +15,7 @@ Data Refinery는 복잡하거나 깨진 원본 데이터를 분석에 바로 쓸
 기타 업무 데이터용 템플릿을 추가해도 프로모션 기준 데이터와 섞이지 않게
 설계합니다.
 
-## 현재 기능 (v2.0.0)
+## 현재 기능 (v2.0.1)
 
 - **PySide6 (Qt) 기반 모던 데스크톱 UI** — 레거시 Tkinter에서 벗어나 Windows 고해상도(Hi-DPI)에
   완벽 대응하는 현대적인 디자인 시스템(Primary Blue 테마, 다크 헤더, 모던 카드, 배지, 스텝퍼)을 적용했습니다.
@@ -46,12 +46,12 @@ Data Refinery는 복잡하거나 깨진 원본 데이터를 분석에 바로 쓸
   기간·행 수·금액 합계와 오류를 검수한 뒤 승인된 결과만 공유 폴더에 CSV로 배포합니다.
   Excel 분석 템플릿에는 공유 경로의 Power Query 연결을 넣어 Microsoft 365 Excel에서 새로고침할 수 있습니다.
 - **실시간 다국어 지원** — 한국어, 영어, 폴란드어 간 즉각적인 전환을 지원합니다.
-- **빠른 사용자별 설치** — Local AppData의 `onedir` 구조에서 실행되어 매번 단일 EXE를 푸는 지연 없이 시작합니다.
+- **빠른 사용자별 설치** — `%LOCALAPPDATA%\Programs\Data Refinery`의 `onedir` 구조에서 실행되어 매번 단일 EXE를 푸는 지연 없이 시작합니다.
 - **업데이트 안내** — 앱 시작을 지연시키지 않고 GitHub의 정식 새 버전을 확인합니다.
 
 ## 품질 및 검증 현황
 
-- **자동화 테스트 스위트 및 CI**: 총 518개 테스트 중 517개 통과 (1개 선택적 Excel COM 테스트 기본 skip).
+- **자동화 테스트 스위트 및 CI**: 총 528개 테스트 중 527개 통과 (1개 선택적 Excel COM 테스트 기본 skip).
   1,000,000행 대용량 매핑 벤치마크 1.379초 완료. Claude Opus 5.5 및 Codex Sol 6.1 심층 교차 코드 검수 반영.
 
 ## 데이터 모델 방향
@@ -64,15 +64,29 @@ Data Refinery는 복잡하거나 깨진 원본 데이터를 분석에 바로 쓸
 ## 다운로드 및 실행
 
 최신 릴리즈의 설치 파일 하나만 내려받으면 됩니다. 현재 Windows 사용자
-계정에만 설치되며 Python이나 별도 라이브러리는 필요하지 않습니다.
+계정의 `%LOCALAPPDATA%\Programs\Data Refinery`에 설치되며 Python이나 별도 라이브러리는 필요하지 않습니다.
 
 👉 **[최신 설치 파일 다운로드](https://github.com/KwangBeomPark/04_DataRefinery/releases/latest)**
 
-1. `App04_DataRefinery_Setup_v2.0.0.exe` 파일을 다운로드합니다.
+1. `App04_DataRefinery_Setup_v2.0.1.exe` 파일을 다운로드합니다.
 2. 설치 파일을 실행하면 시작 메뉴와 바탕화면에 **Data Refinery** 바로가기가 만들어집니다.
 3. 깨진 구분 파일은 **CSV 구조 복구**, 프로모션 자료는 **프로모션 템플릿**,
    CSV 요약은 **데이터 집계·슬라이서**, 기간별 누적 및 공유 배포는 **데이터셋 배포** 탭에서 처리합니다.
 4. 결과는 원본 파일과 같은 폴더에 `YYYYMMDD_HHMM` 형식의 날짜·시간을 붙여 저장됩니다.
+
+설치 폴더에는 실행 파일과 번들 라이브러리를 둡니다. 설정·로그·작업 DB는 별도로 저장합니다.
+
+| 용도 | 경로 |
+| --- | --- |
+| 앱 설치 | `%LOCALAPPDATA%\Programs\Data Refinery` |
+| 설정·최근 작업·진단 로그 | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting` |
+| 데이터셋 설정·로컬 DuckDB 작업 DB | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting\datasets` |
+| 배포 CSV·연결된 Excel 템플릿 | 제작자가 지정한 공유 배포 폴더 |
+
+`UserSetting`은 앱 설치 폴더 안의 **사용자 설정·관리 자료 전용 하위 폴더**입니다. 기존 설정·로그·프리셋·데이터셋 작업 DB는 최초 실행 시
+`UserSetting`으로 복사하고 검증합니다. 원본 폴더는 백업으로 남기며 새 위치의 자료를 우선합니다.
+공유 CSV 경로와 Excel 연결은 변경하지 않습니다. 프로모션 템플릿은 해당 탭에서
+내보낼 수 있으며, 원본은 `assets/templates/promotion_template.xlsx` 한 곳에서 관리합니다.
 
 내 자료 없이 집계를 시험하려면 **데이터 집계·슬라이서**에서
 `sample_data/monthly_ledger_sample.csv`를 선택하세요. `디비전`을 행 그룹에,
@@ -81,7 +95,9 @@ Data Refinery는 복잡하거나 깨진 원본 데이터를 분석에 바로 쓸
 ## 개발
 
 앱 코드는 `src`, 번들 자산은 `assets`, 빌드 스크립트는 `scripts`, 설치 설정과
-생성된 릴리스 출력은 `release`에 둡니다.
+생성된 릴리스 출력은 `release`에 둡니다. 자세한 규칙은 [프로젝트 구조·이름 규칙](docs/project-structure.md)과
+[현재 코드맵](AI_CODE_MAP.md)을 확인하세요. 앱 버전은 `src/version.py` 한 곳에서 정의하고,
+Python 소스 파일은 기존 소문자·밑줄 이름을 유지합니다.
 
 개발 중 앱 실행:
 

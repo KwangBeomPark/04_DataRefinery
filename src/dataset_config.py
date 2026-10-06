@@ -7,7 +7,6 @@ completely isolated from application source files and binary paths.
 from __future__ import annotations
 
 import json
-import os
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -15,20 +14,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.app_paths import dataset_storage_directory
+
 
 def get_default_storage_dir() -> Path:
-    """Return the base local storage path for dataset databases and metadata."""
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        base = Path(local_app_data) / "DataRefinery" / "datasets"
-    else:
-        app_data = os.environ.get("APPDATA")
-        if app_data:
-            base = Path(app_data) / "DataRefinery" / "datasets"
-        else:
-            base = Path.home() / ".datarefinery" / "datasets"
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    """Return UserSetting/datasets, migrating legacy settings and DBs once."""
+    return dataset_storage_directory()
 
 
 def _utc_now_iso() -> str:

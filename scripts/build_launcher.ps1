@@ -17,7 +17,7 @@ if (-not $SkipTests) {
     }
 }
 
-$launcherName = 'App04_DataRefinery_Luncher'
+$launcherName = 'App04_DataRefinery_Launcher'
 python -m PyInstaller --clean --noconfirm --workpath release\build\launcher --distpath release\dist release\packaging\data_refinery_launcher.spec
 if ($LASTEXITCODE -ne 0) {
     throw 'Launcher build failed.'

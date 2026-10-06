@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
-from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -22,19 +20,14 @@ from PySide6.QtWidgets import (
 
 from src.background_jobs import BackgroundJobRunner, JobCallbacks
 from src.csv_processing import (
-    CsvColumnOverflowError,
-    CsvNoDataError,
-    CsvNoTableError,
     CsvProcessingOptions,
     detect_delimiter as detect_csv_delimiter,
-    is_excel as is_excel_file,
-    normalize_delimiter,
     process_csv_file,
     read_file_rows,
 )
 from src.file_reveal import open_containing_folder
 from src.i18n import _UI_TEXT
-from src.qt.dialogs import error_dialog, info_dialog, warning_dialog
+from src.qt.dialogs import error_dialog
 from src.qt.jobs import create_qt_job_runner
 from src.qt.widgets.card import CardWidget
 from src.qt.widgets.file_picker import FilePickerWidget

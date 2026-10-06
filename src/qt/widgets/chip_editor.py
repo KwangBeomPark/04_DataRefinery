@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
-    QScrollArea,
     QWidget,
 )
 
@@ -80,7 +79,7 @@ class ChipEditorWidget(QWidget):
         super().__init__(parent)
         self._chips: List[str] = []
 
-        main_layout = QVBoxLayout(self) if False else QHBoxLayout(self)
+        main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(6)
 

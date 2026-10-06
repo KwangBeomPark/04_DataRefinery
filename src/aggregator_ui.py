@@ -1231,7 +1231,7 @@ class AggregatorTabFrame(ttk.Frame):
             )
             if retry:
                 self._set_encoding_selection(error.suggested_encoding)
-                self.after(50, lambda: self.run_preview(precise_mode=True, custom_encoding=error.suggested_encoding))
+                self.after(50, lambda encoding=error.suggested_encoding: self.run_preview(precise_mode=True, custom_encoding=encoding))
             return
         except Exception as error:
             messagebox.showerror(

@@ -8,3 +8,12 @@ sample_data/*_aggregated_*.xlsx
 sample_data/*_aggregated_*.csv
 
 scratch/
+
+# Reproducible local caches and developer-only tools
+.pytest_cache/
+.ruff_cache/
+tools/
+
+# Share project guidance even when a developer's global ignore excludes it
+!AGENTS.md
+!AI_CODE_MAP.md

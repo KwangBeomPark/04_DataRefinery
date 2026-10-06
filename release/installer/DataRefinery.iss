@@ -18,6 +18,7 @@ AppId={{2E1A7E3F-8D78-4DB0-9B62-50B12CD4326F}
 AppName={#MyAppName}
 AppVersion={#AppVersion}
 AppPublisher={#MyAppPublisher}
+; Program binaries and persistent UserSetting have distinct roles under {app}.
 DefaultDirName={localappdata}\Programs\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -34,13 +35,22 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
+#ifdef ReleaseSign
+SignTool=DataRefineryReleaseSign
+SignedUninstaller=yes
+SignedUninstallerDir=..\build\signed-uninstaller
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Files]
-Source: "..\dist\{#AppBundleName}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\{#AppBundleName}\*"; DestDir: "{app}"; Excludes: "UserSetting\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Dirs]
+; Keep user configuration, logs, presets, and dataset workspaces on uninstall.
+Name: "{app}\UserSetting"; Flags: uninsneveruninstall
 
 [InstallDelete]
 ; The product name changed from CSV Modifier. App output files are saved beside

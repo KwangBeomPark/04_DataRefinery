@@ -6,8 +6,7 @@ continuity while elevating the UI to modern Windows desktop standards.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
 
 from src.ui_components import PALETTE

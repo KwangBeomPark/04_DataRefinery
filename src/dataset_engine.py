@@ -409,7 +409,6 @@ class DatasetEngine:
         scanned: List[ScannedFile] = []
         period_to_files: Dict[str, List[Path]] = {}
         baseline = getattr(self.dataset, "baseline_columns", None) or []
-        baseline_set = set(baseline)
 
         for p in matching_files:
             stat = p.stat()

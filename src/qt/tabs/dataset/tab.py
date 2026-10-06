@@ -5,19 +5,16 @@ Integrates DatasetRegistry, DatasetEngine, DatasetWizardDialog, and BackgroundJo
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -32,7 +29,6 @@ from src.dataset_config import DatasetDefinition, DatasetRegistry, get_default_s
 from src.dataset_engine import (
     DatasetEngine,
     DatasetPublishLockError,
-    DatasetValidationError,
     InspectionResult,
     ScanSummary,
 )
@@ -41,7 +37,6 @@ from src.file_reveal import open_containing_folder
 from src.qt.dialogs import confirm_dialog, error_dialog, info_dialog, warning_dialog
 from src.qt.jobs import create_qt_job_runner
 from src.qt.tabs.dataset.wizard import DatasetWizardDialog
-from src.qt.widgets.badge import StatusBadge
 from src.qt.widgets.card import CardWidget
 from src.ui_components import PALETTE
 

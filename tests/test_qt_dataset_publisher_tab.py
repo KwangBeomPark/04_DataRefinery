@@ -8,7 +8,6 @@ from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PySide6.QtWidgets import QApplication
 
 from src.dataset_config import DatasetDefinition, DatasetRegistry
 from src.qt.app import create_or_get_app
@@ -70,7 +69,7 @@ class TestQtDatasetPublisherTab(unittest.TestCase):
 
         # Approve and publish
         tab.current_engine.approve_inspection(res.approval_token)
-        manifest = tab.current_engine.publish_dataset()
+        tab.current_engine.publish_dataset()
         pub_csv = tab.current_dataset.published_csv_path()
         self.assertTrue(pub_csv.exists())
         self.assertIn("P001", pub_csv.read_text(encoding="utf-8-sig"))

@@ -1,6 +1,20 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-InnoReleaseSignArguments {
+    param(
+        [string]$CertificateThumbprint = 'E9C72CF5090840A1805296525D56BE680622A7FD',
+        [string]$TimestampServer = 'http://timestamp.digicert.com'
+    )
+    if ($CertificateThumbprint -notmatch '^[0-9a-fA-F]{40}$') { throw 'Invalid signing certificate thumbprint.' }
+    if ($TimestampServer -notmatch '^https?://[^\s"$]+$') { throw 'A valid timestamp URL is required.' }
+    $tool = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($null -eq $tool) { throw 'Microsoft SignTool must be on PATH for a signed installer and uninstaller.' }
+    $command = '$q' + $tool.Source + '$q sign /sha1 ' + $CertificateThumbprint +
+        ' /fd sha256 /tr ' + $TimestampServer + ' /td sha256 $f'
+    return @('/DReleaseSign', ('/SDataRefineryReleaseSign=' + $command))
+}
+
 function Invoke-SignBinary {
     [CmdletBinding()]
     param(

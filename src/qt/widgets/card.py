@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -13,7 +12,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui_components import PALETTE
 
 
 class CardWidget(QFrame):

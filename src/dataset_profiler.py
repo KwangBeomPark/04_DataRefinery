@@ -11,17 +11,14 @@ to detect encodings, delimiters, column data types, and auto-suggest dataset rol
 from __future__ import annotations
 
 import csv
-import io
 import re
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-import duckdb
 
-from src.csv_processing import detect_encoding, detect_encoding_precise
-from src.dataset_engine import make_numeric_sql_expr, normalize_period_value
+from src.csv_processing import detect_encoding_precise
+from src.dataset_engine import normalize_period_value
 
 
 @dataclass

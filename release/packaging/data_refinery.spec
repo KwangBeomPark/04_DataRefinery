@@ -6,10 +6,10 @@ from PyInstaller.utils.hooks import collect_all
 
 project_root = Path(SPECPATH).parents[1]
 app_source = project_root / 'src' / 'data_refinery.py'
-source = app_source.read_text(encoding='utf-8')
+source = (project_root / 'src' / 'version.py').read_text(encoding='utf-8')
 match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', source, re.MULTILINE)
 if match is None:
-    raise RuntimeError('Could not find __version__ in data_refinery.py')
+    raise RuntimeError('Could not find __version__ in version.py')
 release_executable_name = f"App04_DataRefinery_v{match.group(1)}"
 
 duckdb_datas, duckdb_binaries, duckdb_hiddenimports = collect_all('duckdb')

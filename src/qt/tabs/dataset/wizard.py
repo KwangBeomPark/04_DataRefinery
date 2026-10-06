@@ -8,27 +8,23 @@ Step 3: Summary and advanced options (encoding, delimiter, number format, polici
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, List, Optional
 
-from PySide6.QtCore import QEvent, QModelIndex, QSortFilterProxyModel, Qt, Signal
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QRadioButton,
-    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTableView,
@@ -37,13 +33,13 @@ from PySide6.QtWidgets import (
 )
 
 from src.dataset_config import DatasetDefinition, DatasetRegistry, get_default_storage_dir
-from src.dataset_engine import DatasetEngine, ScannedFile
+from src.dataset_engine import DatasetEngine
 from src.dataset_profiler import (
     ColumnProfile,
     check_sample_key_uniqueness,
     profile_dataset_sample,
 )
-from src.qt.dialogs import error_dialog, info_dialog, warning_dialog
+from src.qt.dialogs import error_dialog, info_dialog
 from src.qt.tabs.dataset.delegates import RoleDelegate
 from src.qt.tabs.dataset.models import ColumnRoleTableModel, DatasetFileTableModel
 from src.qt.widgets.badge import StatusBadge
@@ -395,28 +391,20 @@ class DatasetWizardDialog(QDialog):
 
         # Number format
         self._combo_number_format = QComboBox()
-        self._combo_number_format.addItems([
-            "auto (자동 감지 · 권장)",
-            "polish (폴란드/유럽식 · 1 234,56 쉼표 소수점)",
-            "english (영어식 · 1,234.56 점 소수점)",
-        ])
+        self._combo_number_format.addItem("자동 감지 · 권장", "auto")
+        self._combo_number_format.addItem("폴란드/유럽식 · 1 234,56 쉼표 소수점", "1 234,56")
+        self._combo_number_format.addItem("영어식 · 1,234.56 점 소수점", "1,234.56")
         form_adv.addRow("숫자 표기 방식:", self._combo_number_format)
 
         # Same period policy
         self._combo_period_policy = QComboBox()
-        self._combo_period_policy.addItems([
-            "overwrite (해당 기간 기존 데이터 전체 교체 · 권장)",
-            "merge (중복 키 기준 병합/갱신)",
-        ])
-        form_adv.addRow("동일 기간 적재 정책:", self._combo_period_policy)
+        self._combo_period_policy.addItem("동일 월의 여러 파일 모두 합치기", "union")
+        self._combo_period_policy.addItem("동일 월의 여러 파일·중복 키 차단", "error")
+        form_adv.addRow("동일 기간 파일 처리:", self._combo_period_policy)
+        form_adv.addRow("수정 기간 처리:", QLabel("해당 기간 전체 교체 · 식별 키별 병합은 지원하지 않음"))
 
         # Header policy
-        self._combo_header_policy = QComboBox()
-        self._combo_header_policy.addItems([
-            "block_missing_or_extra (필수열 누락 차단 · 권장)",
-            "warn_only (경고 후 이름 기준 적재)",
-        ])
-        form_adv.addRow("헤더 검사 정책:", self._combo_header_policy)
+        form_adv.addRow("헤더 검사:", QLabel("필수 열 누락은 차단 · 열 순서 변경은 이름 기준 정렬"))
 
         card_adv.content_layout.addLayout(form_adv)
         layout.addWidget(card_adv, stretch=1)
@@ -660,9 +648,8 @@ class DatasetWizardDialog(QDialog):
 
         delim = self._get_selected_delimiter()
         enc = self._combo_encoding.currentText().split()[0]
-        num_fmt = self._combo_number_format.currentText().split()[0]
-        period_policy = self._combo_period_policy.currentText().split()[0]
-        header_policy = self._combo_header_policy.currentText().split()[0]
+        num_fmt = self._combo_number_format.currentData()
+        merge_mode = self._combo_period_policy.currentData()
 
         # Extract baseline header from profiles
         baseline = [p.name for p in self._current_profiles]
@@ -686,6 +673,7 @@ class DatasetWizardDialog(QDialog):
             ds.excluded_files = self._file_model.get_excluded_file_names()
             ds.baseline_columns = baseline
             ds.number_format = num_fmt
+            ds.merge_mode = merge_mode
             self._result_dataset = ds
         else:
             self._result_dataset = DatasetDefinition.create_new(
@@ -705,6 +693,7 @@ class DatasetWizardDialog(QDialog):
                 excluded_files=self._file_model.get_excluded_file_names(),
                 baseline_columns=baseline,
                 number_format=num_fmt,
+                merge_mode=merge_mode,
             )
         self.accept()
 
@@ -751,11 +740,12 @@ class DatasetWizardDialog(QDialog):
                 break
 
         # Restore number format
-        num_fmt = getattr(ds, "number_format", "polish")
-        for i in range(self._combo_number_format.count()):
-            if num_fmt.lower() in self._combo_number_format.itemText(i).lower():
-                self._combo_number_format.setCurrentIndex(i)
-                break
+        num_fmt = getattr(ds, "number_format", "auto")
+        num_fmt = {"polish": "1 234,56", "english": "1,234.56"}.get(num_fmt, num_fmt)
+        format_index = self._combo_number_format.findData(num_fmt)
+        self._combo_number_format.setCurrentIndex(max(0, format_index))
+        policy_index = self._combo_period_policy.findData(ds.merge_mode)
+        self._combo_period_policy.setCurrentIndex(max(0, policy_index))
 
         self._trigger_rescan()
 

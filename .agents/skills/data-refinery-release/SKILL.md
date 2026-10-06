@@ -13,12 +13,19 @@ description: Data Refinery (04_DataRefinery) 프로젝트의 새 버전을 릴�
 
 사용자가 "릴리즈해줘", "버전 올려서 릴리즈", "배포 준비해줘" 등을 요청하면 다음 단계에 따라 빈틈없이 수행합니다.
 
+## 프로젝트 경로·설정 규칙
+
+- 앱 설치: `%LOCALAPPDATA%\Programs\Data Refinery`.
+- 설정·로그·프리셋·작업 DB: 설치 폴더 아래 `UserSetting` (DB는 `UserSetting\datasets`).
+- 설치/제거는 UserSetting 자료를 보존하며, 최초 실행 이관은 기존 원본을 삭제하지 않는다.
+- 공통 지침은 `AGENTS.md`, 상세 규칙은 `docs/project-structure.md`를 따른다.
+
 ### 1단계: 버전 확인 및 업데이트 (`__version__`)
-1. `src/data_refinery.py` 파일의 `__version__ = "X.Y.Z"`를 확인합니다.
+1. `src/version.py` 파일의 `__version__ = "X.Y.Z"`를 확인합니다.
 2. 사용자가 버전을 명시하지 않은 경우:
    - 버그 픽스/단순 개선: 패치 버전 증가 (예: `1.13.0` -> `1.13.1`)
    - 새 기능/아키텍처 변경: 마이너 버전 증가 (예: `1.12.0` -> `1.13.0`)
-3. `src/data_refinery.py`의 `__version__`을 새 버전으로 변경합니다.
+3. `src/version.py`의 `__version__`을 새 버전으로 변경합니다.
 
 ### 2단계: 릴리즈 노트 자동 작성
 1. `release/RELEASE_NOTES_v<version>.md` 파일을 생성합니다.

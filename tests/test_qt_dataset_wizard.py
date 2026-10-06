@@ -9,12 +9,9 @@ from pathlib import Path
 # Enforce offscreen Qt rendering for headless testing
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
 
-from src.dataset_config import DatasetDefinition
 from src.qt.app import create_or_get_app
-from src.qt.tabs.dataset.models import ColumnRoleTableModel, DatasetFileTableModel
+from src.dataset_config import DatasetDefinition, DatasetRegistry
 from src.qt.tabs.dataset.wizard import DatasetWizardDialog
 
 
@@ -118,6 +115,29 @@ class TestQtDatasetWizard(unittest.TestCase):
         self.assertIn("model_code", res.key_columns)
         self.assertIn("sales_qty", res.numeric_columns)
         self.assertEqual(res.include_keywords, ["sales"])
+
+    def test_save_and_edit_preserve_block_policy_and_english_number_format(self):
+        registry = DatasetRegistry(Path(self.temp_dir.name) / "registry")
+        wizard = DatasetWizardDialog(registry=registry)
+        wizard._edit_name.setText("Strict sales")
+        wizard._picker_input.set_path(str(self.input_dir))
+        wizard._trigger_rescan()
+        wizard._switch_to_step(1)
+        wizard._combo_period_policy.setCurrentIndex(wizard._combo_period_policy.findData("error"))
+        wizard._combo_number_format.setCurrentIndex(wizard._combo_number_format.findData("1,234.56"))
+        wizard._on_save_clicked()
+        dataset = wizard.get_dataset()
+        self.assertEqual(dataset.merge_mode, "error")
+        self.assertEqual(dataset.number_format, "1,234.56")
+        edited = DatasetWizardDialog(dataset=dataset, registry=registry)
+        self.assertEqual(edited._combo_period_policy.currentData(), "error")
+        self.assertEqual(edited._combo_number_format.currentData(), "1,234.56")
+
+    def test_edit_restores_legacy_polish_number_format(self):
+        registry = DatasetRegistry(Path(self.temp_dir.name) / "registry")
+        dataset = DatasetDefinition.create_new(name="Legacy", input_folder=str(self.input_dir), publish_folder="", number_format="polish")
+        wizard = DatasetWizardDialog(dataset=dataset, registry=registry)
+        self.assertEqual(wizard._combo_number_format.currentData(), "1 234,56")
 
 
 if __name__ == "__main__":

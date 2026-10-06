@@ -26,7 +26,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='App04_DataRefinery_Luncher',
+    name='App04_DataRefinery_Launcher',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

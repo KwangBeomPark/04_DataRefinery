@@ -31,13 +31,15 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Pinned release dependencies are inconsistent.'
 }
 
-$versionMatch = Select-String -Path 'src\data_refinery.py' -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+$versionMatch = Select-String -Path 'src\version.py' -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
 if (-not $versionMatch) {
-    throw 'Could not read __version__ from data_refinery.py.'
+    throw 'Could not read __version__ from version.py.'
 }
 $appVersion = $versionMatch.Matches[0].Groups[1].Value
 $bundleName = "App04_DataRefinery_v$appVersion"
 $appExeName = "$bundleName.exe"
+$sourceCommit = git rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Could not identify release source commit.' }
 
 if (-not $SkipTests) {
     & $buildPython -m unittest discover -s tests -v
@@ -50,6 +52,8 @@ if (-not $SkipTests) {
 if ($LASTEXITCODE -ne 0) {
     throw 'PyInstaller build failed.'
 }
+@{ version=$appVersion; commit=$sourceCommit; builtAtUtc=[DateTime]::UtcNow.ToString('o') } |
+    ConvertTo-Json | Set-Content -LiteralPath 'release\build\release-input.json' -Encoding utf8
 
 $mainExePath = Join-Path $projectRoot "release\dist\$bundleName\$appExeName"
 if (-not $SkipSign -and (Test-Path $mainExePath)) {
@@ -78,7 +82,13 @@ if (-not $iscc) {
     throw 'Inno Setup 6 or 7 is required. Please install Inno Setup and run again.'
 }
 
-& $iscc "/DAppVersion=$appVersion" "/DAppBundleName=$bundleName" "/DAppExeName=$appExeName" 'release\installer\DataRefinery.iss'
+$compilerSignArgs = @()
+if (-not $SkipSign) {
+    $thumbprint = if ([string]::IsNullOrWhiteSpace($CertificateThumbprint)) { 'E9C72CF5090840A1805296525D56BE680622A7FD' } else { $CertificateThumbprint }
+    $compilerSignArgs = Get-InnoReleaseSignArguments -CertificateThumbprint $thumbprint -TimestampServer $TimestampServer
+    New-Item -ItemType Directory -Force -Path 'release\build\signed-uninstaller' | Out-Null
+}
+& $iscc "/DAppVersion=$appVersion" "/DAppBundleName=$bundleName" "/DAppExeName=$appExeName" @compilerSignArgs 'release\installer\DataRefinery.iss'
 if ($LASTEXITCODE -ne 0) {
     throw 'Inno Setup build failed.'
 }
@@ -89,7 +99,10 @@ if (-not (Test-Path $installerPath)) {
 }
 
 if (-not $SkipSign) {
-    Invoke-SignBinary -FilePath $installerPath -CertificateThumbprint $CertificateThumbprint -TimestampServer $TimestampServer
+    $signature = Get-AuthenticodeSignature -LiteralPath $installerPath
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $thumbprint -or -not $signature.TimeStamperCertificate) {
+        throw 'Compiled installer signature or timestamp is invalid.'
+    }
 }
 $installerHash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $checksumPath = "$installerPath.sha256"

@@ -8,7 +8,6 @@ import webbrowser
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
@@ -32,7 +31,7 @@ from src.qt.tabs.csv_tab import CsvRepairTab
 from src.qt.tabs.dataset.tab import DatasetPublisherTab
 from src.qt.tabs.promotion_tab import PromotionTab
 from src.qt.theme import PALETTE
-from src.update_checker import check_for_update, load_settings, save_settings
+from src.update_checker import load_settings
 from src.version import __version__
 
 

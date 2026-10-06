@@ -7,7 +7,6 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QWidget
 
-from src.ui_components import PALETTE
 
 _BADGE_STYLES = {
     "ok": {

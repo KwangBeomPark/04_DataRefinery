@@ -15,7 +15,7 @@ The application is deliberately designed as a home for additional data
 normalizers. Pricing and other business-data templates can be added without
 mixing their source rules into the promotion model.
 
-## Current capabilities (v2.0.0)
+## Current capabilities (v2.0.1)
 
 - **Modern PySide6 (Qt) Desktop UI** — Completely transitioned from legacy Tkinter to a
   modern, DPI-aware design system (Primary Blue theme, dark header, modern cards, badges, steppers)
@@ -51,12 +51,12 @@ mixing their source rules into the promotion model.
   replaces revised periods, and inspects period, row-count, and numeric totals before approval.
   Approved snapshots publish to CSV and generate Excel analysis templates with Power Query.
 - **Real-time multilingual support** — Instant interface language switching between English, Korean, and Polish.
-- **Fast per-user installation** — Runs from Local AppData in an `onedir` layout for zero unpack delay.
+- **Fast per-user installation** — Runs from `%LOCALAPPDATA%\Programs\Data Refinery` in an `onedir` layout for zero unpack delay.
 - **Update notification** — Checks GitHub for new stable releases in the background.
 
 ## Quality and verification status
 
-- **Automated test suite & CI**: 518 tests covering the entire Qt and engine pipeline; 517 pass
+- **Automated test suite & CI**: 528 tests covering the entire Qt and engine pipeline; 527 pass
   and one optional Excel COM test is skipped by default.
   1,000,000-row benchmark completed in 1.379s. Cross-reviewed and verified by Claude Opus 5.5 and Codex Sol 6.1.
 
@@ -71,17 +71,34 @@ only when it is needed for analysis.
 ## Download and run
 
 Download the single setup file from the latest release. It installs the app
-only for the current Windows user; Python and extra libraries are not required.
+only for the current Windows user at `%LOCALAPPDATA%\Programs\Data Refinery`;
+Python and extra libraries are not required.
 
 👉 **[Download the latest installer](https://github.com/KwangBeomPark/04_DataRefinery/releases/latest)**
 
-1. Download `App04_DataRefinery_Setup_v2.0.0.exe`.
+1. Download `App04_DataRefinery_Setup_v2.0.1.exe`.
 2. Run the installer. It creates **Data Refinery** shortcuts in the Start menu
    and on the desktop.
 3. Use **CSV repair** for malformed delimited files, **Promotion template**
    for promotion rules and daily support data, **Data aggregator** to group and summarize a CSV file,
    or **Dataset publisher** to accumulate, review, and publish period data for Excel.
 4. Results are saved beside the source data with a `YYYYMMDD_HHMM` timestamp.
+
+The installation folder contains application binaries and bundled libraries.
+Settings, logs, and working databases are stored separately:
+
+| Purpose | Location |
+| --- | --- |
+| Application installation | `%LOCALAPPDATA%\Programs\Data Refinery` |
+| Settings, recent configurations, diagnostic logs | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting` |
+| Dataset definitions and local DuckDB working databases | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting\datasets` |
+| Published CSV and connected Excel templates | The shared folder selected by the publisher |
+
+`UserSetting` is the **user configuration and working-data subfolder inside the installation directory**. On first use, legacy settings, logs, presets, and dataset workspaces are copied into
+`UserSetting` and verified. Original folders are retained as backups; existing new
+settings take precedence. Shared CSV paths and Excel connections are unchanged.
+The promotion template can be exported from its tab; its source copy is
+`assets/templates/promotion_template.xlsx`.
 
 To try aggregation without your own data, open `sample_data/monthly_ledger_sample.csv`
 in the **Data aggregator** tab. Add `디비전` as a row group and `매출` as a value,
@@ -91,7 +108,9 @@ preview the result, then save it as CSV or Excel.
 
 The repository keeps application code in `src`, bundled files in `assets`,
 build scripts in `scripts`, and installer configuration plus generated release
-output in `release`.
+output in `release`. See [project layout and naming rules](docs/project-structure.md)
+and the [current code map](AI_CODE_MAP.md). The sole application version definition
+is `src/version.py`; Python modules retain their existing snake_case names.
 
 Run the desktop app during development with:
 

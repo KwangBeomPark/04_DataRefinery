@@ -32,7 +32,7 @@ from src.file_reveal import open_containing_folder
 from src.update_checker import check_for_update, load_settings, save_settings
 from src.ui_components import PALETTE, UpdateMenu
 
-__version__ = "2.0.0"
+from src.version import __version__
 
 from src.i18n import _LANGUAGE_CODES, _UI_TEXT
 

@@ -8,7 +8,7 @@ if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$versionMatch = Select-String -Path (Join-Path $projectRoot 'src\data_refinery.py') -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
+$versionMatch = Select-String -Path (Join-Path $projectRoot 'src\version.py') -Pattern '^__version__\s*=\s*"([^"]+)"' | Select-Object -First 1
 if (-not $versionMatch) {
     throw 'Could not read the application version.'
 }
@@ -26,11 +26,20 @@ if ($install.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $appExe)) {
 }
 
 $uninstaller = Join-Path $installDir 'unins000.exe'
+$userSetting = Join-Path $installDir 'UserSetting'
+if (-not (Test-Path -LiteralPath $userSetting -PathType Container)) {
+    throw 'Installer did not create UserSetting.'
+}
+$preservedSettings = Join-Path $userSetting 'settings.json'
+Set-Content -LiteralPath $preservedSettings -Value '{"smoke_test":true}' -Encoding utf8
 if (-not (Test-Path -LiteralPath $uninstaller)) {
     throw "Uninstaller missing: $uninstaller"
 }
 $uninstall = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -WindowStyle Hidden -PassThru -Wait
 if ($uninstall.ExitCode -ne 0 -or (Test-Path -LiteralPath $appExe)) {
     throw "Uninstallation failed: exit code $($uninstall.ExitCode)"
+}
+if (-not (Test-Path -LiteralPath $preservedSettings)) {
+    throw 'Uninstallation removed UserSetting data.'
 }
 Write-Host 'Installer smoke test passed.'

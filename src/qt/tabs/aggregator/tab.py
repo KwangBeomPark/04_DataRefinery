@@ -13,17 +13,14 @@ from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QTableView,
     QVBoxLayout,
@@ -31,21 +28,12 @@ from PySide6.QtWidgets import (
 )
 
 from src.aggregator_fields import (
-    DIMENSION,
-    MEASURE,
-    ROWS,
-    VALUES,
     AggregatorFieldState,
-    PoolField,
 )
 from src.background_jobs import BackgroundJobRunner, JobCallbacks
 from src.data_aggregator import (
-    AGGREGATION_FUNCTIONS,
     AggregationResult,
     AggregationSpec,
-    ColumnGroupRule,
-    DerivedFormulaRule,
-    FilterCondition,
     aggregate_dataset,
     inspect_dataset_schema,
     preview_aggregation,
@@ -55,14 +43,11 @@ from src.i18n import _UI_TEXT
 from src.preset_manager import (
     AggregationPreset,
     delete_preset,
-    export_preset_file,
-    import_preset_file,
     list_presets,
-    load_preset,
     preset_exists,
     save_preset,
 )
-from src.qt.dialogs import confirm_dialog, error_dialog, info_dialog, save_file_dialog, warning_dialog
+from src.qt.dialogs import confirm_dialog, error_dialog, info_dialog, warning_dialog
 from src.qt.jobs import create_qt_job_runner
 from src.qt.tabs.aggregator.dialogs import (
     FilterRuleDialog,

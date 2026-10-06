@@ -2,6 +2,15 @@
 
 4번째 탭에서 정리된 CSV를 기간별로 누적하고, 검수한 결과를 회사 팀 공유 폴더에 배포합니다. 자료를 만드는 담당자는 이 앱을 사용하고, 분석하는 사람은 Microsoft 365 Excel 64비트의 기본 기능만 사용합니다.
 
+## 앱 설치와 데이터 저장 위치
+
+앱은 `%LOCALAPPDATA%\Programs\Data Refinery`에 설치됩니다. 이 폴더는 프로그램 파일용입니다.
+설정·로그는 `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting`, 데이터셋 설정·작업 DB는
+`%LOCALAPPDATA%\Programs\Data Refinery\UserSetting\datasets`에 저장합니다. 공유 배포 폴더에는 승인된 CSV와
+분석용 Excel 파일을 둡니다. 저장 위치들은 용도가 다르며, 소스·빌드 폴더 정리 시
+사용자 데이터를 삭제하거나 공유 폴더 연결을 변경하지 않습니다. 기존 로컬 설정·작업 DB는
+최초 실행 시 새 UserSetting으로 복사·검증하며 원본은 백업으로 보존합니다.
+
 ## 처음 설정하기
 
 1. **데이터셋 배포 → + 새 데이터셋**을 선택합니다.

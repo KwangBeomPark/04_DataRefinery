@@ -33,7 +33,7 @@ from src.promotion_normalizer import (
     preview_daily_rows,
 )
 from src.qt.app import get_asset_path
-from src.qt.dialogs import error_dialog, info_dialog, save_file_dialog, warning_dialog
+from src.qt.dialogs import error_dialog, info_dialog, save_file_dialog
 from src.qt.jobs import create_qt_job_runner
 from src.qt.widgets.card import CardWidget
 from src.qt.widgets.file_picker import FilePickerWidget

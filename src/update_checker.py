@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -11,12 +10,13 @@ from pathlib import Path
 from typing import Callable
 from urllib.request import Request, urlopen
 
+from src.app_paths import ensure_user_settings_directory
+
 
 DEFAULT_REPOSITORY = "KwangBeomPark/04_DataRefinery"
 CHECK_INTERVAL = timedelta(hours=24)
 REQUEST_TIMEOUT_SECONDS = 2
 APPLICATION_NAME = "Data Refinery"
-LEGACY_APPLICATION_NAMES = ("CSV Modifier",)
 
 
 @dataclass(frozen=True)
@@ -27,8 +27,7 @@ class ReleaseInfo:
 
 
 def application_data_directory() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(Path.home(), "AppData", "Local")
-    return Path(base) / APPLICATION_NAME
+    return ensure_user_settings_directory()
 
 
 def settings_path() -> Path:
@@ -38,16 +37,9 @@ def settings_path() -> Path:
 def load_settings(path: Path | None = None) -> dict:
     target = path or settings_path()
     try:
-        return json.loads(target.read_text(encoding="utf-8"))
+        settings = json.loads(target.read_text(encoding="utf-8"))
+        return settings if isinstance(settings, dict) else {"update_check_enabled": True}
     except (OSError, json.JSONDecodeError):
-        if path is None:
-            base = target.parent.parent
-            for legacy_name in LEGACY_APPLICATION_NAMES:
-                legacy_path = base / legacy_name / "settings.json"
-                try:
-                    return json.loads(legacy_path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    continue
         return {"update_check_enabled": True}
 
 

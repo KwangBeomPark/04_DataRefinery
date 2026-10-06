@@ -11,9 +11,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from src.dataset_config import DatasetDefinition, DatasetRegistry
 from src.qt.app import create_or_get_app
 from src.qt.tabs.aggregator.tab import AggregatorTab
-from src.qt.tabs.csv_tab import CsvRepairTab
 from src.qt.tabs.dataset.tab import DatasetPublisherTab
-from src.qt.tabs.promotion_tab import PromotionTab
 
 
 class TestQtIntegrationPipeline(unittest.TestCase):
@@ -44,7 +42,6 @@ class TestQtIntegrationPipeline(unittest.TestCase):
         tab.state.place_value("qty")
         tab.state.place_value("sales")
 
-        out_csv = self.base_dir / "aggregated_test.csv"
         tab.picker_output.set_path(str(self.base_dir))
         tab.edit_output_name.setText("aggregated_test.csv")
 

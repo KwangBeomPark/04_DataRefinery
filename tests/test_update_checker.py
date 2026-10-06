@@ -67,11 +67,13 @@ class TestUpdateChecker(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             local_app_data = Path(directory) / "Local"
             legacy_path = local_app_data / "CSV Modifier" / "settings.json"
-            target_path = local_app_data / "Data Refinery" / "settings.json"
             legacy_path.parent.mkdir(parents=True)
             legacy_path.write_text(
                 json.dumps({"update_check_enabled": False}), encoding="utf-8"
             )
 
-            with patch("src.update_checker.settings_path", return_value=target_path):
+            with patch.dict("os.environ", {"LOCALAPPDATA": str(local_app_data)}):
                 self.assertEqual(load_settings(), {"update_check_enabled": False})
+                target_path = local_app_data / "Programs" / "Data Refinery" / "UserSetting" / "settings.json"
+                self.assertTrue(target_path.exists())
+                self.assertTrue(legacy_path.exists())
