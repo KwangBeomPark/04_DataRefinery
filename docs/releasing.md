@@ -42,7 +42,8 @@ optional installation/update entry point with the existing trusted publisher.
    Both app and launcher use the same fresh environment from `requirements.txt`.
    Tests use isolated AppData. An unsigned installer preview and both naming
    aliases are staged in `dist/staging`. The previous official `release` is
-   untouched. `-SkipTests` is for CI after its separate tests have passed.
+   untouched. `-SkipTests` is for unsigned CI previews; such build records cannot
+   be used by the signer. Starting a build invalidates the old provenance record.
 3. Keep SimplySign Desktop logged in. In a user-opened Administrator PowerShell:
 
    ```powershell
@@ -62,8 +63,14 @@ optional installation/update entry point with the existing trusted publisher.
    official directory promoted; the prior one is archived, with rollback if the
    directory promotion fails.
 6. To also push source, wait for the exact-commit Windows release check, tag and
-   upload a new version, use `scripts/sign.ps1 -Publish`. An existing published
-   release is not overwritten. Upload errors are failures, not success messages.
+   upload a new version, use `scripts/sign.ps1 -Publish`. The initial upload is a
+   draft; it is published only after uploaded digests match. Already tagged
+   versions cannot be resigned. Upload errors are failures, not success messages.
+7. After an interrupted upload, use `scripts/sign.ps1 -PublishOnly` without
+   accessing the signing key. It requires the same clean source commit and
+   verified existing official artifacts, reuses matching tags/drafts, uploads
+   missing files only and refuses changed existing remote files. It never uses
+   `--clobber`. Result records distinguish whether local promotion occurred.
 
 Checksums use UTF-8 without BOM and cover every official file except
 `SHA256SUMS.txt` itself, including manifest and notes. The manifest records
@@ -82,7 +89,9 @@ Fault-injection tests do not access private keys. CI additionally builds and
 installs/uninstalls the unsigned preview on an ephemeral Windows runner.
 It does not prove live SimplySign key access or manual GUI/Excel behavior.
 
-Default installation is `%LOCALAPPDATA%\Programs\Data Refinery`. Its
+Installation uses `%LOCALAPPDATA%\Programs\Data Refinery`; the wizard does not
+offer a different directory. `/DIR` is used only for isolated CI installer tests.
+Its
 `UserSetting` stores configuration, logs, presets and `datasets` workspaces.
 The installer excludes bundled UserSetting data and preserves the directory on
 uninstall. Legacy application directories are not recursively deleted.

@@ -8,6 +8,8 @@ Set-Location -LiteralPath $projectRoot
 $buildDirectory = Assert-ProjectPath (Join-Path $projectRoot 'build')
 $distDirectory = Assert-ProjectPath (Join-Path $projectRoot 'dist')
 New-Item -ItemType Directory -Path $buildDirectory,$distDirectory -Force | Out-Null
+$inputPath = Join-Path $buildDirectory 'release-input.json'
+if (Test-Path -LiteralPath $inputPath) { Remove-Item -LiteralPath $inputPath }
 $version = Get-ReleaseVersion
 $bundleName = "App04_DataRefinery_v$version"
 $commit = & git rev-parse HEAD
@@ -71,7 +73,7 @@ $endCommit = & git rev-parse HEAD
 $endDirty = & git status --porcelain
 if ($commit -ne $endCommit -or [string]($dirty -join "`n") -ne [string]($endDirty -join "`n")) { throw 'Source status changed during the build. Rebuild before signing.' }
 $inputRecord = [ordered]@{
-    version=$version; commit=$commit; sourceClean=$sourceClean; builtAtUtc=$builtAt;
+    version=$version; commit=$commit; sourceClean=$sourceClean; testsPassed=(-not [bool]$SkipTests); builtAtUtc=$builtAt;
     bundleFiles=$bundleRecords; launcherSha256=(Get-FileHash -LiteralPath $launcher).Hash.ToLowerInvariant()
 }
 [IO.File]::WriteAllText((Join-Path $buildDirectory 'release-input.json'), ($inputRecord | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
