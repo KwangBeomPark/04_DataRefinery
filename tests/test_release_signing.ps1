@@ -96,6 +96,10 @@ try {
     Set-Content -LiteralPath (Join-Path $official ($binaryNames[0]+'.sha256')) -Value ('0'*64)
     Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'A wrong sidecar was accepted.' 'checksum sidecar is inconsistent'
     Write-TestMetadata
+    $sidecarPath = Join-Path $official ($binaryNames[0]+'.sha256')
+    [IO.File]::WriteAllText($sidecarPath,[IO.File]::ReadAllText($sidecarPath),[Text.UTF8Encoding]::new($true))
+    Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'A sidecar BOM was accepted.' 'checksum sidecar is inconsistent'
+    Write-TestMetadata
     $sumContent = [IO.File]::ReadAllText($sumsPath)
     [IO.File]::WriteAllText($sumsPath,$sumContent,[Text.UTF8Encoding]::new($true))
     Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'A BOM was accepted.' 'must not have a UTF8 BOM'
@@ -111,6 +115,7 @@ try {
     $fakeGh = Join-Path $testRoot 'gh.cmd'
     $tagMarker = Join-Path $testRoot 'tag-created'
     $runMarker = Join-Path $testRoot 'run-queried'
+    $absentInventory = Join-Path $testRoot 'absent-inventory'
     $callLog = Join-Path $testRoot 'native-calls.log'
     $partialApi = Join-Path $testRoot 'partial-api.json'
     $completeApi = Join-Path $testRoot 'complete-api.json'
@@ -133,10 +138,14 @@ try {
     Set-Content -LiteralPath $fakeGit -Value $gitLines -Encoding ascii
     $ghLines = @('@echo off',('echo gh %*>>"'+$callLog+'"'),
         'if "%1 %2"=="repo view" (','  echo {"nameWithOwner":"example/repo","isPrivate":true}','  exit /b 0',')',
-        'if "%1 %2"=="release list" (','  echo [{"tagName":"v2.0.1","isDraft":true}]','  exit /b 0',')',
+        'if "%1 %2"=="release list" (',('  if exist "'+$absentInventory+'" (echo []&exit /b 0)'),
+        '  echo [{"tagName":"v2.0.1","isDraft":true}]','  exit /b 0',')',
+        'if "%1 %2"=="release view" (','  echo {"apiUrl":"https://api.github.com/repos/example/repo/releases/42","isDraft":true}','  exit /b 0',')',
         'if "%1 %2"=="run list" (',('  if exist "'+$runMarker+'" (echo [{"databaseId":123,"status":"completed","conclusion":"success"}]&exit /b 0)'),
         ('  type nul>"'+$runMarker+'"'),'  echo []','  exit /b 0',')',
-        ('if "%1"=="api" (type "'+$activeApi+'"&exit /b 0)'),
+        'if "%1"=="api" (','  if not "%2"=="repos/example/repo/releases/42" (echo 404 Not Found 1>&2&exit /b 1)',
+        ('  type "'+$activeApi+'"'),'  exit /b 0',')',
+        ('if "%1 %2"=="release create" copy /y "'+$completeApi+'" "'+$activeApi+'">nul'),
         ('if "%1 %2"=="release upload" copy /y "'+$completeApi+'" "'+$activeApi+'">nul'),
         ('if "%1 %2"=="release edit" copy /y "'+$publicApi+'" "'+$activeApi+'">nul'),'exit /b 0')
     Set-Content -LiteralPath $fakeGh -Value $ghLines -Encoding ascii
@@ -150,11 +159,23 @@ try {
         Assert-True (([regex]::Matches($trace,'gh run list')).Count -eq 2) 'The empty CI result did not retry.'
         Assert-True ($trace -match 'gh release upload' -and $trace -notmatch '--clobber') 'Upload recovery was not limited to missing assets.'
         Assert-True ($trace -notmatch 'sign ' -and $trace -notmatch 'release create') 'Resume attempted to sign or recreate a draft.'
+        Assert-True ($trace -match 'gh api repos/example/repo/releases/42' -and $trace -notmatch 'releases/tags/') 'A draft was queried through the published-only tag endpoint.'
         Assert-Rejected { Assert-UnreleasedVersion -Version '2.0.1' } 'An already tagged version could be resigned.' 'Version already tagged'
         $published = Get-Content -LiteralPath $activeApi -Raw | ConvertFrom-Json
         Assert-True (@(Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths).Count -eq 0) 'Completed upload was not recognized.'
         $published.assets[0].digest = 'sha256:' + ('0'*64)
         Assert-Rejected { Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths } 'A remote mismatch would be overwritten.' 'overwriting is forbidden'
+        $published.assets[0].digest = $uploadRecords[0].digest
+        $published.assets[0].state = 'starter'
+        Assert-Rejected { Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths } 'An incomplete upload residue was overwritten.' 'overwriting is forbidden'
+        # Also exercise a newly created draft, rather than only resuming an existing one.
+        Remove-Item -LiteralPath $tagMarker
+        New-Item -ItemType File -Path $absentInventory | Out-Null
+        [IO.File]::WriteAllText($callLog,'')
+        Publish-VerifiedRelease -Directory $official -Manifest $mockManifest
+        $newTrace = [IO.File]::ReadAllText($callLog)
+        Assert-True ($newTrace -match 'gh release create.*--draft' -and $newTrace -match 'gh release edit') 'A new draft did not pass verification and publish.'
+        Assert-True ($newTrace -notmatch 'releases/tags/|--clobber') 'The new draft used a published-only lookup or replaced uploaded content.'
         Set-Content -LiteralPath $fakeGh -Value @('@echo off','echo authentication failed 1>&2','exit /b 1') -Encoding ascii
         Assert-Rejected { Get-GitHubReleaseState -Version '2.0.1' } 'A failed GitHub lookup was treated as absence.' 'repository lookup failed'
     } finally { $env:PATH = $savedPath }

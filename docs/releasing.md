@@ -71,6 +71,9 @@ optional installation/update entry point with the existing trusted publisher.
    verified existing official artifacts, reuses matching tags/drafts, uploads
    missing files only and refuses changed existing remote files. It never uses
    `--clobber`. Result records distinguish whether local promotion occurred.
+   Draft verification resolves the release ID through authenticated `gh release
+   view`; it does not use the published-only tag endpoint. A failed upload with
+   a `starter` residue requires manually removing that failed asset before retry.
 
 Checksums use UTF-8 without BOM and cover every official file except
 `SHA256SUMS.txt` itself, including manifest and notes. The manifest records
@@ -91,8 +94,7 @@ It does not prove live SimplySign key access or manual GUI/Excel behavior.
 
 Installation uses `%LOCALAPPDATA%\Programs\Data Refinery`; the wizard does not
 offer a different directory. `/DIR` is used only for isolated CI installer tests.
-Its
-`UserSetting` stores configuration, logs, presets and `datasets` workspaces.
+Its `UserSetting` stores configuration, logs, presets and `datasets` workspaces.
 The installer excludes bundled UserSetting data and preserves the directory on
 uninstall. Legacy application directories are not recursively deleted.
 Runtime one-time migration copies and hashes old data, preserves originals,

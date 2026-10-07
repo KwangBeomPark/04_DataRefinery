@@ -218,8 +218,9 @@ function Assert-ReleaseDirectory {
         if ((Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant() -ne $record.sha256 -or (Get-Item -LiteralPath $path).Length -ne $record.size -or $record.signerThumbprint -ne $Thumbprint) {
             throw "Manifest content mismatch: $path"
         }
-        $sidecar = [IO.File]::ReadAllText("$path.sha256").Trim()
-        if ($sidecar -ne "$($record.sha256) *$($record.name)") { throw 'The binary checksum sidecar is inconsistent.' }
+        $sidecar = [IO.File]::ReadAllBytes("$path.sha256")
+        $expectedSidecar = [Text.UTF8Encoding]::new($false).GetBytes("$($record.sha256) *$($record.name)`n")
+        if ([Convert]::ToBase64String($sidecar) -ne [Convert]::ToBase64String($expectedSidecar)) { throw 'The binary checksum sidecar is inconsistent.' }
     }
     $note = "RELEASE_NOTES_v$($manifest.version).md"
     if ((Get-FileHash -LiteralPath (Join-Path $Directory $note)).Hash -ne
@@ -317,13 +318,22 @@ function Get-GitHubReleaseState {
 
 function Get-UploadedRelease {
     param([object]$Repository, [string]$Tag)
-    $query = Invoke-NativeQuery -Command gh -Arguments @('api',"repos/$($Repository.nameWithOwner)/releases/tags/$Tag")
+    # The tag endpoint only returns published releases. gh view also resolves drafts.
+    $identityQuery = Invoke-NativeQuery -Command gh -Arguments @('release','view',$Tag,'--repo',$Repository.nameWithOwner,'--json','apiUrl,isDraft')
+    if ($identityQuery.exitCode -ne 0) { throw 'Cannot resolve the GitHub release identity; authentication is required for drafts.' }
+    $identity = $identityQuery.output | ConvertFrom-Json
+    $prefix = "https://api.github.com/repos/$($Repository.nameWithOwner)/releases/"
+    if (-not $identity.apiUrl.StartsWith($prefix,[StringComparison]::Ordinal) -or
+        $identity.apiUrl.Substring($prefix.Length) -notmatch '^\d+$') { throw 'Unexpected GitHub release API identity.' }
+    $endpoint = $identity.apiUrl.Substring('https://api.github.com/'.Length)
+    # Avoid decoding unrelated UTF-8 release notes in Windows PowerShell 5.1.
+    $query = Invoke-NativeQuery -Command gh -Arguments @('api',$endpoint,'--jq','{ draft, prerelease, tag_name, assets: [.assets[] | {name, state, size, digest}] }')
     if ($query.exitCode -eq 0) { return ($query.output | ConvertFrom-Json) }
-    # Public GitHub metadata can be independently checked with Windows' HTTP stack.
-    if (-not $Repository.isPrivate) {
-        return Invoke-RestMethod -Uri "https://api.github.com/repos/$($Repository.nameWithOwner)/releases/tags/$Tag" -Headers @{'User-Agent'='DataRefinery-Release-Verification'} -TimeoutSec 25
+    # Anonymous fallback is appropriate only for a known public, published release.
+    if (-not $Repository.isPrivate -and -not $identity.isDraft) {
+        return Invoke-RestMethod -Uri $identity.apiUrl -Headers @{'User-Agent'='DataRefinery-Release-Verification'} -TimeoutSec 25
     }
-    throw 'Cannot verify the private GitHub release.'
+    throw 'Cannot verify the private or draft GitHub release.'
 }
 
 function Get-MissingReleaseAssets {
