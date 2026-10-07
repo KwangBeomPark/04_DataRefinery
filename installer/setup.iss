@@ -1,4 +1,7 @@
 ; Build with scripts/build.ps1; sign with scripts/sign.ps1.
+#if VER < EncodeVer(6, 7, 0)
+  #error Inno Setup 6.7+ or 7 is required
+#endif
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif

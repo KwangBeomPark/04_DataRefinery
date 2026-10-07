@@ -49,9 +49,7 @@ function Get-InnoCompiler {
     }
     foreach ($candidate in $candidates) {
         if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
-        $compilerVersion = (Get-Item -LiteralPath $candidate).VersionInfo.FileVersion
-        if ($compilerVersion -notmatch '^(\d+)\.(\d+)' -or [int]$Matches[1] -lt 6 -or
-            ([int]$Matches[1] -eq 6 -and [int]$Matches[2] -lt 7)) { throw 'Inno Setup 6.7+ or 7 is required.' }
+        # ISCC can expose 0.0.0.0 file metadata. setup.iss checks the compiler's own VER.
         return $candidate
     }
     throw 'Install Inno Setup 6.7+ or 7 before building.'
