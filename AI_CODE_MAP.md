@@ -97,7 +97,7 @@ flowchart TD
 - 런처 spec: `installer/data_refinery_launcher.spec`.
 - 설치 설계도: `installer/setup.iss`, 앱 식별자는 기존 값을 유지합니다. 번들·출력 폴더는 컴파일러 매개변수로 주입합니다.
 - 빌드: `scripts/build.ps1` (앱·런처·미서명 설치 검증본), 서명·공식 스테이징·선택 게시: `scripts/sign.ps1`.
-- 설치 파일: `App04_DataRefinery_Setup_v<version>.exe` / `DataRefinery-Setup.v<version>.exe`, 앱: `App04_DataRefinery_v<version>.exe`.
+- 설치 파일: `App04_DataRefinery_Setup_v<version>.exe` 한 개 (과거 이름은 읽기 호환), 앱: `App04_DataRefinery_v<version>.exe`.
 - 런처: `App04_DataRefinery_Launcher.exe` (과거 `Luncher` 오타 수정).
 - `build/`, `dist/`, `release/`, `tools/`는 Git 제외입니다. 최신 공식 파일만 `release/`에, 서명 기록과 보호 파일은 `tools/release-history/`에 보관합니다.
 - 릴리즈 노트 원본은 `docs/release-notes/`, 배포 절차는 `docs/releasing.md`에 있습니다. `SHA256SUMS.txt`는 자기 자신을 제외한 공식 폴더의 모든 파일을 포함합니다.
@@ -113,3 +113,31 @@ python -m src.data_refinery --version
 Qt 테스트는 offscreen 실행을 포함합니다. Windows CI는 린트·테스트·미서명 빌드·설치/제거를 점검합니다.
 `scripts/smoke_installer.ps1`은 임시 CI 러너 전용이며 설치된 GUI의 수동 사용성까지 검증하지 않습니다.
 실제 Excel COM 테스트는 `DATAREFINERY_EXCEL_TESTS=1`로 활성화합니다. 최종 배포에는 별도의 서명·타임스탬프·체크섬 검증이 필요합니다.
+
+
+## 2026-10-07 공통 정비 1단계
+
+- 공통 기준·현재 예외: [SUITE_STANDARDIZATION.md](docs/SUITE_STANDARDIZATION.md).
+- 수정·자동 검사·설치 흐름 소스 점검·후속 과제: [STANDARDIZATION_PHASE1_REVIEW.md](docs/STANDARDIZATION_PHASE1_REVIEW.md).
+- `UserSetting/`, 로컬 환경 파일, 개인 키는 Git 제외 대상이며 실제 사용자 자료·기존 배포물은 유지합니다.
+
+## 2026-10-07 공통 정비 2단계
+
+- `installer/setup.iss`: `PrepareToInstall`에서 등록·경로·구형 EXE 해시를 기록하고, 추가 Restart Manager 리소스를 등록합니다. 첫 `BeforeInstall`에서 잠금 차단, `CurStepChanged(ssDone)`에서 새 EXE 해시 확인 후 사전 확인된 구형 leaf만 정리합니다. 현재·더 높은 버전 및 UserSetting은 보존합니다.
+- `tests/test_installer_upgrade.py`: 설치를 진행하지 않는 Pascal 정책 시험. Application Control 차단은 실행 통과 대신 skip으로 구분합니다.
+- 결과·한계: [STANDARDIZATION_PHASE2_REVIEW.md](docs/STANDARDIZATION_PHASE2_REVIEW.md).
+
+## 2026-10-08 공통 정비 3–5단계
+
+- 공개 역할 안내: docs/CODE_MAP.md, 백업·복원 계약: docs/USER_DATA.md.
+- src/atomic_write.py: 고유 sibling 임시 파일 쓰기·flush/fsync·닫기·os.replace. 업데이트 설정, DatasetRegistry, 최근 작업과 프리셋에서 공유합니다. 실패 시 원본 직접쓰기 fallback이 없습니다.
+- src/qt/main_window.py 메뉴는 실제 업데이트/저장소/About 항목에 맞춰 이름을 수정했습니다. src/i18n.py의 update_info_menu는 세 언어로 제공하고 상태줄 버전에서 구현 라이브러리 이름을 제거했습니다.
+- scripts/build.ps1의 테스트 게이트에 공통 scripts/test_user_data_backup.ps1을 연결했습니다. LOCALAPPDATA/APPDATA는 검사 폴더로 격리합니다.
+- tests/test_atomic_settings.py: flush·replace 실패, 다른 임시 파일 보존, 사용자 명시값 및 DB 정의 삭제 실패 시 DB 보존 검수.
+- docs/project-structure.md의 사전 사용자 수정은 보존하고 설치 설계 참조 한 줄만 installer/setup.iss로 정정했습니다. 현재 역할은 공개 CODE_MAP에서 안내합니다.
+- 자동 검증·미실행 실제 게이트: docs/STANDARDIZATION_PHASE3_5_REVIEW.md.
+- 교차 검수 반영: DatasetRegistry._read_datasets_for_update는 저장/삭제 전에 기존 JSON·읽기 오류를 전파하여 빈 목록으로 원본을 덮어쓰지 않습니다. UI list_datasets의 조회 fallback은 유지합니다. 최종 전체 회귀 534개 실행, OK(2 skipped).
+- 구조 문서의 이전 release 트리는 원문을 보존한 이전 메모로 표시하고 현재 installer/build/dist/release 역할 표를 별도로 추가했습니다.
+- 최종 총괄 검수 반영: update_checker.save_settings는 기존 settings.json을 UTF-8 JSON object로 확인한 후 저장합니다. 읽기/형식 실패는 OSError로 차단하여 표시용 기본값으로 손상 원본을 덮어쓰지 않습니다. 테스트는 원본 JSON/UTF-8/권한 오류별 바이트 보존을 확인합니다.
+최종 일반 settings.json 보호 반영 후 전체 격리 회귀 535개 실행, OK(2 skipped).
+- 마지막 교차 검수 반영: session_memory는 손상·잘못된 entry를 고유 .bak에 flush/fsync하고 원본 bytes와 비교한 후 편의 복구합니다. 사본/읽기 실패는 본 업무를 실패시키지 않고 저장을 건너뜁니다. 일반 JSON writer 전체에 형식 guard를 넣지 않아 preset 명시 overwrite·legacy list는 유지합니다. 최종 전체 격리 회귀 536개 실행 OK(2 skipped).

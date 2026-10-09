@@ -17,6 +17,15 @@ scratch/
 .ruff_cache/
 tools/
 
+# Private runtime settings, databases and credentials
+UserSetting/
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+
 # Share project guidance even when a developer's global ignore excludes it
 !AGENTS.md
 !AI_CODE_MAP.md

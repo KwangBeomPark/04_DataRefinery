@@ -39,14 +39,25 @@ def load_settings(path: Path | None = None) -> dict:
     try:
         settings = json.loads(target.read_text(encoding="utf-8"))
         return settings if isinstance(settings, dict) else {"update_check_enabled": True}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {"update_check_enabled": True}
 
 
 def save_settings(settings: dict, path: Path | None = None) -> None:
+    from src.atomic_write import atomic_write_json
+
     target = path or settings_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+    # A read fallback is for display only, never permission to erase bad content.
+    try:
+        existing = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        pass
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise OSError("Cannot validate existing Data Refinery settings; the original was retained.") from exc
+    else:
+        if not isinstance(existing, dict):
+            raise OSError("Existing Data Refinery settings are not an object; the original was retained.")
+    atomic_write_json(target, settings)
 
 
 def version_key(value: str) -> tuple[int, int, int] | None:

@@ -162,14 +162,21 @@ class DatasetRegistry:
         self._registry_file = self.storage_dir / "datasets_registry.json"
 
     def list_datasets(self) -> List[DatasetDefinition]:
-        if not self._registry_file.exists():
-            return []
         try:
-            with open(self._registry_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return [DatasetDefinition.from_dict(item) for item in data]
+            return self._read_datasets_for_update()
         except Exception:
             return []
+
+    def _read_datasets_for_update(self) -> List[DatasetDefinition]:
+        """Unreadable existing definitions must never be replaced by an empty list."""
+        try:
+            with open(self._registry_file, "r", encoding="utf-8") as stream:
+                data = json.load(stream)
+        except FileNotFoundError:
+            return []
+        if not isinstance(data, list):
+            raise ValueError("Dataset registry must contain a list of definitions.")
+        return [DatasetDefinition.from_dict(item) for item in data]
 
     def get_dataset(self, dataset_id: str) -> Optional[DatasetDefinition]:
         for ds in self.list_datasets():
@@ -178,7 +185,7 @@ class DatasetRegistry:
         return None
 
     def save_dataset(self, dataset: DatasetDefinition) -> None:
-        datasets = self.list_datasets()
+        datasets = self._read_datasets_for_update()
 
         # Prevent duplicate publish_folder across different datasets
         if dataset.publish_folder:
@@ -206,24 +213,21 @@ class DatasetRegistry:
         ds_dir = self.get_dataset_dir(dataset.id)
         ds_dir.mkdir(parents=True, exist_ok=True)
 
-        # Atomically write registry JSON
-        tmp_file = self._registry_file.with_suffix(".tmp")
+        from src.atomic_write import atomic_write_json
+
         payload = [ds.to_dict() for ds in datasets]
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        tmp_file.replace(self._registry_file)
+        atomic_write_json(self._registry_file, payload)
 
     def delete_dataset(self, dataset_id: str) -> bool:
-        datasets = self.list_datasets()
+        datasets = self._read_datasets_for_update()
         new_list = [ds for ds in datasets if ds.id != dataset_id]
         if len(new_list) == len(datasets):
             return False
 
-        tmp_file = self._registry_file.with_suffix(".tmp")
+        from src.atomic_write import atomic_write_json
+
         payload = [ds.to_dict() for ds in new_list]
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
-        tmp_file.replace(self._registry_file)
+        atomic_write_json(self._registry_file, payload)
 
         # Optional: remove dataset workspace files
         ds_dir = self.get_dataset_dir(dataset_id)

@@ -94,9 +94,9 @@ Data Refinery는 복잡하거나 깨진 원본 데이터를 분석에 바로 쓸
 
 ## 개발
 
-앱 코드는 `src`, 번들 자산은 `assets`, 빌드 스크립트는 `scripts`, 설치 설정과
-생성된 릴리스 출력은 `release`에 둡니다. 자세한 규칙은 [프로젝트 구조·이름 규칙](docs/project-structure.md)과
-[현재 코드맵](AI_CODE_MAP.md)을 확인하세요. 앱 버전은 `src/version.py` 한 곳에서 정의하고,
+앱 코드는 `src`, 번들 자산은 `assets`, 빌드 스크립트는 `scripts`, 설치 설계는
+`installer`, 공식 서명 배포본은 `release`에 둡니다. 자세한 규칙은 [프로젝트 구조·이름 규칙](docs/project-structure.md)과
+[공개 코드맵](docs/CODE_MAP.md)을 확인하세요. 앱 버전은 `src/version.py` 한 곳에서 정의하고,
 Python 소스 파일은 기존 소문자·밑줄 이름을 유지합니다.
 
 개발 중 앱 실행:
@@ -122,3 +122,13 @@ SimplySign에 로그인한 관리자 PowerShell에서 `scripts/sign.ps1`로 서�
 새 버전의 GitHub 게시까지 하려면 `-Publish`를 붙입니다. [배포 절차](docs/releasing.md)를 참고하세요.
 
 처리 오류가 나타나면 오류 ID와 함께 [문제 신고 안내](SUPPORT.md)를 확인해 주세요. 진단 로그는 PC에만 저장되며 원본 파일 내용은 기록하지 않습니다.
+
+
+공통 설치·설정·배포 정비의 기준과 현재 예외는 [6개 앱 공통 정비 기준](docs/SUITE_STANDARDIZATION.md)을 참고하세요.
+
+설치 업그레이드 보호와 남은 실제 서명·동작 검수는 [2단계 검수](docs/STANDARDIZATION_PHASE2_REVIEW.md)에 기록했습니다.
+
+[공개 코드맵](docs/CODE_MAP.md), [사용자 자료 백업·복원](docs/USER_DATA.md), [3–5단계 검수](docs/STANDARDIZATION_PHASE3_5_REVIEW.md)를 참고하세요. 기본 백업은 작업 DB를 포함한 UserSetting 전체이며 외부 원본·공유 배포 폴더는 별도로 보관합니다. 화면 상단 메뉴는 실제 항목에 맞춰 업데이트 / 정보로 표시합니다.
+
+
+2026-10-09 source release preparation: version 2.0.2 is not published yet. New builds use only `App04_DataRefinery_Setup_v<version>.exe` plus manifest/checksums. Existing v2.0.1 downloads stay unchanged. See [current release checklist](RELEASE_CHECKLIST.md).

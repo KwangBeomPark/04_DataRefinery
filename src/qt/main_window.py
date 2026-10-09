@@ -102,8 +102,8 @@ class MainWindow(QMainWindow):
         self.combo_language.currentIndexChanged.connect(self._on_language_changed)
         top_layout.addWidget(self.combo_language)
 
-        # Settings / Update Button
-        self.btn_settings = QPushButton("설정 / 업데이트 ▾")
+        # Update and application information menu.
+        self.btn_settings = QPushButton("업데이트 / 정보 ▾")
         self.menu_settings = QMenu(self)
         self.menu_settings.addAction("업데이트 확인...", self._on_check_update)
         self.menu_settings.addAction("GitHub 저장소 방문...", self._on_visit_repo)
@@ -136,7 +136,7 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.lbl_status_msg = QLabel("준비됨")
         self.status_bar.addWidget(self.lbl_status_msg, stretch=1)
-        self.lbl_version = QLabel(f"v{__version__} (PySide6)")
+        self.lbl_version = QLabel(f"v{__version__}")
         self.status_bar.addPermanentWidget(self.lbl_version)
 
     def _on_language_changed(self, index: int) -> None:
@@ -150,7 +150,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"Data Refinery v{__version__}")
         self.lbl_app_subtitle.setText(t.get("header_subtitle", "데이터 전처리 · 집계 · 배포 솔루션"))
-        self.btn_settings.setText(t.get("update_menu", "설정 / 업데이트 ▾"))
+        self.btn_settings.setText(t["update_info_menu"])
 
         # Update Tab Titles from task_options
         task_opts = t.get("task_options", ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서", "데이터셋 배포"))

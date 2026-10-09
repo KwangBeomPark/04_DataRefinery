@@ -68,7 +68,7 @@ try {
 
     $official = Join-Path $testRoot 'release'
     New-Item -ItemType Directory -Path $official | Out-Null
-    $binaryNames = @('App04_DataRefinery_Setup_v2.0.1.exe','DataRefinery-Setup.v2.0.1.exe','App04_DataRefinery_Launcher.exe')
+    $binaryNames = @('App04_DataRefinery_Setup_v2.0.1.exe')
     foreach ($binaryName in $binaryNames) { Copy-Item -LiteralPath $installer -Destination (Join-Path $official $binaryName) }
     function Write-TestMetadata {
         foreach ($binaryName in $binaryNames) { Copy-Item -LiteralPath $installer -Destination (Join-Path $official $binaryName) -Force }
@@ -76,14 +76,18 @@ try {
     }
     Write-TestMetadata
     $null = Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath
+    $contract = Get-Content -LiteralPath (Join-Path $official 'build-manifest.json') -Raw | ConvertFrom-Json
+    Assert-True (@($contract.artifacts).Count -eq 1) 'Manifest has more than one installer.'
+    Assert-True (@($contract.aliases.PSObject.Properties).Count -eq 0) 'New manifest declares a legacy alias.'
+    Assert-True (@(Get-ChildItem -LiteralPath $official -File).Count -eq 3) 'Official set does not contain exactly three files.'
     $sumsPath = Join-Path $official 'SHA256SUMS.txt'
     Assert-True (-not ([IO.File]::ReadAllBytes($sumsPath)[0] -eq 239)) 'Checksums have a UTF8 BOM.'
     Add-Content -LiteralPath (Join-Path $official $binaryNames[0]) -Value 'tampered'
     Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'Artifact tampering was accepted.' 'alias bytes|Manifest content mismatch'
     Write-TestMetadata
     $lines = @(Get-Content -LiteralPath $sumsPath)
-    Set-Content -LiteralPath $sumsPath -Value $lines[1..($lines.Count-1)]
-    Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'Incomplete checksums were accepted.' 'Checksum coverage is incomplete'
+    [IO.File]::WriteAllText($sumsPath, '', [Text.UTF8Encoding]::new($false))
+    Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'Incomplete checksums were accepted.' 'Checksum mismatch'
     Write-ReleaseMetadata -Directory $official -Version '2.0.1' -Commit ('a' * 40) -BuiltAtUtc '2026-10-06T00:00:00Z' -Thumbprint $thumbprint -RequireSignature $false
     Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'An unsigned preview was accepted as official.' 'Only signed official artifacts'
     Write-TestMetadata
@@ -93,12 +97,10 @@ try {
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $manifestPath
     Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'A manifest omitting all signature records was accepted.' 'manifest must cover'
     Write-TestMetadata
-    Set-Content -LiteralPath (Join-Path $official ($binaryNames[0]+'.sha256')) -Value ('0'*64)
-    Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'A wrong sidecar was accepted.' 'checksum sidecar is inconsistent'
-    Write-TestMetadata
-    $sidecarPath = Join-Path $official ($binaryNames[0]+'.sha256')
-    [IO.File]::WriteAllText($sidecarPath,[IO.File]::ReadAllText($sidecarPath),[Text.UTF8Encoding]::new($true))
-    Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'A sidecar BOM was accepted.' 'checksum sidecar is inconsistent'
+    $unexpected = Join-Path $official 'DataRefinery-Setup.v2.0.1.exe'
+    Copy-Item -LiteralPath $installer -Destination $unexpected
+    Assert-Rejected { Assert-ReleaseDirectory -Directory $official -Thumbprint $thumbprint -ToolPath $toolPath } 'An extra installer alias was accepted.' 'missing or unexpected files'
+    Remove-Item -LiteralPath $unexpected
     Write-TestMetadata
     $sumContent = [IO.File]::ReadAllText($sumsPath)
     [IO.File]::WriteAllText($sumsPath,$sumContent,[Text.UTF8Encoding]::new($true))
@@ -131,19 +133,20 @@ try {
     }
     Copy-Item -LiteralPath $partialApi -Destination $activeApi
     $gitLines = @('@echo off',('echo git %*>>"'+$callLog+'"'),
+        'if "%1 %2 %3"=="remote get-url origin" (','  echo https://github.com/KwangBeomPark/04_DataRefinery.git','  exit /b 0',')',
         'if "%1"=="rev-parse" (',('  if exist "'+$tagMarker+'" (echo '+('a'*40)+'&exit /b 0)'),
         '  echo fatal: Needed a single revision 1>&2','  exit /b 1',')',
         'if "%1"=="ls-remote" (',('  if exist "'+$tagMarker+'" echo '+('a'*40)+' refs/tags/v2.0.1'),'  exit /b 0',')',
         ('if "%1"=="tag" type nul>"'+$tagMarker+'"'),'exit /b 0')
     Set-Content -LiteralPath $fakeGit -Value $gitLines -Encoding ascii
     $ghLines = @('@echo off',('echo gh %*>>"'+$callLog+'"'),
-        'if "%1 %2"=="repo view" (','  echo {"nameWithOwner":"example/repo","isPrivate":true}','  exit /b 0',')',
+        'if "%1 %2"=="repo view" (','  echo {"nameWithOwner":"KwangBeomPark/04_DataRefinery","isPrivate":true}','  exit /b 0',')',
         'if "%1 %2"=="release list" (',('  if exist "'+$absentInventory+'" (echo []&exit /b 0)'),
         '  echo [{"tagName":"v2.0.1","isDraft":true}]','  exit /b 0',')',
-        'if "%1 %2"=="release view" (','  echo {"apiUrl":"https://api.github.com/repos/example/repo/releases/42","isDraft":true}','  exit /b 0',')',
+        'if "%1 %2"=="release view" (','  echo {"apiUrl":"https://api.github.com/repos/KwangBeomPark/04_DataRefinery/releases/42","isDraft":true}','  exit /b 0',')',
         'if "%1 %2"=="run list" (',('  if exist "'+$runMarker+'" (echo [{"databaseId":123,"status":"completed","conclusion":"success"}]&exit /b 0)'),
         ('  type nul>"'+$runMarker+'"'),'  echo []','  exit /b 0',')',
-        'if "%1"=="api" (','  if not "%2"=="repos/example/repo/releases/42" (echo 404 Not Found 1>&2&exit /b 1)',
+        'if "%1"=="api" (','  if not "%2"=="repos/KwangBeomPark/04_DataRefinery/releases/42" (echo 404 Not Found 1>&2&exit /b 1)',
         ('  type "'+$activeApi+'"'),'  exit /b 0',')',
         ('if "%1 %2"=="release create" copy /y "'+$completeApi+'" "'+$activeApi+'">nul'),
         ('if "%1 %2"=="release upload" copy /y "'+$completeApi+'" "'+$activeApi+'">nul'),
@@ -159,7 +162,7 @@ try {
         Assert-True (([regex]::Matches($trace,'gh run list')).Count -eq 2) 'The empty CI result did not retry.'
         Assert-True ($trace -match 'gh release upload' -and $trace -notmatch '--clobber') 'Upload recovery was not limited to missing assets.'
         Assert-True ($trace -notmatch 'sign ' -and $trace -notmatch 'release create') 'Resume attempted to sign or recreate a draft.'
-        Assert-True ($trace -match 'gh api repos/example/repo/releases/42' -and $trace -notmatch 'releases/tags/') 'A draft was queried through the published-only tag endpoint.'
+        Assert-True ($trace -match 'gh api repos/KwangBeomPark/04_DataRefinery/releases/42' -and $trace -notmatch 'releases/tags/') 'A draft was queried through the published-only tag endpoint.'
         Assert-Rejected { Assert-UnreleasedVersion -Version '2.0.1' } 'An already tagged version could be resigned.' 'Version already tagged'
         $published = Get-Content -LiteralPath $activeApi -Raw | ConvertFrom-Json
         Assert-True (@(Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths).Count -eq 0) 'Completed upload was not recognized.'
@@ -174,8 +177,11 @@ try {
         [IO.File]::WriteAllText($callLog,'')
         Publish-VerifiedRelease -Directory $official -Manifest $mockManifest
         $newTrace = [IO.File]::ReadAllText($callLog)
+        Assert-True ($newTrace -match 'docs\\release-notes\\RELEASE_NOTES_v2.0.1.md') 'Draft notes were read from the official artifact directory.'
         Assert-True ($newTrace -match 'gh release create.*--draft' -and $newTrace -match 'gh release edit') 'A new draft did not pass verification and publish.'
         Assert-True ($newTrace -notmatch 'releases/tags/|--clobber') 'The new draft used a published-only lookup or replaced uploaded content.'
+        Set-Content -LiteralPath $fakeGit -Value @('@echo off','echo https://github.com/example/wrong.git','exit /b 0') -Encoding ascii
+        Assert-Rejected { Publish-VerifiedRelease -Directory $official -Manifest $mockManifest } 'A wrong origin was accepted.' 'Unexpected origin repository'
         Set-Content -LiteralPath $fakeGh -Value @('@echo off','echo authentication failed 1>&2','exit /b 1') -Encoding ascii
         Assert-Rejected { Get-GitHubReleaseState -Version '2.0.1' } 'A failed GitHub lookup was treated as absence.' 'repository lookup failed'
     } finally { $env:PATH = $savedPath }

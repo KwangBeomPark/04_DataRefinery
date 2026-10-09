@@ -11,6 +11,7 @@ _UI_TEXT = {
     "ko": {
         "header_subtitle": "파일을 복구하고 분석 가능한 구조로 데이터를 정리합니다.",
         "language_label": "언어",
+        "update_info_menu": "업데이트 / 정보 ▾",
         "settings": "⚙ 설정",
         "section_file": "1. 원본 파일 선택",
         "browse": "파일 찾기...",
@@ -72,6 +73,7 @@ _UI_TEXT = {
     "en": {
         "header_subtitle": "Repair files and prepare structured data for analysis.",
         "language_label": "Language",
+        "update_info_menu": "Updates / About ▾",
         "settings": "⚙ Settings",
         "section_file": "1. Choose the source file",
         "browse": "Browse...",
@@ -133,6 +135,7 @@ _UI_TEXT = {
     "pl": {
         "header_subtitle": "Naprawia pliki i porządkuje dane w strukturę gotową do analizy.",
         "language_label": "Język",
+        "update_info_menu": "Aktualizacje / Informacje ▾",
         "settings": "⚙ Ustawienia",
         "section_file": "1. Wybierz plik źródłowy",
         "browse": "Wybierz plik...",

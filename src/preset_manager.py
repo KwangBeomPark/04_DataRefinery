@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -200,18 +199,10 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -> None:
-    """Write text content atomically using a temporary file and os.replace."""
-    temp_path = file_path.with_name(f"{file_path.name}.tmp_{os.getpid()}")
-    try:
-        temp_path.write_text(content, encoding=encoding)
-        os.replace(temp_path, file_path)
-    except Exception:
-        if temp_path.exists():
-            try:
-                temp_path.unlink()
-            except Exception:
-                pass
-        raise
+    """Write through the shared unique sibling-file replacement helper."""
+    from src.atomic_write import atomic_write_text
+
+    atomic_write_text(file_path, content, encoding)
 
 
 def preset_exists(name: str, dir_path: Optional[Path] = None) -> bool:

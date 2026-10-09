@@ -38,6 +38,8 @@ if (-not $SkipTests) {
         if ($LASTEXITCODE -ne 0) { throw 'Application tests failed.' }
         & powershell -NoProfile -ExecutionPolicy Bypass -File 'tests\test_release_signing.ps1'
         if ($LASTEXITCODE -ne 0) { throw 'Release pipeline tests failed.' }
+        & powershell -NoProfile -File 'scripts\test_user_data_backup.ps1'
+        if ($LASTEXITCODE -ne 0) { throw 'User data backup tests failed.' }
     } finally {
         $env:LOCALAPPDATA = $savedLocalAppData
         $env:APPDATA = $savedRoamingAppData
@@ -58,8 +60,6 @@ New-Item -ItemType Directory -Path $preview -Force | Out-Null
 foreach ($file in (Get-ChildItem -LiteralPath $preview -File)) { Remove-Item -LiteralPath $file.FullName }
 & $iscc "/DAppVersion=$version" "/DAppExeName=$bundleName.exe" "/DAppSourceDir=$bundle" "/DArtifactDir=$preview" 'installer\setup.iss'
 if ($LASTEXITCODE -ne 0) { throw 'Unsigned preview installer compilation failed.' }
-Copy-Item -LiteralPath $launcher -Destination $preview
-New-ReleaseAlias -Source (Join-Path $preview "App04_DataRefinery_Setup_v$version.exe") -Destination (Join-Path $preview "DataRefinery-Setup.v$version.exe")
 $builtAt = [DateTime]::UtcNow.ToString('o')
 Write-ReleaseMetadata -Directory $preview -Version $version -Commit $commit -BuiltAtUtc $builtAt -Thumbprint $CertificateThumbprint -RequireSignature $false
 $bundleRecords = @()

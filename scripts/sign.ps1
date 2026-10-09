@@ -15,6 +15,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:ReleaseProjectRoot = Split-Path -Parent $PSScriptRoot
+$script:ReleaseRepository = 'KwangBeomPark/04_DataRefinery'
 
 function Assert-ProjectPath {
     param([string]$Path)
@@ -169,28 +170,19 @@ function Write-ReleaseMetadata {
     param([string]$Directory, [string]$Version, [string]$Commit, [string]$BuiltAtUtc,
         [string]$Thumbprint, [object[]]$Components = @(), [bool]$RequireSignature = $true,
         [string]$SignedAtUtc = '')
-    $binaryNames = @("App04_DataRefinery_Setup_v$Version.exe", "DataRefinery-Setup.v$Version.exe", 'App04_DataRefinery_Launcher.exe')
-    $records = @()
-    foreach ($name in $binaryNames) {
-        $file = Join-Path $Directory $name
-        $records += Get-SignedArtifactRecord -FilePath $file -Thumbprint $Thumbprint -RequireSignature $RequireSignature
-        $hash = (Get-FileHash -LiteralPath $file).Hash.ToLowerInvariant()
-        [IO.File]::WriteAllText("$file.sha256", "$hash *$name`n", [Text.UTF8Encoding]::new($false))
-    }
-    $note = "RELEASE_NOTES_v$Version.md"
-    Copy-Item -LiteralPath (Join-Path $script:ReleaseProjectRoot "docs\release-notes\$note") -Destination (Join-Path $Directory $note) -Force
+    $installerName = "App04_DataRefinery_Setup_v$Version.exe"
+    $file = Join-Path $Directory $installerName
+    $records = @(Get-SignedArtifactRecord -FilePath $file -Thumbprint $Thumbprint -RequireSignature $RequireSignature)
     $manifest = [ordered]@{
         schemaVersion=2; productId='App04_DataRefinery'; version=$Version; commit=$Commit;
         builtAtUtc=$BuiltAtUtc; signedAtUtc=$SignedAtUtc;
         status=$(if ($RequireSignature) { 'signed' } else { 'unsigned-preview' });
         artifacts=$records; components=@($Components);
-        aliases=@{ "DataRefinery-Setup.v$Version.exe"="App04_DataRefinery_Setup_v$Version.exe" }
+        aliases=@{}
     }
     [IO.File]::WriteAllText((Join-Path $Directory 'build-manifest.json'), ($manifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-    $sums = foreach ($file in (Get-ChildItem -LiteralPath $Directory -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object Name)) {
-        (Get-FileHash -LiteralPath $file.FullName).Hash.ToLowerInvariant() + ' *' + $file.Name
-    }
-    [IO.File]::WriteAllText((Join-Path $Directory 'SHA256SUMS.txt'), (($sums -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+    $sumLine = "$($records[0].sha256)  $installerName`n"
+    [IO.File]::WriteAllText((Join-Path $Directory 'SHA256SUMS.txt'), $sumLine, [Text.UTF8Encoding]::new($false))
 }
 
 function Assert-ReleaseDirectory {
@@ -202,41 +194,24 @@ function Assert-ReleaseDirectory {
     }
     if ($manifest.status -ne 'signed' -or $manifest.productId -ne 'App04_DataRefinery') { throw 'Only signed official artifacts can be released.' }
     if ($manifest.version -notmatch '^\d+\.\d+\.\d+$' -or $manifest.commit -notmatch '^[0-9a-f]{40}$') { throw 'Invalid release identity.' }
-    $binaryNames = @("App04_DataRefinery_Setup_v$($manifest.version).exe", "DataRefinery-Setup.v$($manifest.version).exe", 'App04_DataRefinery_Launcher.exe')
-    if (@($manifest.artifacts).Count -ne 3 -or @(Compare-Object ($binaryNames | Sort-Object) (@($manifest.artifacts.name) | Sort-Object)).Count) {
-        throw 'The manifest must cover both installer names and the launcher exactly once.'
+    $installerName = "App04_DataRefinery_Setup_v$($manifest.version).exe"
+    if (@($manifest.artifacts).Count -ne 1 -or $manifest.artifacts[0].name -ne $installerName) {
+        throw 'The manifest must cover the unified installer exactly once.'
     }
-    if ((Get-FileHash -LiteralPath (Join-Path $Directory $binaryNames[0])).Hash -ne
-        (Get-FileHash -LiteralPath (Join-Path $Directory $binaryNames[1])).Hash) { throw 'Installer alias bytes must be identical.' }
-    $allowedFiles = @($binaryNames) + @($binaryNames | ForEach-Object { $_ + '.sha256' }) + @("RELEASE_NOTES_v$($manifest.version).md", 'build-manifest.json', 'SHA256SUMS.txt')
+    $allowedFiles = @($installerName, 'build-manifest.json', 'SHA256SUMS.txt')
     $presentFiles = @($entries | Where-Object { -not $_.PSIsContainer }).Name
     if (@(Compare-Object ($allowedFiles | Sort-Object) ($presentFiles | Sort-Object)).Count) { throw 'Official release contains missing or unexpected files.' }
-    foreach ($record in $manifest.artifacts) {
-        if ($record.name -ne (Split-Path -Leaf $record.name)) { throw 'Invalid manifest artifact name.' }
-        $path = Join-Path $Directory $record.name
-        Assert-ReleaseSignature -FilePath $path -Thumbprint $Thumbprint -ToolPath $ToolPath
-        if ((Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant() -ne $record.sha256 -or (Get-Item -LiteralPath $path).Length -ne $record.size -or $record.signerThumbprint -ne $Thumbprint) {
-            throw "Manifest content mismatch: $path"
-        }
-        $sidecar = [IO.File]::ReadAllBytes("$path.sha256")
-        $expectedSidecar = [Text.UTF8Encoding]::new($false).GetBytes("$($record.sha256) *$($record.name)`n")
-        if ([Convert]::ToBase64String($sidecar) -ne [Convert]::ToBase64String($expectedSidecar)) { throw 'The binary checksum sidecar is inconsistent.' }
+    $record = $manifest.artifacts[0]
+    $path = Join-Path $Directory $record.name
+    Assert-ReleaseSignature -FilePath $path -Thumbprint $Thumbprint -ToolPath $ToolPath
+    if ((Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant() -ne $record.sha256 -or (Get-Item -LiteralPath $path).Length -ne $record.size -or $record.signerThumbprint -ne $Thumbprint) {
+        throw "Manifest content mismatch: $path"
     }
-    $note = "RELEASE_NOTES_v$($manifest.version).md"
-    if ((Get-FileHash -LiteralPath (Join-Path $Directory $note)).Hash -ne
-        (Get-FileHash -LiteralPath (Join-Path $script:ReleaseProjectRoot "docs\release-notes\$note")).Hash) { throw 'Release notes differ from their source.' }
     $sumBytes = [IO.File]::ReadAllBytes((Join-Path $Directory 'SHA256SUMS.txt'))
     if ($sumBytes.Length -ge 3 -and $sumBytes[0] -eq 239 -and $sumBytes[1] -eq 187 -and $sumBytes[2] -eq 191) { throw 'Checksum files must not have a UTF8 BOM.' }
-    $expectedFiles = @($entries | Where-Object { $_.Name -ne 'SHA256SUMS.txt' }).Name
-    $checkedFiles = @()
-    foreach ($line in (Get-Content -LiteralPath (Join-Path $Directory 'SHA256SUMS.txt'))) {
-        if ($line -notmatch '^([0-9a-f]{64}) \*([^\\/]+)$') { throw 'Invalid checksum line.' }
-        $hash = $Matches[1]; $name = $Matches[2]
-        if ($name -notin $expectedFiles -or $name -in $checkedFiles) { throw 'Unexpected or duplicate checksum file.' }
-        if ((Get-FileHash -LiteralPath (Join-Path $Directory $name)).Hash.ToLowerInvariant() -ne $hash) { throw "Checksum mismatch: $name" }
-        $checkedFiles += $name
-    }
-    if ($checkedFiles.Count -ne $expectedFiles.Count) { throw 'Checksum coverage is incomplete.' }
+    $checksumContent = [IO.File]::ReadAllText((Join-Path $Directory 'SHA256SUMS.txt'), [Text.Encoding]::UTF8).Trim()
+    $expectedLine = "$($record.sha256)  $installerName"
+    if ($checksumContent -ne $expectedLine) { throw "Checksum mismatch: expected '$expectedLine', got '$checksumContent'" }
     return $manifest
 }
 
@@ -306,10 +281,11 @@ function Assert-BuildBundle {
 
 function Get-GitHubReleaseState {
     param([string]$Version)
-    $repoQuery = Invoke-NativeQuery -Command gh -Arguments @('repo','view','--json','nameWithOwner,isPrivate')
+    $repoQuery = Invoke-NativeQuery -Command gh -Arguments @('repo','view',$script:ReleaseRepository,'--json','nameWithOwner,isPrivate')
     if ($repoQuery.exitCode -ne 0) { throw 'GitHub repository lookup failed; no remote mutations were attempted.' }
     $repository = $repoQuery.output | ConvertFrom-Json
-    $query = Invoke-NativeQuery -Command gh -Arguments @('release','list','--limit','1000','--json','tagName,isDraft')
+    if ($repository.nameWithOwner -cne $script:ReleaseRepository) { throw 'Unexpected GitHub repository identity.' }
+    $query = Invoke-NativeQuery -Command gh -Arguments @('release','list','--repo',$script:ReleaseRepository,'--limit','1000','--json','tagName,isDraft')
     if ($query.exitCode -ne 0) { throw 'GitHub release inventory lookup failed; authentication and network errors are not treated as absence.' }
     $releaseMatches = @(ConvertFrom-ReleaseArray -Json $query.output | Where-Object { $_.tagName -eq "v$Version" })
     if ($releaseMatches.Count -gt 1) { throw 'Ambiguous GitHub release identity.' }
@@ -351,8 +327,16 @@ function Get-MissingReleaseAssets {
 
 function Publish-VerifiedRelease {
     param([string]$Directory, [object]$Manifest)
+    $originQuery = Invoke-NativeQuery -Command git -Arguments @('remote','get-url','origin')
+    if ($originQuery.exitCode -ne 0 -or $originQuery.output.Trim() -cnotin @("https://github.com/$($script:ReleaseRepository).git", "git@github.com:$($script:ReleaseRepository).git")) {
+        throw 'Unexpected origin repository; no remote mutations were attempted.'
+    }
     $tag = 'v' + $Manifest.version
     $state = Get-GitHubReleaseState -Version $Manifest.version
+    $notesPath = Join-Path $script:ReleaseProjectRoot "docs\release-notes\RELEASE_NOTES_$tag.md"
+    if (-not $state.release -and -not (Test-Path -LiteralPath $notesPath -PathType Leaf)) {
+        throw 'Author the version release notes in docs/release-notes before publishing.'
+    }
     foreach ($tagCommit in @((Get-LocalReleaseTag -Version $Manifest.version),(Get-RemoteReleaseTag -Version $Manifest.version))) {
         if ($tagCommit -and $tagCommit -ne $Manifest.commit) { throw 'An existing release tag identifies a different source commit.' }
     }
@@ -366,7 +350,7 @@ function Publish-VerifiedRelease {
     if ($LASTEXITCODE -ne 0) { throw 'Source push failed.' }
     $runs = @()
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
-        $runJson = & gh run list --commit $Manifest.commit --workflow windows-release-check.yml --limit 1 --json databaseId,status,conclusion
+        $runJson = & gh run list --repo $script:ReleaseRepository --commit $Manifest.commit --workflow windows-release-check.yml --limit 1 --json databaseId,status,conclusion
         if ($LASTEXITCODE -ne 0) { throw 'Cannot query the Windows release check.' }
         $runs = @(ConvertFrom-ReleaseArray -Json ($runJson -join "`n"))
         if ($runs.Count) { break }
@@ -374,7 +358,7 @@ function Publish-VerifiedRelease {
     }
     if (-not $runs.Count) { throw 'No Windows release check was found for this source commit.' }
     if ($runs[0].status -ne 'completed') {
-        & gh run watch $runs[0].databaseId --exit-status
+        & gh run watch $runs[0].databaseId --repo $script:ReleaseRepository --exit-status
         if ($LASTEXITCODE -ne 0) { throw 'Windows release check failed.' }
     } elseif ($runs[0].conclusion -ne 'success') { throw 'Windows release check did not pass.' }
     if (-not (Get-LocalReleaseTag -Version $Manifest.version)) {
@@ -384,19 +368,19 @@ function Publish-VerifiedRelease {
     & git push origin $tag
     if ($LASTEXITCODE -ne 0) { throw 'Release tag push failed.' }
     if (-not $state.release) {
-        & gh release create $tag --draft --verify-tag --title "Data Refinery $tag" --notes-file (Join-Path $Directory "RELEASE_NOTES_$tag.md") @assets
+        & gh release create $tag --repo $script:ReleaseRepository --draft --verify-tag --title "Data Refinery $tag" --notes-file $notesPath @assets
         if ($LASTEXITCODE -ne 0) { throw 'Draft upload failed. Resume with -PublishOnly; do not resign.' }
     } else {
         $missing = @(Get-MissingReleaseAssets -Uploaded $uploaded -Paths $assets)
         if ($missing.Count) {
-            & gh release upload $tag @missing
+            & gh release upload $tag --repo $script:ReleaseRepository @missing
             if ($LASTEXITCODE -ne 0) { throw 'Missing asset upload failed. Resume with -PublishOnly.' }
         }
     }
     $uploaded = Get-UploadedRelease -Repository $state.repository -Tag $tag
     if (@(Get-MissingReleaseAssets -Uploaded $uploaded -Paths $assets).Count) { throw 'Uploaded release is incomplete.' }
     if ($uploaded.draft) {
-        & gh release edit $tag --draft=false --latest
+        & gh release edit $tag --repo $script:ReleaseRepository --draft=false --latest
         if ($LASTEXITCODE -ne 0) { throw 'Verified draft publication failed. Resume with -PublishOnly.' }
     }
     $published = Get-UploadedRelease -Repository $state.repository -Tag $tag
@@ -484,7 +468,6 @@ try {
     if ((Get-FileHash -LiteralPath $launcher).Hash.ToLowerInvariant() -ne $inputRecord.launcherSha256) { throw 'Launcher copy changed after building.' }
     foreach ($binary in @($app,$launcher)) { Invoke-SignBinary -FilePath $binary -CertificateThumbprint $CertificateThumbprint -TimestampServer $TimestampServer -SignToolPath $tool }
     Copy-Item -LiteralPath $app -Destination $sessionDirectory
-    Copy-Item -LiteralPath $launcher -Destination $stage
     $archive = Join-Path $sessionDirectory 'uninstaller'
     $temporaryUninstaller = Join-Path $work 'inno-temporary'
     New-Item -ItemType Directory -Path $temporaryUninstaller | Out-Null
@@ -499,7 +482,6 @@ try {
         Assert-ReleaseSignature -FilePath $binary -Thumbprint $CertificateThumbprint -ToolPath $tool
         $components += Get-SignedArtifactRecord -FilePath $binary -Thumbprint $CertificateThumbprint
     }
-    New-ReleaseAlias -Source (Join-Path $stage "App04_DataRefinery_Setup_v$version.exe") -Destination (Join-Path $stage "DataRefinery-Setup.v$version.exe")
     Write-ReleaseMetadata -Directory $stage -Version $version -Commit $head -BuiltAtUtc $inputRecord.builtAtUtc -Thumbprint $CertificateThumbprint -Components $components -SignedAtUtc ([DateTime]::UtcNow.ToString('o'))
     $verified = Assert-ReleaseDirectory -Directory $stage -Thumbprint $CertificateThumbprint -ToolPath $tool
     $official = Assert-ProjectPath (Join-Path $script:ReleaseProjectRoot 'release')

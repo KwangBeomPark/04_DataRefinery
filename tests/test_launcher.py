@@ -71,6 +71,15 @@ class TestLauncher(unittest.TestCase):
         self.assertEqual(installer.name, asset_name)
         self.assertEqual(installer.size, 123)
 
+    def test_release_lookup_accepts_previous_hyphenated_name(self):
+        name = "App04_DataRefinery-Setup_v2.0.1.exe"
+        payload = {"tag_name": "v2.0.1", "assets": [{
+            "name": name, "size": 123,
+            "browser_download_url": "https://github.com/KwangBeomPark/04_DataRefinery/releases/download/v2.0.1/" + name,
+        }]}
+        asset = fetch_latest_installer(lambda request, timeout: _Response(json.dumps(payload).encode("utf-8")))
+        self.assertEqual(asset.name, name)
+
     def test_release_lookup_rejects_an_untrusted_download_location(self):
         payload = {
             "tag_name": "v1.6.0",
@@ -118,6 +127,8 @@ class TestLauncher(unittest.TestCase):
         )
         self.assertIsNone(_version_from_name(Path("App04_DataRefinery_v1.6.exe"), APPLICATION_NAME_PATTERN))
         self.assertTrue(INSTALLER_NAME_PATTERN.fullmatch("App04_DataRefinery_Setup_v1.6.0.exe"))
+        self.assertTrue(INSTALLER_NAME_PATTERN.fullmatch("App04_DataRefinery-Setup_v1.6.0.exe"))
+        self.assertFalse(INSTALLER_NAME_PATTERN.fullmatch("DataRefinery-Setup.v1.6.0.exe"))
 
     def test_signature_check_requires_valid_pinned_signer(self):
         installer = Path("C:/Temp/setup.exe")

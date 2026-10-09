@@ -107,9 +107,9 @@ preview the result, then save it as CSV or Excel.
 ## Development
 
 The repository keeps application code in `src`, bundled files in `assets`,
-build scripts in `scripts`, and installer configuration plus generated release
-output in `release`. See [project layout and naming rules](docs/project-structure.md)
-and the [current code map](AI_CODE_MAP.md). The sole application version definition
+build scripts in `scripts`, installer sources in `installer`, and signed output
+in `release`. See [project layout and naming rules](docs/project-structure.md)
+and the [public code map](docs/CODE_MAP.md). The sole application version definition
 is `src/version.py`; Python modules retain their existing snake_case names.
 
 Run the desktop app during development with:
@@ -136,3 +136,13 @@ SimplySign is logged in, run `scripts/sign.ps1` to sign and verify, or add
 `-Publish` to upload a new version. See [release instructions](docs/releasing.md).
 
 If a processing error appears, include its error ID in a [bug report](SUPPORT.md). Diagnostic logs remain on the local PC and do not include source file contents.
+
+
+Shared installation, settings, release goals, and current exceptions are documented in [Suite standardization](docs/SUITE_STANDARDIZATION.md).
+
+Installer upgrade safeguards and the remaining signed/runtime checks are recorded in [Phase 2 review](docs/STANDARDIZATION_PHASE2_REVIEW.md).
+
+See the [public code map](docs/CODE_MAP.md), [user-data backup and restore guide](docs/USER_DATA.md), and [phases 3–5 review](docs/STANDARDIZATION_PHASE3_5_REVIEW.md). The default backup includes all UserSetting files, including workspace databases; user-selected external inputs and published files require separate backup. The desktop menu is labelled Updates / About to match its actions.
+
+
+2026-10-09 source release preparation: version 2.0.2 is not published yet. New builds use only `App04_DataRefinery_Setup_v<version>.exe` plus manifest/checksums. Existing v2.0.1 downloads stay unchanged. See [current release checklist](RELEASE_CHECKLIST.md).

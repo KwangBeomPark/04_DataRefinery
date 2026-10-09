@@ -1,0 +1,16 @@
+{
+  "appId": "App04_DataRefinery",
+  "displayName": "Data Refinery",
+  "installFolder": "Data Refinery",
+  "executableNames": [
+    "DataRefinery.exe"
+  ],
+  "optionalDataFolders": [
+    "datasets"
+  ],
+  "externalData": [
+    "Custom dataset storage",
+    "Input CSV/Excel files",
+    "Published CSV/Excel files"
+  ]
+}

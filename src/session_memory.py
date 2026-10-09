@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -42,18 +43,10 @@ def _empty_store() -> Dict[str, Any]:
 
 
 def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -> None:
-    """Write text content atomically using a temporary file and os.replace."""
-    temp_path = file_path.with_name(f"{file_path.name}.tmp_{os.getpid()}")
-    try:
-        temp_path.write_text(content, encoding=encoding)
-        os.replace(temp_path, file_path)
-    except Exception:
-        if temp_path.exists():
-            try:
-                temp_path.unlink()
-            except Exception:
-                pass
-        raise
+    """Write through the shared unique sibling-file replacement helper."""
+    from src.atomic_write import atomic_write_text
+
+    atomic_write_text(file_path, content, encoding)
 
 
 def _load_store() -> Dict[str, Any]:
@@ -79,6 +72,27 @@ def _save_store(store: Dict[str, Any]) -> None:
     """Persist the store atomically, staying silent when the disk refuses."""
     path = _store_path()
     try:
+        try:
+            original = path.read_bytes()
+        except FileNotFoundError:
+            pass
+        else:
+            try:
+                existing = json.loads(original.decode("utf-8"))
+                valid = isinstance(existing, dict) and isinstance(existing.get("entries"), dict)
+                if valid:
+                    valid = all(isinstance(entry, dict) and isinstance(entry.get("configuration"), dict)
+                                for entry in existing["entries"].values())
+            except (UnicodeError, json.JSONDecodeError):
+                valid = False
+            if not valid:
+                backup = path.with_name(path.name + "." + uuid.uuid4().hex + ".bak")
+                with backup.open("xb") as stream:
+                    stream.write(original)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if backup.read_bytes() != original or path.read_bytes() != original:
+                    raise OSError("Recent configuration recovery copy could not be verified.")
         path.parent.mkdir(parents=True, exist_ok=True)
         _atomic_write_text(path, json.dumps(store, ensure_ascii=False, indent=2))
     except OSError:

@@ -19,7 +19,7 @@ APPLICATION_NAME = "Data Refinery"
 REPOSITORY = "KwangBeomPark/04_DataRefinery"
 # Rotate this value only after verifying a replacement release-signing certificate.
 TRUSTED_SIGNER_THUMBPRINT = "E9C72CF5090840A1805296525D56BE680622A7FD"
-INSTALLER_NAME_PATTERN = re.compile(r"App04_DataRefinery_Setup_v(\d+)\.(\d+)\.(\d+)\.exe\Z")
+INSTALLER_NAME_PATTERN = re.compile(r"App04_DataRefinery[_-]Setup_v(\d+)\.(\d+)\.(\d+)\.exe\Z")
 APPLICATION_NAME_PATTERN = re.compile(r"App04_DataRefinery_v(\d+)\.(\d+)\.(\d+)\.exe\Z")
 INSTALLER_ARGUMENTS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS")
 REQUEST_TIMEOUT_SECONDS = 30

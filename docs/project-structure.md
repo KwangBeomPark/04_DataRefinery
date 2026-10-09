@@ -20,7 +20,6 @@
 덮어쓰지 않습니다. DB 사용 중·WAL 존재·복사 실패·자료 변경은 이관을 차단합니다.
 완료 표식으로 반복 이관을 방지합니다. 설치 AppId와 공유 CSV 경로도 유지합니다.
 `UserSetting`은 설치 번들에서 제외하고 앱 제거 시 보존합니다.
-설치 마법사는 경로 선택을 제공하지 않습니다. `/DIR` 재정의는 격리된 CI 검증에만 사용합니다.
 
 ## 파일 이름
 
@@ -28,7 +27,6 @@
 | --- | --- |
 | 화면 표시 이름 | `Data Refinery` |
 | 설치 파일 | `App04_DataRefinery_Setup_v<version>.exe` |
-| 공개 설치 파일 별칭 | `DataRefinery-Setup.v<version>.exe` (동일 서명 바이트) |
 | 앱 실행 파일과 빌드 번들 폴더 | `App04_DataRefinery_v<version>` (`.exe`는 실행 파일) |
 | 설치·실행 런처 | `App04_DataRefinery_Launcher.exe` |
 | 설치 파일 체크섬 | 설치 파일 이름 + `.sha256` |
@@ -39,7 +37,9 @@
 런처의 기존 버전 탐색·업데이트·외부 앱 연동을 함께 변경할 때 도입할 수 있습니다.
 PyInstaller는 `onedir` 번들을 만들므로 포터블 배포를 추가한다면 의존성 폴더까지 ZIP으로 묶어야 합니다.
 
-## 현재 저장소 구조
+## 보존된 이전 구조 메모 (현재 기준 아님)
+
+아래 원문은 기존 작업 메모를 보존한 것입니다. 빌드·설치 경로는 다음 절의 현재 기준을 사용합니다.
 
 ```text
 AGENTS.md                   공유 개발 지침
@@ -57,26 +57,34 @@ sample_data/               대표 집계 CSV·프리셋
 tests/                     회귀 테스트·입력 fixture
 scripts/                   빌드·서명·설치 검증·벤치마크
 docs/                      사용법·구조 규칙·수동 QA
-installer/                 setup.iss 및 앱·런처 PyInstaller spec
-docs/releasing.md          빌드·서명·게시 절차
-docs/release-notes/        버전별 변경 기록 원본
-build/                    빌드 중간 파일·격리 가상환경·검증 기록 (Git 제외)
-dist/                     미서명 번들·설치 검증본 (Git 제외)
-release/                  최신 공식 서명 배포본·체크섬·매니페스트·최신 노트 (Git 제외)
-tools/release-history/    보호 자료·서명 증빙·이전 공식본 (Git 제외)
+release/
+  README.md                배포 체크리스트
+  RELEASE_NOTES_v*.md      버전별 변경 기록
+  installer/              Inno Setup 설치 설계도
+  packaging/              PyInstaller 설정
+  build/                  로컬 빌드 중간 파일·가상환경·서명 기록 (Git 제외)
+  dist/                   로컬 번들·설치 결과물 (Git 제외)
 tools/, scratch/          로컬 개발 자료 (Git 제외)
 ```
 
-공식 진입점은 `scripts/build.ps1`와 `scripts/sign.ps1`입니다. 설치 입력·출력 경로는
-컴파일 매개변수로 주입합니다. `release/build`, `release/dist`, `release/installer`,
-`release/packaging`은 사용하지 않습니다. 미서명 빌드와 실패한 서명은 공식 배포본을
-변경하지 않습니다. 이미 게시된 버전은 다시 서명하지 않으며, 업로드 복구는 검증된
-동일 파일로 `scripts/sign.ps1 -PublishOnly`를 사용합니다.
+현재 빌드 경로를 유지합니다. `release/`를 공식 결과물 전용으로 바꾸는 폴더 이동은
+스크립트·CI·spec·설치 설정·릴리스 지침을 함께 수정할 때 수행합니다.
 
-NTFS에서는 설치 별칭을 하드 링크로 만들고, 지원하지 않으면 복사합니다.
-파일 목록의 합산 용량과 중복을 제외한 파일 내용 용량을 구분합니다.
-`SHA256SUMS.txt`는 자기 자신을 제외한 공식 파일 전체를 UTF-8 BOM 없이 기록합니다.
-`build-manifest.json`에는 버전·소스 커밋·서명·해시·별칭·구성요소를 기록합니다.
+## 현재 저장소 역할 기준
+
+| 역할 | 현재 경로 |
+| --- | --- |
+| 설치 설계·앱 및 런처 패키징 입력 | `installer/setup.iss`, `installer/data_refinery.spec`, `installer/data_refinery_launcher.spec` |
+| 빌드·서명·검증 진입점 | `scripts/build.ps1`, `scripts/sign.ps1` |
+| 빌드 중간 파일·격리 환경·검수 기록 | `build/` (Git 제외) |
+| 앱·런처 빌드와 미서명 설치 검증본 | `dist/`, `dist/staging/` (Git 제외) |
+| 검증한 공식 서명 파일·체크섬·매니페스트 | `release/` (Git 제외) |
+| 기존 공식본·서명 및 보호 기록 | `tools/release-history/` (Git 제외) |
+| 공개 역할 안내·사용자 자료 계약 | `docs/CODE_MAP.md`, `docs/USER_DATA.md` |
+
+이 역할 기준은 현재 구현에 적용돼 있습니다. 위 이전 메모의 `release/installer`,
+`release/packaging`, `release/build`, `release/dist`를 현재 빌드 입력·출력 경로로 사용하지 않습니다.
+원본 자료·기존 서명물·사용자 설정은 폴더 정리 대상으로 취급하지 않습니다.
 
 ## 정리 원칙과 이번 정리 범위
 
@@ -84,10 +92,9 @@ NTFS에서는 설치 별칭을 하드 링크로 만들고, 지원하지 않으�
 - 프로모션 템플릿은 `assets/templates/promotion_template.xlsx` 하나만 유지합니다.
 - 참조되지 않는 옛 `manual.png`, `header_icon.png`, `icon.png`는 제거합니다.
 - 샘플 집계 결과, 테스트 캐시, bytecode, 이전 layout-check 및 빌드 중간 파일은 정리 대상입니다.
-  `scripts/clean_local_artifacts.ps1`로 목록을 검토한 뒤 `-Apply`로 정리합니다.
-- 서명된 배포 파일·체크섬·서명 로그·인증서·사용자 DB는 해시로 검증한 보호 사본과
-  이관 목록을 `tools/release-history/`에 남긴 뒤 이전 임시 디렉터리를 정리합니다.
-  빌드 가상환경은 재생성할 수 있습니다. 서명 실패 중간 파일은 별도 점검 전 보존합니다.
+  이 환경의 삭제 정책이 직접 삭제를 차단한 로컬 생성물은 보존하며,
+  `scripts/clean_local_artifacts.ps1`로 목록을 검토한 뒤 수동으로 정리할 수 있습니다.
+- 서명된 배포 파일·체크섬·서명 로그·서명 스크립트·빌드 가상환경은 보존합니다.
 - 레거시 Tkinter는 `--legacy-tk`로 실행 가능하므로 관련 소스·테스트는 보존합니다.
 - 매핑 엔진과 별도 매핑 화면 소스는 기능 자산으로 보존하며, 현재 기본 앱의 탭은 네 개입니다.
 - 사용자 AppData·공유 폴더·인증서·개인 설정을 프로젝트 청소 대상으로 포함하지 않습니다.

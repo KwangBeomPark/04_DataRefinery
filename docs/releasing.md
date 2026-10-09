@@ -16,14 +16,15 @@ immutable published versions.
 - `tools/release-history/`: private local signing logs, verified signed components,
   prior official files and preservation maps; never committed or uploaded wholesale.
 - `docs/release-notes/RELEASE_NOTES_v<version>.md`: authored version notes.
-- `release/`: only the latest signed official installer names, launcher, their
-  `.sha256` sidecars, `SHA256SUMS.txt`, `build-manifest.json`, and copied latest note.
+- `release/`: exactly the canonical signed installer, `SHA256SUMS.txt` and
+  `build-manifest.json`. Signing components and history stay private.
 
-The installer names are `App04_DataRefinery_Setup_v<version>.exe` and
-`DataRefinery-Setup.v<version>.exe`. They contain exactly the same signed bytes.
-On NTFS, a hard link avoids storing a second copy locally. On other filesystems,
-the script copies and verifies instead; this increases disk usage. Uploads or
-copies to another filesystem may also store both complete files.
+The only newly generated installer is `App04_DataRefinery_Setup_v<version>.exe`.
+Already published names remain unchanged; the launcher accepts the historical
+`App04_DataRefinery-Setup_v<version>.exe` spelling as read-only compatibility.
+The manifest records one installer and internal signed components with no aliases.
+SHA256SUMS.txt covers the installer. A separate launcher is built and signed but
+is not an extra asset in the new official three-file release set.
 
 The main EXE requires its `_internal` dependencies. It is not distributed alone
 as a portable program. The one-file `App04_DataRefinery_Launcher.exe` remains an
@@ -103,3 +104,5 @@ and never overwrites existing new settings.
 Local cleanup is separate from signing. Preview `scripts/clean_local_artifacts.ps1`
 before running it with `-Apply`. It refuses linked paths, user data and unarchived
 signed output. It never targets AppData, shared data folders or certificate stores.
+
+Publication is bound to KwangBeomPark/04_DataRefinery. A mismatched origin is rejected before remote mutations, and GitHub repository/release/CI commands explicitly select that repository. Reviewed release notes are read from docs/release-notes, outside the three-file official asset directory.
