@@ -1,19 +1,18 @@
-*Read this in other languages: [English](README.md), [한국어](README.ko.md)*
+﻿*Read this in other languages: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
 
-# Data Refinery
+# 💎 Data Refinery: Business Data Cleansing & Report-Ready Dataset Preparation
+
+<p align="center">
+  <img src="assets/images/data_refinery_infographic.svg" width="950" alt="Data Refinery High-Throughput Desktop ETL and In-Process OLAP Engine">
+</p>
 
 ![Data Refinery workflow: source files are repaired and normalized into analysis-ready data](assets/images/manual-data-refinery.png)
 
-> **Clean, normalize, and prepare data for analysis.**
+> **Raw Data Cleansing · European Format Handling · Ready-to-Use Report Datasets**
 
-Data Refinery is a Windows desktop application for non-technical users who need
-to turn difficult source files into reliable, analysis-ready data. It repairs
-malformed CSV records, keeps promotional rules in a compact normalized model,
-and produces a daily time-series file when analysis requires it.
+**Data Refinery** is a Windows desktop application created to clean and normalize difficult raw business data into structured, reliable datasets ready for reporting and analysis.
 
-The application is deliberately designed as a home for additional data
-normalizers. Pricing and other business-data templates can be added without
-mixing their source rules into the promotion model.
+In everyday operations, finance and sales administrative teams frequently receive messy CSV files, broken encodings, and complex promotion tables. The primary purpose of Data Refinery is to automate the repair of malformed rows, correctly parse regional number formats (such as European comma decimals), and produce consistent daily time-series or summary tables that feed directly into management reports.
 
 ## Current capabilities (v2.0.1)
 

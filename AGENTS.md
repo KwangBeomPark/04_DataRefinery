@@ -21,7 +21,7 @@
 - 앱 설치 경로는 `%LOCALAPPDATA%\Programs\Data Refinery`이다. 설정·로그·관리 자료는 설치 폴더 안의 `UserSetting` 하위 폴더에 둔다.
 - 데이터셋 설정·DuckDB 작업 DB는 `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting\datasets`에 둔다. `src/app_paths.py`에서 기존 자료를 최초 실행 시 복사·검증하고 원본을 보존한다. 새 설정과 DB를 덮어쓰지 않는다.
 - 앱 버전은 `src/version.py` 한 곳에서 정의한다. UI·CLI·spec·빌드·설치 검증이 이 정의를 사용해야 한다.
-- 배포 설치 파일은 `App04_DataRefinery_Setup_v<version>.exe`와 같은 내용의 `DataRefinery-Setup.v<version>.exe`를 함께 제공한다. 런처 철자는 `Launcher`로 통일한다.
+- 배포 설치 파일은 `App04_DataRefinery_Setup_v<version>.exe`를 표준 공식 명칭으로 사용한다. GitHub 릴리즈에는 매니페스트 및 체크섬과 함께 이 단일 설치 파일(총 3개 자산)만 직접 업로드한다. 사내·로컬 배포 호환용으로 동일 내용의 별칭 `DataRefinery-Setup.v<version>.exe`를 생성할 수 있으나, GitHub 공개 릴리즈 자산에는 업로드하지 않는다. 런처 철자는 `Launcher`로 통일한다.
 - 상세 규칙은 `docs/project-structure.md`, 배포 절차는 `docs/releasing.md`를 따른다.
 - 설치 설계도와 PyInstaller spec은 루트 `installer/`에 둔다. 공식 진입점은 `scripts/build.ps1`와 `scripts/sign.ps1` 두 개이다.
 - `build/`와 `dist/`는 재생성 가능한 임시 공간이고, `release/`에는 최신 서명 배포 파일·체크섬·매니페스트·릴리즈 노트만 둔다. 미서명 빌드가 기존 공식 배포본을 변경하면 안 된다.

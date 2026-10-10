@@ -314,14 +314,31 @@ function Get-UploadedRelease {
 
 function Get-MissingReleaseAssets {
     param([object]$Uploaded, [string[]]$Paths)
+    $expectedNames = @($Paths | ForEach-Object { Split-Path -Leaf $_ })
+    if (@($expectedNames | Sort-Object -Unique).Count -ne $expectedNames.Count) { throw 'Duplicate local release asset name.' }
+    foreach ($asset in @($Uploaded.assets)) {
+        if ($asset.name -cnotin $expectedNames) { throw "Unexpected remote release asset: $($asset.name). Existing files were preserved." }
+    }
     foreach ($path in $Paths) {
         $assetMatches = @($Uploaded.assets | Where-Object { $_.name -eq (Split-Path -Leaf $path) })
         if (-not $assetMatches.Count) { Write-Output $path; continue }
-        if ($assetMatches.Count -ne 1 -or $assetMatches[0].state -ne 'uploaded' -or
+        if ($assetMatches.Count -ne 1 -or -not $assetMatches[0].PSObject.Properties['state'] -or
+            -not $assetMatches[0].PSObject.Properties['size'] -or -not $assetMatches[0].PSObject.Properties['digest'] -or
+            $assetMatches[0].state -ne 'uploaded' -or
             $assetMatches[0].size -ne (Get-Item -LiteralPath $path).Length -or
             $assetMatches[0].digest -ne ('sha256:'+(Get-FileHash -LiteralPath $path).Hash.ToLowerInvariant())) {
             throw "An existing uploaded file differs; overwriting is forbidden: $path"
         }
+    }
+}
+
+function Assert-RemoteReleaseIdentity {
+    param([object]$Release, [string]$Tag)
+    if (-not $Release -or -not $Release.PSObject.Properties['tag_name'] -or
+        -not $Release.PSObject.Properties['draft'] -or -not $Release.PSObject.Properties['prerelease'] -or
+        -not $Release.PSObject.Properties['assets'] -or $Release.tag_name -cne $Tag -or
+        $Release.draft -isnot [bool] -or $Release.prerelease -isnot [bool] -or $Release.prerelease) {
+        throw 'Unexpected remote release identity or prerelease state; publication is blocked.'
     }
 }
 
@@ -337,14 +354,25 @@ function Publish-VerifiedRelease {
     if (-not $state.release -and -not (Test-Path -LiteralPath $notesPath -PathType Leaf)) {
         throw 'Author the version release notes in docs/release-notes before publishing.'
     }
-    foreach ($tagCommit in @((Get-LocalReleaseTag -Version $Manifest.version),(Get-RemoteReleaseTag -Version $Manifest.version))) {
+    $remoteTagCommit = Get-RemoteReleaseTag -Version $Manifest.version
+    foreach ($tagCommit in @((Get-LocalReleaseTag -Version $Manifest.version),$remoteTagCommit)) {
         if ($tagCommit -and $tagCommit -ne $Manifest.commit) { throw 'An existing release tag identifies a different source commit.' }
     }
     $assets = @(Get-ChildItem -LiteralPath $Directory -File -Force).FullName
+    $expectedNames = @("App04_DataRefinery_Setup_v$($Manifest.version).exe", 'build-manifest.json', 'SHA256SUMS.txt')
+    if ($assets.Count -ne 3 -or @(Compare-Object $expectedNames @($assets | ForEach-Object { Split-Path -Leaf $_ }) -CaseSensitive).Count) {
+        throw 'Publication requires exactly the canonical installer, manifest and checksums.'
+    }
     if ($state.release) {
         $uploaded = Get-UploadedRelease -Repository $state.repository -Tag $tag
+        Assert-RemoteReleaseIdentity -Release $uploaded -Tag $tag
+        if (-not $remoteTagCommit) { throw 'An existing release requires a verified remote tag; no remote mutations were attempted.' }
         # Refuse any changed existing file before pushing or uploading anything.
-        $null = Get-MissingReleaseAssets -Uploaded $uploaded -Paths $assets
+        $missing = @(Get-MissingReleaseAssets -Uploaded $uploaded -Paths $assets)
+        if (-not $uploaded.draft) {
+            if ($missing.Count -or @($uploaded.assets).Count -ne $assets.Count) { throw 'Published release is incomplete; existing public assets were preserved.' }
+            return
+        }
     }
     & git push origin main
     if ($LASTEXITCODE -ne 0) { throw 'Source push failed.' }
@@ -378,13 +406,16 @@ function Publish-VerifiedRelease {
         }
     }
     $uploaded = Get-UploadedRelease -Repository $state.repository -Tag $tag
-    if (@(Get-MissingReleaseAssets -Uploaded $uploaded -Paths $assets).Count) { throw 'Uploaded release is incomplete.' }
+    Assert-RemoteReleaseIdentity -Release $uploaded -Tag $tag
+    if (@($uploaded.assets).Count -ne $assets.Count -or @(Get-MissingReleaseAssets -Uploaded $uploaded -Paths $assets).Count) { throw 'Uploaded release is incomplete.' }
     if ($uploaded.draft) {
         & gh release edit $tag --repo $script:ReleaseRepository --draft=false --latest
         if ($LASTEXITCODE -ne 0) { throw 'Verified draft publication failed. Resume with -PublishOnly.' }
     }
     $published = Get-UploadedRelease -Repository $state.repository -Tag $tag
+    Assert-RemoteReleaseIdentity -Release $published -Tag $tag
     if ($published.draft -or $published.prerelease -or $published.tag_name -ne $tag -or
+        @($published.assets).Count -ne $assets.Count -or
         @(Get-MissingReleaseAssets -Uploaded $published -Paths $assets).Count) { throw 'Stable published release verification failed.' }
 }
 

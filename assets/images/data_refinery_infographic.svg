@@ -1,0 +1,313 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" width="100%" height="100%" style="background:#090d16;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <defs>
+    <radialGradient id="dr-glow-cyan" cx="15%" cy="25%" r="40%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#06b6d4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dr-glow-purple" cx="50%" cy="30%" r="50%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dr-glow-yellow" cx="85%" cy="30%" r="40%">
+      <stop offset="0%" stop-color="#eab308" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#eab308" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="card-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#141c2e" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#0e1422" stop-opacity="0.95"/>
+    </linearGradient>
+    <linearGradient id="subcard-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#19233a" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#101827" stop-opacity="0.9"/>
+    </linearGradient>
+
+    <linearGradient id="border-cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#0891b2" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="border-purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0.4"/>
+    </linearGradient>
+    <linearGradient id="border-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#1d4ed8" stop-opacity="0.3"/>
+    </linearGradient>
+    <linearGradient id="border-green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#059669" stop-opacity="0.4"/>
+    </linearGradient>
+
+    <marker id="dr-arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#38bdf8"/>
+    </marker>
+    <marker id="dr-arrow-purple" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#a855f7"/>
+    </marker>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="1200" height="675" fill="#090d16"/>
+  <rect width="1200" height="675" fill="url(#dr-glow-cyan)"/>
+  <rect width="1200" height="675" fill="url(#dr-glow-purple)"/>
+  <rect width="1200" height="675" fill="url(#dr-glow-yellow)"/>
+
+  <!-- Grid Lines -->
+  <g stroke="#1f293d" stroke-width="0.5" opacity="0.4">
+    <line x1="0" y1="90" x2="1200" y2="90"/>
+    <line x1="0" y1="630" x2="1200" y2="630"/>
+    <line x1="265" y1="90" x2="265" y2="630" stroke-dasharray="4 4"/>
+    <line x1="720" y1="90" x2="720" y2="630" stroke-dasharray="4 4"/>
+    <line x1="970" y1="90" x2="970" y2="630" stroke-dasharray="4 4"/>
+  </g>
+
+  <!-- ==================== HEADER ==================== -->
+  <g transform="translate(40, 28)">
+    <rect x="0" y="0" width="190" height="22" rx="11" fill="#eab308" fill-opacity="0.15" stroke="#eab308" stroke-width="0.8"/>
+    <text x="95" y="15" fill="#facc15" font-size="10.5" font-weight="700" letter-spacing="1.2" text-anchor="middle">IN-PROCESS OLAP ENGINE</text>
+    
+    <text x="0" y="46" fill="#ffffff" font-size="22" font-weight="800" letter-spacing="-0.5">
+      Data Refinery <tspan fill="#94a3b8" font-size="16" font-weight="500">(Local Data Cleansing &amp; Report-Ready Datasets)</tspan>
+    </text>
+    <text x="750" y="38" fill="#64748b" font-size="12" font-weight="500" text-anchor="end">
+      Enterprise DuckDB Data Pipeline &amp; High-Performance Governance
+    </text>
+  </g>
+
+  <!-- ==================== STAGE 1: INPUT RAW DATA ==================== -->
+  <g transform="translate(40, 105)">
+    <rect width="210" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-cyan)" stroke-width="1.2"/>
+    
+    <rect x="14" y="14" width="70" height="18" rx="9" fill="#06b6d4" fill-opacity="0.2"/>
+    <text x="49" y="27" fill="#22d3ee" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 1</text>
+    <text x="14" y="52" fill="#f8fafc" font-size="15" font-weight="700">INPUT RAW DATA</text>
+    <text x="14" y="68" fill="#64748b" font-size="10.5">Heterogeneous Business Files</text>
+
+    <!-- Item 1: Corrupted Excel -->
+    <g transform="translate(14, 85)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#10b981" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#34d399" font-size="11" font-weight="700" text-anchor="middle">📊</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Complex Excel Sheets</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">.xlsx / .xls with Merged Cells</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Multi-header &amp; nested rows</text>
+    </g>
+
+    <!-- Item 2: Broken CSVs -->
+    <g transform="translate(14, 163)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#f59e0b" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#fbbf24" font-size="11" font-weight="700" text-anchor="middle">📄</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Encoding-Broken CSVs</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">UTF-8 / CP949 / CP1250</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Trailing commas &amp; null quotes</text>
+    </g>
+
+    <!-- Item 3: Promo Datasets -->
+    <g transform="translate(14, 241)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#8b5cf6" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#c084fc" font-size="11" font-weight="700" text-anchor="middle">🏷️</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Promotion Schedules</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Disjointed Branch Data</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Unmatched SKU keys &amp; dates</text>
+    </g>
+
+    <!-- Item 4: ERP Dumps -->
+    <g transform="translate(14, 319)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#06b6d4" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#22d3ee" font-size="11" font-weight="700" text-anchor="middle">💾</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">ERP Settlement Dumps</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">High-volume row exports</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Large transaction lines per month</text>
+    </g>
+
+    <!-- Bottom Status Note -->
+    <rect x="14" y="450" width="182" height="48" rx="7" fill="#042f2e" fill-opacity="0.5" stroke="#0d9488" stroke-width="0.8"/>
+    <text x="24" y="468" fill="#2dd4bf" font-size="10" font-weight="700">🔒 100% Offline ETL</text>
+    <text x="24" y="484" fill="#99f6e4" font-size="9">Zero corporate data uploaded to cloud</text>
+  </g>
+
+  <!-- Flow Connector 1 -> 2 -->
+  <path d="M 252 355 L 282 355" stroke="#06b6d4" stroke-width="2.5" marker-end="url(#dr-arrow)"/>
+
+  <!-- ==================== STAGE 2: IN-PROCESS DUCKDB ETL ENGINE ==================== -->
+  <g transform="translate(285, 105)">
+    <rect width="430" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-purple)" stroke-width="1.4"/>
+    
+    <rect x="18" y="14" width="70" height="18" rx="9" fill="#8b5cf6" fill-opacity="0.2"/>
+    <text x="53" y="27" fill="#c084fc" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 2</text>
+    <text x="18" y="52" fill="#f8fafc" font-size="15" font-weight="700">IN-PROCESS DUCKDB OLAP ENGINE</text>
+    <text x="18" y="68" fill="#64748b" font-size="10.5">High-Speed Vectorized Execution &amp; Semantic Cleansing Pipeline</text>
+
+    <!-- Top DuckDB Core -->
+    <g transform="translate(18, 85)">
+      <rect width="394" height="66" rx="9" fill="#1e1b4b" fill-opacity="0.6" stroke="#6366f1" stroke-width="1.2"/>
+      <text x="16" y="26" fill="#a5b4fc" font-size="12.5" font-weight="700">🦆 Vectorized DuckDB In-Memory Engine</text>
+      <text x="16" y="44" fill="#cbd5e1" font-size="10.5">Columnar Storage • Parallel SIMD Execution • Sub-Second Aggregations</text>
+      <text x="16" y="57" fill="#818cf8" font-size="9.5">Processes massive transactional batches without blowing up system memory</text>
+    </g>
+
+    <!-- Dual Subsystem Cards -->
+    <g transform="translate(18, 163)">
+      <!-- Left: Schema Inference & Repair -->
+      <rect width="190" height="96" rx="9" fill="url(#subcard-grad)" stroke="#312e81" stroke-width="1"/>
+      <rect x="12" y="12" width="22" height="22" rx="4" fill="#8b5cf6" fill-opacity="0.2"/>
+      <text x="23" y="27" fill="#c084fc" font-size="12" font-weight="700" text-anchor="middle">🔍</text>
+      <text x="42" y="24" fill="#f8fafc" font-size="12" font-weight="600">Schema Auto-Repair</text>
+      <text x="42" y="38" fill="#94a3b8" font-size="10">Header &amp; Type Deduction</text>
+      <text x="12" y="58" fill="#cbd5e1" font-size="9.5">• Unmerges multi-tier headers</text>
+      <text x="12" y="72" fill="#cbd5e1" font-size="9.5">• Strict numeric type casting</text>
+      <text x="12" y="86" fill="#a78bfa" font-size="9">Auto-replaces null anomalies</text>
+
+      <!-- Right: Contract Validation -->
+      <g transform="translate(204, 0)">
+        <rect width="190" height="96" rx="9" fill="url(#subcard-grad)" stroke="#1e3a8a" stroke-width="1"/>
+        <rect x="12" y="12" width="22" height="22" rx="4" fill="#3b82f6" fill-opacity="0.2"/>
+        <text x="23" y="27" fill="#60a5fa" font-size="12" font-weight="700" text-anchor="middle">🛡️</text>
+        <text x="42" y="24" fill="#f8fafc" font-size="12" font-weight="600">Data Contract Guard</text>
+        <text x="42" y="38" fill="#94a3b8" font-size="10">Fail-Fast Quality Gates</text>
+        <text x="12" y="58" fill="#cbd5e1" font-size="9.5">• Primary key uniqueness check</text>
+        <text x="12" y="72" fill="#cbd5e1" font-size="9.5">• Foreign key link verification</text>
+        <text x="12" y="86" fill="#93c5fd" font-size="9">Outlier / drift warning flags</text>
+      </g>
+    </g>
+
+    <!-- Normalization & Joiner Hub -->
+    <g transform="translate(18, 271)">
+      <rect width="394" height="60" rx="9" fill="url(#subcard-grad)" stroke="#374151" stroke-width="1"/>
+      <circle cx="26" cy="30" r="12" fill="#ec4899" fill-opacity="0.15"/>
+      <text x="26" y="34" fill="#f472b6" font-size="11" font-weight="700" text-anchor="middle">⚡</text>
+      <text x="46" y="26" fill="#f8fafc" font-size="12" font-weight="600">Promotion Normalizer &amp; Aggregator Core</text>
+      <text x="46" y="42" fill="#94a3b8" font-size="10">Resolves date overlaps, discount hierarchy rules &amp; tiered rebates across branches</text>
+      <text x="46" y="54" fill="#64748b" font-size="9">Generates reproducible, idempotent joins between sales and promo masters</text>
+    </g>
+
+    <!-- Thread-Safe Pipeline Controller -->
+    <g transform="translate(18, 343)">
+      <rect width="394" height="88" rx="9" fill="url(#subcard-grad)" stroke="#4338ca" stroke-width="1"/>
+      <rect x="14" y="14" width="22" height="22" rx="4" fill="#6366f1" fill-opacity="0.2"/>
+      <text x="25" y="29" fill="#a5b4fc" font-size="12" font-weight="700" text-anchor="middle">⚙️</text>
+      <text x="46" y="26" fill="#f8fafc" font-size="12" font-weight="600">Multi-Threaded Pipeline Orchestration</text>
+      <text x="46" y="42" fill="#94a3b8" font-size="10.5">• PySide6 responsive UI decoupling with background QThread workers</text>
+      <text x="46" y="58" fill="#94a3b8" font-size="10.5">• Comprehensive progress telemetry &amp; live row-count metrics</text>
+      <text x="46" y="74" fill="#94a3b8" font-size="10.5">• Atomic staging with zero partial-write corruption on error</text>
+    </g>
+
+    <!-- Bottom Engine Status -->
+    <rect x="18" y="445" width="394" height="53" rx="7" fill="#1e1b4b" fill-opacity="0.5" stroke="#4f46e5" stroke-width="0.8"/>
+    <text x="30" y="466" fill="#a5b4fc" font-size="10.5" font-weight="700">🚀 Zero External Server Requirement</text>
+    <text x="30" y="483" fill="#cbd5e1" font-size="9.5">Runs embedded in a single local process — zero database daemon maintenance</text>
+  </g>
+
+  <!-- Flow Connector 2 -> 3 -->
+  <path d="M 717 355 L 747 355" stroke="#a855f7" stroke-width="2.5" marker-end="url(#dr-arrow-purple)"/>
+
+  <!-- ==================== STAGE 3: NORMALIZED OUTPUTS ==================== -->
+  <g transform="translate(750, 105)">
+    <rect width="210" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-blue)" stroke-width="1.2"/>
+    
+    <rect x="14" y="14" width="70" height="18" rx="9" fill="#3b82f6" fill-opacity="0.2"/>
+    <text x="49" y="27" fill="#60a5fa" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 3</text>
+    <text x="14" y="52" fill="#f8fafc" font-size="15" font-weight="700">OUTPUTS</text>
+    <text x="14" y="68" fill="#64748b" font-size="10.5">Analysis-Ready Targets</text>
+
+    <!-- Item 1: Parquet -->
+    <g transform="translate(14, 85)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#3b82f6" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#60a5fa" font-size="11" font-weight="700" text-anchor="middle">📦</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Partitioned Parquet</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Snappy-Compressed Files</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Instant ingestion into PowerBI</text>
+    </g>
+
+    <!-- Item 2: SQLite / DuckDB -->
+    <g transform="translate(14, 163)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#06b6d4" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#22d3ee" font-size="11" font-weight="700" text-anchor="middle">🗄️</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Local Relational DB</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Indexed Tables (.db)</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Ready for SQL workbench joins</text>
+    </g>
+
+    <!-- Item 3: Clean CSV -->
+    <g transform="translate(14, 241)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#10b981" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#34d399" font-size="11" font-weight="700" text-anchor="middle">📄</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Standard Master CSV</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">Strict UTF-8 BOM</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Excel-friendly without gibberish</text>
+    </g>
+
+    <!-- Item 4: Quality Audit -->
+    <g transform="translate(14, 319)">
+      <rect width="182" height="68" rx="9" fill="url(#subcard-grad)" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="24" cy="24" r="12" fill="#f59e0b" fill-opacity="0.15"/>
+      <text x="24" y="28" fill="#fbbf24" font-size="11" font-weight="700" text-anchor="middle">📝</text>
+      <text x="44" y="24" fill="#f1f5f9" font-size="12" font-weight="600">Quality Audit Report</text>
+      <text x="44" y="40" fill="#94a3b8" font-size="10">JSON / Markdown Log</text>
+      <text x="44" y="54" fill="#64748b" font-size="9.5">Shows repaired rows &amp; anomalies</text>
+    </g>
+
+    <!-- Bottom Output Status -->
+    <rect x="14" y="450" width="182" height="48" rx="7" fill="#1e293b" fill-opacity="0.5" stroke="#334155" stroke-width="0.8"/>
+    <text x="24" y="468" fill="#94a3b8" font-size="10" font-weight="700">⚡ Zero Manual Wrangling</text>
+    <text x="24" y="484" fill="#cbd5e1" font-size="9">Ready for instant executive BI</text>
+  </g>
+
+  <!-- Flow Connector 3 -> 4 -->
+  <path d="M 962 355 L 987 355" stroke="#3b82f6" stroke-width="2.5" marker-end="url(#dr-arrow)"/>
+
+  <!-- ==================== STAGE 4: KEY BUSINESS VALUE ==================== -->
+  <g transform="translate(990, 105)">
+    <rect width="170" height="515" rx="14" fill="url(#card-grad)" stroke="url(#border-green)" stroke-width="1.2"/>
+    
+    <rect x="12" y="14" width="70" height="18" rx="9" fill="#10b981" fill-opacity="0.2"/>
+    <text x="47" y="27" fill="#34d399" font-size="9.5" font-weight="800" text-anchor="middle">STAGE 4</text>
+    <text x="12" y="52" fill="#f8fafc" font-size="13.5" font-weight="700">BUSINESS VALUE</text>
+    <text x="12" y="68" fill="#64748b" font-size="10">Recruiter Highlights</text>
+
+    <!-- Metric 1: Clean Data -->
+    <g transform="translate(12, 85)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="32" fill="#34d399" font-size="20" font-weight="800">Clean Data</text>
+      <text x="14" y="50" fill="#f1f5f9" font-size="11" font-weight="600">Repairs Broken Rows</text>
+      <text x="14" y="66" fill="#94a3b8" font-size="9.5">Fixes encodings &amp; unmerges</text>
+    </g>
+
+    <!-- Metric 2: Format Guard -->
+    <g transform="translate(12, 185)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="32" fill="#34d399" font-size="20" font-weight="800">Format Guard</text>
+      <text x="14" y="50" fill="#f1f5f9" font-size="11" font-weight="600">European Decimals</text>
+      <text x="14" y="66" fill="#94a3b8" font-size="9.5">Prevents comma &amp; dot errors</text>
+    </g>
+
+    <!-- Metric 3: Report Ready -->
+    <g transform="translate(12, 285)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="32" fill="#34d399" font-size="20" font-weight="800">Report Ready</text>
+      <text x="14" y="50" fill="#f1f5f9" font-size="11" font-weight="600">Consistent Datasets</text>
+      <text x="14" y="66" fill="#94a3b8" font-size="9.5">Prepared for reporting</text>
+    </g>
+
+    <!-- Metric 4: Local Engine -->
+    <g transform="translate(12, 385)">
+      <rect width="146" height="88" rx="9" fill="url(#subcard-grad)" stroke="#065f46" stroke-width="1"/>
+      <text x="14" y="32" fill="#34d399" font-size="20" font-weight="800">Local Engine</text>
+      <text x="14" y="50" fill="#f1f5f9" font-size="11" font-weight="600">In-Process DuckDB</text>
+      <text x="14" y="66" fill="#94a3b8" font-size="9.5">Fast offline data processing</text>
+    </g>
+
+    <!-- Tech Stack Pill -->
+    <g transform="translate(12, 485)">
+      <rect width="146" height="20" rx="5" fill="#1e293b"/>
+      <text x="73" y="14" fill="#94a3b8" font-size="9" font-weight="600" text-anchor="middle">DuckDB • PySide6 • Polars</text>
+    </g>
+  </g>
+</svg>

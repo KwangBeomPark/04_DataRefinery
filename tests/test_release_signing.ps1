@@ -156,6 +156,7 @@ try {
     try {
         Assert-True ($null -eq (Get-LocalReleaseTag -Version '2.0.1')) 'Native stderr aborted a missing-tag lookup in PS 5.1.'
         Assert-True ($null -eq (Get-RemoteReleaseTag -Version '2.0.1')) 'An absent remote tag was misread.'
+        New-Item -ItemType File -Path $tagMarker | Out-Null
         $mockManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
         Publish-VerifiedRelease -Directory $official -Manifest $mockManifest
         $trace = [IO.File]::ReadAllText($callLog)
@@ -171,6 +172,48 @@ try {
         $published.assets[0].digest = $uploadRecords[0].digest
         $published.assets[0].state = 'starter'
         Assert-Rejected { Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths } 'An incomplete upload residue was overwritten.' 'overwriting is forbidden'
+        $published.assets[0].state = 'uploaded'
+        $published.assets += [pscustomobject]@{name='unexpected.zip'; state='uploaded'; size=1; digest=('sha256:'+('a'*64))}
+        Assert-Rejected { Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths } 'An unexpected remote asset was accepted.' 'Unexpected remote release asset'
+        $published = Get-Content -LiteralPath $publicApi -Raw | ConvertFrom-Json
+        $published.assets += $published.assets[0]
+        Assert-Rejected { Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths } 'A duplicate remote asset was accepted.' 'overwriting is forbidden'
+        $published = Get-Content -LiteralPath $publicApi -Raw | ConvertFrom-Json
+        $published.assets[0].PSObject.Properties.Remove('state')
+        Assert-Rejected { Get-MissingReleaseAssets -Uploaded $published -Paths $publicPaths } 'An upload without state was accepted.' 'overwriting is forbidden'
+        Assert-Rejected { Get-MissingReleaseAssets -Uploaded $published -Paths @($publicPaths[0],$publicPaths[0]) } 'Duplicate local names were accepted.' 'Duplicate local release asset name'
+        foreach ($scenario in @('prerelease','wrong-tag','missing-draft','missing-remote-tag')) {
+            $invalidRelease = Get-Content -LiteralPath $completeApi -Raw | ConvertFrom-Json
+            $expectedPattern = 'Unexpected remote release identity or prerelease state'
+            switch ($scenario) {
+                'prerelease' { $invalidRelease.prerelease=$true }
+                'wrong-tag' { $invalidRelease.tag_name='v9.9.9' }
+                'missing-draft' { $invalidRelease.PSObject.Properties.Remove('draft') }
+                'missing-remote-tag' { Remove-Item -LiteralPath $tagMarker; $expectedPattern='requires a verified remote tag' }
+            }
+            [IO.File]::WriteAllText($activeApi,($invalidRelease | ConvertTo-Json -Depth 6),[Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($callLog,'')
+            Assert-Rejected { Publish-VerifiedRelease -Directory $official -Manifest $mockManifest } "Unsafe existing release accepted: $scenario" $expectedPattern
+            $invalidTrace = [IO.File]::ReadAllText($callLog)
+            Assert-True ($invalidTrace -notmatch 'git push|git tag|gh release (create|upload|edit)') "Unsafe preflight mutated remote state: $scenario"
+            if (-not (Test-Path -LiteralPath $tagMarker)) { New-Item -ItemType File -Path $tagMarker | Out-Null }
+        }
+        $canonicalPath = Join-Path $official $binaryNames[0]
+        $casePath = Join-Path $official $binaryNames[0].ToLowerInvariant()
+        Rename-Item -LiteralPath $canonicalPath -NewName 'case-only-fixture.tmp'
+        Rename-Item -LiteralPath (Join-Path $official 'case-only-fixture.tmp') -NewName (Split-Path -Leaf $casePath)
+        try {
+            [IO.File]::WriteAllText($callLog,'')
+            Assert-Rejected { Publish-VerifiedRelease -Directory $official -Manifest $mockManifest } 'Noncanonical filename casing was accepted.' 'requires exactly the canonical installer'
+            Assert-True ([IO.File]::ReadAllText($callLog) -notmatch 'git push|git tag|gh release (create|upload|edit)') 'Noncanonical local names caused a remote mutation.'
+        } finally {
+            Rename-Item -LiteralPath $casePath -NewName 'case-only-fixture.tmp'
+            Rename-Item -LiteralPath (Join-Path $official 'case-only-fixture.tmp') -NewName $binaryNames[0]
+        }
+        Copy-Item -LiteralPath $publicApi -Destination $activeApi
+        [IO.File]::WriteAllText($callLog,'')
+        Publish-VerifiedRelease -Directory $official -Manifest $mockManifest
+        Assert-True ([IO.File]::ReadAllText($callLog) -notmatch 'git push|git tag|gh release (create|upload|edit)') 'A complete public release was mutated during verification.'
         # Also exercise a newly created draft, rather than only resuming an existing one.
         Remove-Item -LiteralPath $tagMarker
         New-Item -ItemType File -Path $absentInventory | Out-Null
