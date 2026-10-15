@@ -53,6 +53,14 @@ class AggregatorTestCase(unittest.TestCase):
 class TestAggregatorShell(AggregatorTestCase):
     def test_four_tabs_exist_and_switch(self):
         self.assertEqual(len(self.app.notebook.tabs()), 4)
+        self.assertEqual(
+            self.app.notebook.tabs(),
+            tuple(str(tab) for tab in (
+                self.app.aggregator_tab, self.app.publisher_tab,
+                self.app.promotion_tab, self.app.csv_tab,
+            )),
+        )
+        self.assertEqual(self.app._selected_task_id(), "aggregator")
 
         self.app._select_task_tab(self.app.aggregator_tab)
         self.assertEqual(self.app._selected_task_id(), "aggregator")
@@ -85,9 +93,9 @@ class TestAggregatorShell(AggregatorTestCase):
         self.assertEqual(str(style.lookup(selected_style, "borderwidth")), "0")
 
         # Tab buttons reflect selected vs unselected styles
-        self.assertEqual(self.app.csv_tab_button.cget("style"), selected_style)
+        self.assertEqual(self.app.csv_tab_button.cget("style"), unselected_style)
         self.assertEqual(self.app.promotion_tab_button.cget("style"), unselected_style)
-        self.assertEqual(self.app.aggregator_tab_button.cget("style"), unselected_style)
+        self.assertEqual(self.app.aggregator_tab_button.cget("style"), selected_style)
 
         # In focus state, unselected button resolves to visible accent focuscolor
         self.app.promotion_tab_button.state(["focus"])

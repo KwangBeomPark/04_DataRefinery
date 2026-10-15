@@ -1,4 +1,4 @@
-"""PySide6 implementation for Tab 3: '데이터 집계·슬라이서' (Data Aggregator)."""
+"""PySide6 implementation for '데이터 집계·슬라이서' (Data Aggregator)."""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ class _GenericTableModel(QAbstractTableModel):
 
 
 class AggregatorTab(QWidget):
-    """Tab 3: Large data aggregation and slice engine."""
+    """Large data aggregation and slice engine."""
 
     def __init__(
         self,

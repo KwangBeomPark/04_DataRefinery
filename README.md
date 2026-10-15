@@ -55,9 +55,10 @@ In everyday operations, finance and sales administrative teams frequently receiv
 
 ## Quality and verification status
 
-- **Automated test suite & CI**: 528 tests covering the entire Qt and engine pipeline; 527 pass
-  and one optional Excel COM test is skipped by default.
-  1,000,000-row benchmark completed in 1.379s. Cross-reviewed and verified by Claude Opus 5.5 and Codex Sol 6.1.
+- **v2.0.3 local regression check**: 537 tests run; 536 passed and one optional Excel COM test skipped.
+  Checks cover Qt tab identity/order, three languages, retained task state and the legacy Tk order.
+  Claude Opus 5.5 was consulted on the preparation/mart roadmap. These checks do not establish
+  live Excel, shared-drive or newly signed release acceptance.
 
 ## Data model direction
 
@@ -82,6 +83,11 @@ Python and extra libraries are not required.
    for promotion rules and daily support data, **Data aggregator** to group and summarize a CSV file,
    or **Dataset publisher** to accumulate, review, and publish period data for Excel.
 4. Results are saved beside the source data with a `YYYYMMDD_HHMM` timestamp.
+
+Source v2.0.3 opens **Data aggregator → Dataset publisher → Promotion template →
+CSV repair** in that order. Language changes retain the selected task and its inputs.
+See the [data preparation and mart roadmap](docs/DATA_PREPARATION_ROADMAP.md) for
+the proposed preparation workspace and phased app improvements.
 
 The installation folder contains application binaries and bundled libraries.
 Settings, logs, and working databases are stored separately:
@@ -144,4 +150,4 @@ Installer upgrade safeguards and the remaining signed/runtime checks are recorde
 See the [public code map](docs/CODE_MAP.md), [user-data backup and restore guide](docs/USER_DATA.md), and [phases 3–5 review](docs/STANDARDIZATION_PHASE3_5_REVIEW.md). The default backup includes all UserSetting files, including workspace databases; user-selected external inputs and published files require separate backup. The desktop menu is labelled Updates / About to match its actions.
 
 
-2026-10-09 source release preparation: version 2.0.2 is not published yet. New builds use only `App04_DataRefinery_Setup_v<version>.exe` plus manifest/checksums. Existing v2.0.1 downloads stay unchanged. See [current release checklist](RELEASE_CHECKLIST.md).
+2026-10-15 source preparation version: 2.0.3 adds reordered tabs and a data-preparation roadmap. Signing and publication remain separate release steps. New public releases contain only `App04_DataRefinery_Setup_v<version>.exe` plus manifest/checksums. Existing v2.0.1 downloads stay unchanged. See the [current release checklist](RELEASE_CHECKLIST.md).

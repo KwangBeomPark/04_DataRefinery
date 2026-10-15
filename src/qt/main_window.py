@@ -1,4 +1,4 @@
-"""PySide6 MainWindow for Data Refinery v2.0.0."""
+"""PySide6 MainWindow for Data Refinery."""
 
 from __future__ import annotations
 
@@ -124,10 +124,10 @@ class MainWindow(QMainWindow):
         self.tab_aggregator = AggregatorTab(language_code=self.language_code, job_runner=self.job_runner)
         self.tab_dataset = DatasetPublisherTab(language_code=self.language_code, job_runner=self.job_runner)
 
-        self.tab_widget.addTab(self.tab_csv, "CSV 복구/분할")
-        self.tab_widget.addTab(self.tab_promotion, "프로모션 템플릿")
         self.tab_widget.addTab(self.tab_aggregator, "데이터 집계·슬라이서")
         self.tab_widget.addTab(self.tab_dataset, "데이터셋 배포")
+        self.tab_widget.addTab(self.tab_promotion, "프로모션 템플릿")
+        self.tab_widget.addTab(self.tab_csv, "CSV 복구/분할")
 
         main_layout.addWidget(self.tab_widget, stretch=1)
 
@@ -152,13 +152,16 @@ class MainWindow(QMainWindow):
         self.lbl_app_subtitle.setText(t.get("header_subtitle", "데이터 전처리 · 집계 · 배포 솔루션"))
         self.btn_settings.setText(t["update_info_menu"])
 
-        # Update Tab Titles from task_options
+        # task_options identifies features; visual order must not change their labels.
         task_opts = t.get("task_options", ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서", "데이터셋 배포"))
         if len(task_opts) >= 4:
-            self.tab_widget.setTabText(0, task_opts[0])
-            self.tab_widget.setTabText(1, task_opts[1])
-            self.tab_widget.setTabText(2, task_opts[2])
-            self.tab_widget.setTabText(3, task_opts[3])
+            for tab, task_index in (
+                (self.tab_csv, 0),
+                (self.tab_promotion, 1),
+                (self.tab_aggregator, 2),
+                (self.tab_dataset, 3),
+            ):
+                self.tab_widget.setTabText(self.tab_widget.indexOf(tab), task_opts[task_index])
 
         # Propagate to all tabs
         self.tab_csv.apply_language(lang_code)

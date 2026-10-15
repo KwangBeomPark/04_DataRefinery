@@ -273,10 +273,9 @@ class DataRefineryApp:
         self.csv_tab_button = ttk.Button(
             self.task_tabs,
             command=lambda: self._select_task_tab(self.csv_tab),
-            style="TaskTab.Selected.TButton",
+            style="TaskTab.TButton",
             width=18,
         )
-        self.csv_tab_button.pack(side="left", padx=(0, 2))
 
         self.promotion_tab_button = ttk.Button(
             self.task_tabs,
@@ -284,15 +283,13 @@ class DataRefineryApp:
             style="TaskTab.TButton",
             width=18,
         )
-        self.promotion_tab_button.pack(side="left", padx=2)
 
         self.aggregator_tab_button = ttk.Button(
             self.task_tabs,
             command=lambda: self._select_task_tab(self.aggregator_tab),
-            style="TaskTab.TButton",
+            style="TaskTab.Selected.TButton",
             width=18,
         )
-        self.aggregator_tab_button.pack(side="left", padx=2)
 
         self.publisher_tab_button = ttk.Button(
             self.task_tabs,
@@ -300,7 +297,13 @@ class DataRefineryApp:
             style="TaskTab.TButton",
             width=18,
         )
-        self.publisher_tab_button.pack(side="left", padx=2)
+        for button in (
+            self.aggregator_tab_button,
+            self.publisher_tab_button,
+            self.promotion_tab_button,
+            self.csv_tab_button,
+        ):
+            button.pack(side="left", padx=2)
 
         # Utility controls (Right side)
         util_frame = ttk.Frame(top_bar, style="App.TFrame")
@@ -336,10 +339,10 @@ class DataRefineryApp:
         self.promotion_tab = ttk.Frame(self.notebook, style="App.TFrame", padding=(0, 6, 0, 0))
         self.aggregator_tab = AggregatorTabFrame(self.notebook, self, padding=(0, 6, 0, 0))
         self.publisher_tab = DatasetPublisherTabFrame(self.notebook, self, padding=(0, 6, 0, 0))
-        self.notebook.add(self.csv_tab)
-        self.notebook.add(self.promotion_tab)
         self.notebook.add(self.aggregator_tab)
         self.notebook.add(self.publisher_tab)
+        self.notebook.add(self.promotion_tab)
+        self.notebook.add(self.csv_tab)
         self.notebook.bind("<<NotebookTabChanged>>", self._on_task_tab_change)
 
         self.file_section = ttk.LabelFrame(self.csv_tab, style="Card.TLabelframe", padding=(18, 14))

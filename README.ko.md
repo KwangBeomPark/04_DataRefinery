@@ -50,8 +50,9 @@
 
 ## 품질 및 검증 현황
 
-- **자동화 테스트 스위트 및 CI**: 총 528개 테스트 중 527개 통과 (1개 선택적 Excel COM 테스트 기본 skip).
-  1,000,000행 대용량 매핑 벤치마크 1.379초 완료. Claude Opus 5.5 및 Codex Sol 6.1 심층 교차 코드 검수 반영.
+- **v2.0.3 로컬 회귀 검사**: 총 537개 실행, 536개 통과, 선택적 Excel COM 1개 건너뜀.
+  Qt 탭·세 언어 전환·업무 상태 유지와 Tkinter 호환 순서를 확인했습니다.
+  Claude Opus 5.5와 정제·데이터 마트 개선 방향을 논의했습니다. 실제 Excel·공유 드라이브·새 서명 배포 검증과는 구분합니다.
 
 ## 데이터 모델 방향
 
@@ -72,6 +73,11 @@
 3. 깨진 구분 파일은 **CSV 구조 복구**, 프로모션 자료는 **프로모션 템플릿**,
    CSV 요약은 **데이터 집계·슬라이서**, 기간별 누적 및 공유 배포는 **데이터셋 배포** 탭에서 처리합니다.
 4. 결과는 원본 파일과 같은 폴더에 `YYYYMMDD_HHMM` 형식의 날짜·시간을 붙여 저장됩니다.
+
+소스 v2.0.3의 탭 순서는 **데이터 집계·슬라이서 → 데이터셋 배포 → 프로모션 템플릿 →
+CSV 구조 복구**입니다. 집계 탭이 처음 열리며 언어를 바꿔도 업무와 입력 설정을 유지합니다.
+데이터 마트 제작을 위한 정제 기능과 전체 앱의 단계별 개선 제안은
+[데이터 정제·마트 개선 계획](docs/DATA_PREPARATION_ROADMAP.md)을 참고하세요.
 
 설치 폴더에는 실행 파일과 번들 라이브러리를 둡니다. 설정·로그·작업 DB는 별도로 저장합니다.
 
@@ -130,4 +136,4 @@ SimplySign에 로그인한 관리자 PowerShell에서 `scripts/sign.ps1`로 서�
 [공개 코드맵](docs/CODE_MAP.md), [사용자 자료 백업·복원](docs/USER_DATA.md), [3–5단계 검수](docs/STANDARDIZATION_PHASE3_5_REVIEW.md)를 참고하세요. 기본 백업은 작업 DB를 포함한 UserSetting 전체이며 외부 원본·공유 배포 폴더는 별도로 보관합니다. 화면 상단 메뉴는 실제 항목에 맞춰 업데이트 / 정보로 표시합니다.
 
 
-2026-10-09 source release preparation: version 2.0.2 is not published yet. New builds use only `App04_DataRefinery_Setup_v<version>.exe` plus manifest/checksums. Existing v2.0.1 downloads stay unchanged. See [current release checklist](RELEASE_CHECKLIST.md).
+2026-10-15 소스 준비 버전은 2.0.3입니다. 탭 재배치와 개선 계획을 반영했으며 새 버전의 서명·게시는 별도 배포 절차입니다. 신규 공개 배포는 설치 파일 한 개와 매니페스트·체크섬 세 자산으로 구성합니다. 기존 v2.0.1 다운로드는 유지합니다. [현재 릴리스 체크리스트](RELEASE_CHECKLIST.md)를 참고하세요.

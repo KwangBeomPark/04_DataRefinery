@@ -1,4 +1,4 @@
-"""PySide6 implementation for Tab 2: '프로모션 템플릿' (Promotion Template)."""
+"""PySide6 implementation for '프로모션 템플릿' (Promotion Template)."""
 
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ class _PromotionPreviewModel(QAbstractTableModel):
 
 
 class PromotionTab(QWidget):
-    """Tab 2: Promotion template expansion and normalization."""
+    """Promotion template expansion and normalization."""
 
     def __init__(
         self,

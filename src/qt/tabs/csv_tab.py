@@ -1,4 +1,4 @@
-"""PySide6 implementation for Tab 1: 'CSV 구조 복구' (CSV Repair & Cleaning)."""
+"""PySide6 implementation for 'CSV 구조 복구' (CSV Repair & Cleaning)."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ from src.ui_components import PALETTE
 
 
 class CsvRepairTab(QWidget):
-    """Tab 1: CSV structure recovery and cleaning."""
+    """CSV structure recovery and cleaning."""
 
     def __init__(
         self,
