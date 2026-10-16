@@ -29,3 +29,11 @@
 - 기본 UI는 `src/qt/`의 PySide6이다. `--legacy-tk` 호환 경로가 남아 있으므로 관련 소스를 무조건 삭제하지 않는다.
 - 정리 시 인증서, 사용자 DB, 공유 CSV/Excel 연결, 서명된 배포물 및 서명 기록을 보존한다.
 - 구조·경로 변경 시 README 두 언어와 AI_CODE_MAP.md를 현재 구현에 맞춰 갱신한다.
+
+## GitHub Actions 재발 방지
+- 푸시 전 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1`을 통과시킨다. 린트만 또는 일부 테스트만 실행하고 전체 검사 완료로 보고하지 않는다.
+- 개발 의존성은 `python -m pip install -r requirements-dev.txt`로 준비한다. 로컬·빌드·CI는 동일한 `scripts/check.ps1`을 사용한다.
+- 새 체크아웃은 `git config --local core.hooksPath .githooks`로 pre-push 검사를 활성화한다. 기존 사용자 훅 설정이 있다면 먼저 확인하며 덮어쓰지 않는다. `--no-verify`로 검사를 우회하지 않는다.
+- Windows 테스트는 체크아웃·TEMP가 다른 드라이브에 있어도 동작해야 한다. 상대 경로는 해당 fixture 기준으로 만들고 실제 경로 비교는 정규화한다.
+- 외부 명령의 종료 코드는 즉시 확인한다. 의도적인 실패 주입은 별도 프로세스로 격리하고 실제 실패를 성공으로 바꾸지 않는다.
+- main 푸시 후에는 해당 커밋의 Windows release check 완료를 확인한다. 로컬 검사 통과만으로 GitHub 빌드·설치 검증 통과를 주장하지 않는다.

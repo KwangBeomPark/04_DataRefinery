@@ -24,26 +24,14 @@ $venv = Assert-ProjectPath (Join-Path $buildDirectory 'venv')
 python -m venv --clear $venv
 if ($LASTEXITCODE -ne 0) { throw 'Cannot create the isolated build environment.' }
 $buildPython = Join-Path $venv 'Scripts\python.exe'
-& $buildPython -m pip install --disable-pip-version-check --no-input -r requirements.txt
+$requirements = if ($SkipTests) { 'requirements.txt' } else { 'requirements-dev.txt' }
+& $buildPython -m pip install --disable-pip-version-check --no-input -r $requirements
 if ($LASTEXITCODE -ne 0) { throw 'Pinned dependency installation failed.' }
 & $buildPython -m pip check
 if ($LASTEXITCODE -ne 0) { throw 'Build dependencies are inconsistent.' }
 if (-not $SkipTests) {
-    $savedLocalAppData = $env:LOCALAPPDATA
-    $savedRoamingAppData = $env:APPDATA
-    try {
-        $env:LOCALAPPDATA = Join-Path $buildDirectory 'test-appdata\Local'
-        $env:APPDATA = Join-Path $buildDirectory 'test-appdata\Roaming'
-        & $buildPython -m unittest discover -s tests -q
-        if ($LASTEXITCODE -ne 0) { throw 'Application tests failed.' }
-        & powershell -NoProfile -ExecutionPolicy Bypass -File 'tests\test_release_signing.ps1'
-        if ($LASTEXITCODE -ne 0) { throw 'Release pipeline tests failed.' }
-        & powershell -NoProfile -File 'scripts\test_user_data_backup.ps1'
-        if ($LASTEXITCODE -ne 0) { throw 'User data backup tests failed.' }
-    } finally {
-        $env:LOCALAPPDATA = $savedLocalAppData
-        $env:APPDATA = $savedRoamingAppData
-    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'check.ps1') -Python $buildPython
+    if ($LASTEXITCODE -ne 0) { throw 'Pre-build quality checks failed.' }
 }
 & $buildPython -m PyInstaller --clean --noconfirm --workpath (Join-Path $buildDirectory 'app') --distpath $distDirectory 'installer\data_refinery.spec'
 if ($LASTEXITCODE -ne 0) { throw 'Application onedir build failed.' }

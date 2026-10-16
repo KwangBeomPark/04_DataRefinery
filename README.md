@@ -128,11 +128,19 @@ Run the desktop app during development with:
 python -m src.data_refinery
 ```
 
-Run the test suite with:
+Install the development dependencies, enable the repository-local push guard
+(after checking for existing custom hooks), and run the same quality gate as CI:
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m pip install -r requirements-dev.txt
+git config --local core.hooksPath .githooks
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
 ```
+
+The gate checks dependency consistency, lint, the full application suite, signing
+fault scenarios and backup safety with isolated AppData/TEMP. A failed check
+blocks the push. CI also builds the installer and checks install/reinstall/removal.
+See [CI failure prevention](docs/CI_RELIABILITY.md) for the investigation and limits.
 
 Build the Windows installer with:
 

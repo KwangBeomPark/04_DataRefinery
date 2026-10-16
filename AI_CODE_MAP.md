@@ -108,10 +108,18 @@ flowchart TD
 ## 7. 검증 진입점
 
 ```powershell
-python -m unittest discover -s tests -v
-ruff check --select E4,E7,E9,F src tests
+python -m pip install -r requirements-dev.txt
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
 python -m src.data_refinery --version
 ```
+
+`scripts/check.ps1`은 로컬·일반 빌드·CI 공통 검사입니다. 의존성 일관성, src/tests/scripts 린트,
+전체 Python 테스트, 별도 Windows PowerShell의 서명 실패 주입·백업 검사를 순서대로 실행합니다.
+AppData/TEMP는 매번 `build/checks-<id>`에 격리하고 종료 시 환경·작업 폴더를 복원합니다.
+`.githooks/pre-push`는 같은 검사를 실행하며 `git config --local core.hooksPath .githooks`로 활성화합니다.
+`tests/test_windows_quality_gate.py`는 임시 SUBST 드라이브에서 집계 보호 테스트를 실행하고,
+네 가지 외부 명령 실패가 검사 중단·실패 종료로 전달되는지 확인합니다.
+조사 근거와 범위는 `docs/CI_RELIABILITY.md`에 기록합니다.
 
 Qt 테스트는 offscreen 실행을 포함합니다. Windows CI는 린트·테스트·미서명 빌드·설치/제거를 점검합니다.
 `scripts/smoke_installer.ps1`은 임시 CI 러너 전용이며 설치된 GUI의 수동 사용성까지 검증하지 않습니다.

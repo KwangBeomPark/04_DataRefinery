@@ -34,14 +34,19 @@ optional installation/update entry point with the existing trusted publisher.
 
 1. Bump `src/version.py` for a new release. Never repoint a released version/tag
    to another source commit. Create its note in `docs/release-notes/`.
-2. Commit the intended source on `main`, then run:
+2. Install `requirements-dev.txt` and run `scripts/check.ps1` before pushing.
+   Enable `.githooks/pre-push` with `git config --local core.hooksPath .githooks`
+   after checking for existing custom hooks. The same gate runs in CI and normal
+   builds: dependency consistency, lint, all Python tests, signing fault tests
+   and backup safety. AppData/TEMP are isolated; native failures stop the gate.
+   See [CI reliability](CI_RELIABILITY.md). Commit the intended source on `main`, then run:
 
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts/build.ps1
    ```
 
    Both app and launcher use the same fresh environment from `requirements.txt`.
-   Tests use isolated AppData. An unsigned installer preview and both naming
+   Tests use isolated AppData/TEMP through `scripts/check.ps1`. An unsigned installer preview and both naming
    aliases are staged in `dist/staging`. The previous official `release` is
    untouched. `-SkipTests` is for unsigned CI previews; such build records cannot
    be used by the signer. Starting a build invalidates the old provenance record.

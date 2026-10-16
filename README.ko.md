@@ -114,11 +114,18 @@ Python 소스 파일은 기존 소문자·밑줄 이름을 유지합니다.
 python -m src.data_refinery
 ```
 
-테스트 실행:
+개발 의존성을 설치하고 저장소 전용 푸시 검사를 활성화한 뒤, CI와 같은 검사를 실행합니다.
+기존 사용자 훅 설정이 있다면 변경 전에 확인하세요.
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m pip install -r requirements-dev.txt
+git config --local core.hooksPath .githooks
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1
 ```
+
+의존성 일관성·린트·전체 앱 테스트·서명 실패 시나리오·백업 안전성을 격리된 AppData/TEMP에서
+검사합니다. 실패하면 푸시가 차단됩니다. CI에서는 설치 파일 빌드와 설치·재설치·제거도 확인합니다.
+조사 결과와 검증 경계는 [CI 실패 재발 방지](docs/CI_RELIABILITY.md)를 참고하세요.
 
 Windows 설치 파일 빌드:
 

@@ -76,6 +76,7 @@ tools/, scratch/          로컬 개발 자료 (Git 제외)
 | --- | --- |
 | 설치 설계·앱 및 런처 패키징 입력 | `installer/setup.iss`, `installer/data_refinery.spec`, `installer/data_refinery_launcher.spec` |
 | 빌드·서명·검증 진입점 | `scripts/build.ps1`, `scripts/sign.ps1` |
+| 로컬·빌드·CI 공통 품질 검사 / 푸시 전 차단 | `scripts/check.ps1`, `.githooks/pre-push`, `requirements-dev.txt` |
 | 빌드 중간 파일·격리 환경·검수 기록 | `build/` (Git 제외) |
 | 앱·런처 빌드와 미서명 설치 검증본 | `dist/`, `dist/staging/` (Git 제외) |
 | 검증한 공식 서명 파일·체크섬·매니페스트 | `release/` (Git 제외) |
