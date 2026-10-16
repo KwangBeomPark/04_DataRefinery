@@ -46,7 +46,7 @@ class TestAggregationSafety(unittest.TestCase):
 
     def test_source_paths_and_case_aliases_are_rejected_without_change(self):
         original = self.source.read_bytes()
-        paths = [str(self.source), os.path.relpath(self.source), str(self.root / "." / self.source.name)]
+        paths = [str(self.source), str(self.root / "." / self.source.name)]
         if os.name == "nt":
             paths.append(str(self.source).swapcase())
         for destination in paths:
@@ -54,6 +54,18 @@ class TestAggregationSafety(unittest.TestCase):
                 with self.assertRaises(AggregationOutputError):
                     aggregate_dataset(self.spec(output_path=destination))
                 self.assertEqual(self.source.read_bytes(), original)
+        # CI checkouts and TEMP can be on different drives. Resolve relative paths
+        # from the fixture's own directory, restoring the process cwd even on failure.
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(self.root)
+            for destination in ("input.csv", "./input.csv", f"../{self.root.name}/input.csv"):
+                with self.subTest(relative_destination=destination):
+                    with self.assertRaises(AggregationOutputError):
+                        aggregate_dataset(self.spec(output_path=destination))
+                    self.assertEqual(self.source.read_bytes(), original)
+        finally:
+            os.chdir(saved_cwd)
 
     def test_existing_hardlink_to_source_is_rejected(self):
         os.link(self.source, self.output)
