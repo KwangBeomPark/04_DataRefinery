@@ -5,6 +5,8 @@ import unittest
 import os
 import time
 from pathlib import Path
+from types import ModuleType
+from unittest.mock import MagicMock, patch
 
 import openpyxl
 
@@ -73,15 +75,18 @@ class TestDatasetExcel(unittest.TestCase):
         self.assertIn("Csv.Document", guide)
 
     def test_create_excel_template_workbook(self):
-        """Verify workbook template creation (native COM when available or guide fallback)."""
+        """The ordinary suite tests the guide without launching a real Excel process."""
         template_path = self.base_dir / "output_template.xlsx"
-        is_native, msg = create_excel_template_workbook(
-            template_path,
-            self.csv_path,
-            self.dataset,
-            columns=["거래선코드", "상품코드", "기준년월", "매출액", "영업이익"],
-        )
+        # Real Office integration belongs to the explicit opt-in test below.
+        with patch.dict("sys.modules", {"win32com.client": None}):
+            is_native, msg = create_excel_template_workbook(
+                template_path,
+                self.csv_path,
+                self.dataset,
+                columns=["거래선코드", "상품코드", "기준년월", "매출액", "영업이익"],
+            )
 
+        self.assertFalse(is_native)
         self.assertTrue(template_path.exists())
         self.assertTrue(len(msg) > 0)
         # Verify valid zip/xlsx archive
@@ -89,6 +94,29 @@ class TestDatasetExcel(unittest.TestCase):
         sheet_names = wb.sheetnames
         self.assertTrue(len(sheet_names) >= 1)
         wb.close()
+
+    @unittest.skipUnless(os.name == "nt", "Windows COM error handling")
+    def test_native_connection_failure_is_not_hidden_as_a_guide(self):
+        """Deterministic COM failure must propagate and close its own workbook/app."""
+        template_path = self.base_dir / "failed_native.xlsx"
+        excel = MagicMock()
+        workbook = excel.Workbooks.Add.return_value
+        workbook.Connections.Add2.side_effect = RuntimeError("simulated COM connection failure")
+        client = ModuleType("win32com.client")
+        client.DispatchEx = MagicMock(return_value=excel)
+        win32com = ModuleType("win32com")
+        win32com.client = client
+        pythoncom = MagicMock()
+        with patch.dict("sys.modules", {
+            "win32com": win32com, "win32com.client": client, "pythoncom": pythoncom,
+        }):
+            with self.assertRaisesRegex(RuntimeError, "simulated COM connection failure"):
+                create_excel_template_workbook(template_path, self.csv_path, self.dataset)
+        self.assertFalse(template_path.exists())
+        workbook.Close.assert_called_once_with(SaveChanges=False)
+        excel.Quit.assert_called_once()
+        pythoncom.CoInitialize.assert_called_once()
+        pythoncom.CoUninitialize.assert_called_once()
 
 
     def test_parameterized_types_mapped_to_number(self):
