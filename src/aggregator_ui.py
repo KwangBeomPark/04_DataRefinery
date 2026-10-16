@@ -939,9 +939,12 @@ class AggregatorTabFrame(ttk.Frame):
             rollup_annual=self.state.uses_year(),
             month_column=self._schema.detected_month_column if self._schema else self.state.month_column,
             output_format=self._output_format(),
+            number_mode=self.app._number_mode(self.app.num_format.get()),
         )
 
     def _apply_preset_to_state(self, preset: AggregationPreset) -> None:
+        if preset.number_mode is not None:
+            self.app.num_format.set(self.app._ui("number_options")[1 if preset.number_mode == "Polish" else 0])
         self.state.apply_configuration(
             group_keys=preset.group_by_keys,
             measure_sums=preset.measure_sums,

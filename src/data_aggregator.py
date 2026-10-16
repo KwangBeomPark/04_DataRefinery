@@ -65,6 +65,57 @@ class AggregationEncodingError(AggregatorError):
         super().__init__(str(original_error))
 
 
+class AggregationOutputError(AggregatorError):
+    """Raised when an output would replace the source or an unapproved file."""
+
+
+class AggregationNumericError(AggregatorError):
+    """Invalid numeric cells in the first affected chunk (or preview sample)."""
+
+    def __init__(self, column: str, number_mode: str, count: int, examples: List[str]):
+        self.column = column
+        self.number_mode = number_mode
+        self.count = count
+        self.examples = examples
+        super().__init__(
+            f"'{column}' 열: 숫자 표기 {number_mode}에 맞지 않는 값 {count:,}건을 "
+            f"현재 검사 구간에서 발견했습니다. 예: {', '.join(examples)}. "
+            "숫자 표기와 원본 값을 확인하세요. 결과를 저장하지 않았습니다."
+        )
+
+
+def validate_aggregation_output_path(source_path: str, output_path: str) -> None:
+    """Reject identical paths and existing file aliases without changing either file."""
+    source = os.path.normcase(os.path.realpath(os.path.abspath(source_path)))
+    output = os.path.normcase(os.path.realpath(os.path.abspath(output_path)))
+    if source == output or (
+        os.path.exists(output_path) and os.path.samefile(source_path, output_path)
+    ):
+        raise AggregationOutputError("원본 파일과 같은 위치에는 저장할 수 없습니다. 다른 파일명을 지정하세요.")
+
+
+def validate_aggregation_output_name(name: str) -> None:
+    """The Qt filename field accepts a filename, not a path or Windows device/ADS."""
+    reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    reserved.update(f"{prefix}{digit}" for prefix in ("COM", "LPT") for digit in range(1, 10))
+    if (
+        not name or any(char in name for char in '/\\:<>"|?*')
+        or any(ord(char) < 32 for char in name) or name.endswith((".", " "))
+        or name.split(".")[0].upper() in reserved
+        or getattr(os.path, "isreserved", lambda _: False)(name)
+        or os.path.splitext(name)[1].lower() not in (".csv", ".xlsx")
+    ):
+        raise AggregationOutputError("파일명에는 경로를 넣지 말고 .csv 또는 .xlsx 파일명을 입력하세요.")
+
+
+def _validate_output_destination(spec: "AggregationSpec", source_path: str, output_path: str) -> None:
+    validate_aggregation_output_path(source_path, output_path)
+    if not os.path.isdir(os.path.dirname(os.path.abspath(output_path))) or os.path.isdir(output_path):
+        raise AggregationOutputError("저장 폴더와 파일명을 확인하세요.")
+    if not spec.allow_output_overwrite and os.path.lexists(output_path):
+        raise AggregationOutputError("저장 위치에 파일이 생겼습니다. 확인 후 다시 실행하세요.")
+
+
 @dataclass(frozen=True)
 class FilterCondition:
     column: str
@@ -112,6 +163,8 @@ class AggregationSpec:
     output_order: Optional[List[str]] = None  # explicit value-column order; None = declaration order
     constant_columns: Dict[str, str] = field(default_factory=dict)  # column name -> literal value
     measure_functions: Dict[str, str] = field(default_factory=dict)  # column -> function; absent means "sum"
+    strict_numeric: bool = True  # False disables error raising, not the new grammar; not offered in Qt.
+    allow_output_overwrite: bool = True  # Qt requires explicit confirmation for existing outputs.
 
 
 @dataclass(frozen=True)
@@ -133,6 +186,7 @@ class AggregationResult:
     final_rows: int
     coerced_numbers_count: int = 0
     sample_preview_text: str = ""
+    missing_numbers_by_column: Dict[str, int] = field(default_factory=dict)
 
     def __fspath__(self) -> str:
         return self.out_path
@@ -563,25 +617,33 @@ def _apply_filters(df: pd.DataFrame, filters: Sequence[FilterCondition]) -> pd.D
 
 
 def _coerce_numeric_series(series: pd.Series, number_mode: str) -> Tuple[pd.Series, int]:
-    """Parse raw text numbers to float64 respecting locale, leaving unusable cells as NaN.
-
-    Keeping the NaN is what lets `count`, `min` and `max` skip blank and unparseable
-    cells; the sum path fills them with 0.0 afterwards.
-    """
+    """Validate separator grouping before conversion; invalid values remain NaN."""
+    if number_mode not in ("English", "Polish"):
+        raise AggregatorError("지원하지 않는 숫자 표기입니다. English 또는 Polish를 선택하세요.")
     if pd.api.types.is_numeric_dtype(series):
-        return series.astype(float), 0
+        numeric = series.astype(float)
+        invalid = numeric.notna() & ~np.isfinite(numeric)
+        return numeric.mask(invalid), int(invalid.sum())
 
     s = series.astype(str).str.strip()
+    missing = series.isna() | s.isin(("", "-"))
+    exponent = r"(?:[eE][+-]?\d+)?"
     if number_mode == "Polish":
+        s = s.str.replace("\u00a0", " ", regex=False).str.replace("\u202f", " ", regex=False)
+        whole = r"(?:\d+|\d{1,3}(?:\.\d{3})+|\d{1,3}(?: \d{3})+)"
+        pattern = rf"[+-]?(?:{whole}(?:,\d+)?|,\d+){exponent}"
         s_clean = s.str.replace(" ", "", regex=False).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
     else:
+        whole = r"(?:\d+|\d{1,3}(?:,\d{3})+)"
+        pattern = rf"[+-]?(?:{whole}(?:\.\d*)?|\.\d+){exponent}"
         s_clean = s.str.replace(",", "", regex=False)
 
-    numeric_vals = pd.to_numeric(s_clean, errors="coerce")
-    coerced = (numeric_vals.isna()) & (s != "") & (s != "-") & (s != "nan")
-    coerced_count = int(coerced.sum())
-
-    return numeric_vals, coerced_count
+    valid_format = s.str.fullmatch(pattern, na=False)
+    grouping = r"[. ]" if number_mode == "Polish" else ","
+    valid_format &= ~(s.str.contains(r"[eE]", regex=True) & s.str.contains(grouping, regex=True))
+    numeric_vals = pd.to_numeric(s_clean.where(valid_format), errors="coerce")
+    invalid = ~missing & (~valid_format | numeric_vals.isna() | ~np.isfinite(numeric_vals))
+    return numeric_vals.mask(invalid), int(invalid.sum())
 
 
 @dataclass(frozen=True)
@@ -697,10 +759,24 @@ def _accumulator_values(numeric: pd.Series, prepare: str) -> pd.Series:
     return numeric  # "value": NaN marks a cell that min/max must skip
 
 
+def _source_measure_columns(spec: AggregationSpec) -> List[str]:
+    columns = list(dict.fromkeys(spec.measure_sums))
+    grouped = {rule.new_column for rule in spec.column_groups}
+    for rule in spec.column_groups:
+        columns.extend(column for column in rule.source_columns if column not in columns)
+    for rule in spec.derived_formulas:
+        for column in (rule.numerator_column, rule.denominator_column):
+            if column not in columns and column not in grouped:
+                columns.append(column)
+    return [column for column in columns if column not in spec.constant_columns]
+
+
 def _prepare_chunk_measures(
     frame: pd.DataFrame,
     plan: _MeasurePlan,
     number_mode: str,
+    strict_numeric: bool = True,
+    missing_counts: Optional[Dict[str, int]] = None,
 ) -> int:
     """Number-clean each source column once, lay down the scratch columns, return coerced count."""
     sum_set = set(plan.sum_columns)
@@ -709,6 +785,14 @@ def _prepare_chunk_measures(
         if column not in frame.columns:
             continue
         numeric, coerced = _coerce_numeric_series(frame[column], number_mode)
+        raw = frame[column].astype(str).str.strip()
+        missing = frame[column].isna() | raw.isin(("", "-"))
+        if missing_counts is not None and missing.any():
+            missing_counts[column] = missing_counts.get(column, 0) + int(missing.sum())
+        if coerced and strict_numeric:
+            bad = numeric.isna() & ~missing
+            examples = [repr(value[:40]) for value in raw[bad].drop_duplicates().head(3)]
+            raise AggregationNumericError(column, number_mode, coerced, examples)
         coerced_total += coerced
         for acc in plan.accumulators_for(column):
             frame[acc.name] = _accumulator_values(numeric, acc.prepare)
@@ -760,6 +844,11 @@ def _materialise_measures(frame: pd.DataFrame, plan: _MeasurePlan) -> None:
         frame.drop(columns=scratch, inplace=True)
 
 
+def _validate_finite_result(frame: pd.DataFrame, strict: bool) -> None:
+    if strict and not np.isfinite(frame.select_dtypes(include=[np.number]).to_numpy()).all():
+        raise AggregatorError("집계 결과가 지원하는 숫자 범위를 벗어났습니다. 새 결과를 저장하지 않았습니다.")
+
+
 def aggregate_dataset(
     spec: AggregationSpec,
     progress_callback: Optional[Callable[[int, int | None, str | None], None]] = None,
@@ -775,6 +864,9 @@ def aggregate_dataset(
     file_path = os.path.abspath(spec.file_path)
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Source file not found: {file_path}")
+
+    out_path = os.path.abspath(spec.output_path) if spec.output_path else default_output_path(file_path, spec.output_format)
+    _validate_output_destination(spec, file_path, out_path)
 
     encoding = spec.encoding or detect_file_encoding(file_path, precise=spec.precise_encoding)
     decode_errors = "replace" if spec.precise_encoding else "strict"
@@ -833,30 +925,14 @@ def aggregate_dataset(
     # group_by_keys fixes where a constant column sits; anything left out is appended.
     effective_group_keys = _group_keys_with_constants(spec, effective_group_keys)
 
-    # Collect all numeric columns to accumulate
-    all_measure_cols: List[str] = list(dict.fromkeys(spec.measure_sums))
-    # Also add individual source columns from column_groups if not already in
-    for grp in spec.column_groups:
-        for sc in grp.source_columns:
-            if sc not in all_measure_cols:
-                all_measure_cols.append(sc)
-
-    # Ensure formulas' numerator and denominator are also accumulated
-    for form in spec.derived_formulas:
-        if form.numerator_column not in all_measure_cols and form.numerator_column not in [grp.new_column for grp in spec.column_groups]:
-            all_measure_cols.append(form.numerator_column)
-        if form.denominator_column not in all_measure_cols and form.denominator_column not in [grp.new_column for grp in spec.column_groups]:
-            all_measure_cols.append(form.denominator_column)
-
-    if constant_names:
-        # A constant is a label: it is never number-cleaned and never summed.
-        all_measure_cols = [c for c in all_measure_cols if c not in constant_names]
+    all_measure_cols = _source_measure_columns(spec)
 
     rule_columns = created_columns | {form.new_column for form in spec.derived_formulas}
     plan = _build_measure_plan(spec, all_measure_cols, rule_columns)
 
     file_size = os.path.getsize(file_path)
     total_coerced = 0
+    missing_counts: Dict[str, int] = {}
     chunk_accumulators: List[pd.DataFrame] = []
 
     # 3. Read chunks with usecols
@@ -903,7 +979,7 @@ def aggregate_dataset(
 
                 # Convert measure columns to numeric, lay down the per-function scratch
                 # columns, and track coerced errors
-                total_coerced += _prepare_chunk_measures(chunk_df, plan, spec.number_mode)
+                total_coerced += _prepare_chunk_measures(chunk_df, plan, spec.number_mode, spec.strict_numeric, missing_counts)
 
                 # Reduce this chunk with each column's per-chunk function
                 grouped_chunk = _fold_group(chunk_df, effective_group_keys, plan, "chunk")
@@ -942,6 +1018,7 @@ def aggregate_dataset(
 
     # 5b. Write mean / count / min / max value columns from their accumulators
     _materialise_measures(final_df, plan)
+    _validate_finite_result(final_df, spec.strict_numeric)
 
     # 6. Apply Derived Formulas (e.g. Profit Rate = Profit / Sales, stored as a ratio)
     # Strictly calculated AFTER group summation!
@@ -956,6 +1033,8 @@ def aggregate_dataset(
         with np.errstate(divide="ignore", invalid="ignore"):
             calc = (num_vals / den_vals) * form.multiplier
             calc = np.where(den_vals != 0.0, calc, 0.0)
+            if spec.strict_numeric and not np.isfinite(calc).all():
+                raise AggregatorError("수식 결과가 지원하는 숫자 범위를 벗어났습니다. 새 결과를 저장하지 않았습니다.")
             final_df[form.new_column] = np.nan_to_num(calc, nan=0.0, posinf=0.0, neginf=0.0)
 
     # 7. Select and order output columns
@@ -974,10 +1053,7 @@ def aggregate_dataset(
         )
 
     # 8. Determine destination path
-    if spec.output_path:
-        out_path = os.path.abspath(spec.output_path)
-    else:
-        out_path = default_output_path(file_path, spec.output_format)
+    _validate_output_destination(spec, file_path, out_path)
 
     # Check cancellation before staging starts
     if cancel_event is not None and cancel_event.is_set():
@@ -1013,7 +1089,19 @@ def aggregate_dataset(
             raise AggregationCancelledError("Aggregation was cancelled by user.")
 
         # Atomic replace directly
-        os.replace(tmp_path, out_path)
+        _validate_output_destination(spec, file_path, out_path)
+        try:
+            if spec.allow_output_overwrite:
+                os.replace(tmp_path, out_path)
+            elif os.name == "nt":
+                # Windows rename fails atomically when a late destination already exists.
+                os.rename(tmp_path, out_path)
+            else:
+                # Same-directory link creation is an atomic no-replace publish on POSIX.
+                os.link(tmp_path, out_path)
+                os.remove(tmp_path)
+        except FileExistsError as error:
+            raise AggregationOutputError("저장 위치에 파일이 생겼습니다. 확인 후 다시 실행하세요.") from error
     finally:
         if os.path.exists(tmp_path):
             try:
@@ -1027,6 +1115,7 @@ def aggregate_dataset(
         final_rows=len(final_df),
         coerced_numbers_count=total_coerced,
         sample_preview_text=preview_text,
+        missing_numbers_by_column=missing_counts,
     )
 
 
@@ -1225,19 +1314,13 @@ def preview_aggregation(spec: AggregationSpec, sample_rows: int = 2000) -> Tuple
 
     effective_group_keys = _group_keys_with_constants(spec, effective_group_keys)
 
-    all_measure_cols = list(dict.fromkeys(spec.measure_sums))
-    for grp in spec.column_groups:
-        for sc in grp.source_columns:
-            if sc not in all_measure_cols:
-                all_measure_cols.append(sc)
-
-    if constant_names:
-        all_measure_cols = [c for c in all_measure_cols if c not in constant_names]
+    all_measure_cols = _source_measure_columns(spec)
 
     rule_columns = created_columns | {form.new_column for form in spec.derived_formulas}
     plan = _build_measure_plan(spec, all_measure_cols, rule_columns)
 
-    _prepare_chunk_measures(sample_df, plan, spec.number_mode)
+    missing_counts: Dict[str, int] = {}
+    _prepare_chunk_measures(sample_df, plan, spec.number_mode, spec.strict_numeric, missing_counts)
 
     grouped = _fold_group(sample_df, effective_group_keys, plan, "chunk")
 
@@ -1247,6 +1330,7 @@ def preview_aggregation(spec: AggregationSpec, sample_rows: int = 2000) -> Tuple
 
     # The sample is read in one piece, so the chunk stage is also the combine stage.
     _materialise_measures(grouped, plan)
+    _validate_finite_result(grouped, spec.strict_numeric)
 
     for form in spec.derived_formulas:
         num_col, den_col = form.numerator_column, form.denominator_column
@@ -1254,10 +1338,13 @@ def preview_aggregation(spec: AggregationSpec, sample_rows: int = 2000) -> Tuple
         den_vals = grouped[den_col] if den_col in grouped.columns else pd.Series(0.0, index=grouped.index)
         with np.errstate(divide="ignore", invalid="ignore"):
             calc = np.where(den_vals != 0.0, (num_vals / den_vals) * form.multiplier, 0.0)
+            if spec.strict_numeric and not np.isfinite(calc).all():
+                raise AggregatorError("수식 결과가 지원하는 숫자 범위를 벗어났습니다. 새 결과를 저장하지 않았습니다.")
             grouped[form.new_column] = np.nan_to_num(calc, nan=0.0, posinf=0.0, neginf=0.0)
 
     final_cols = list(effective_group_keys)
     final_cols.extend(_output_value_columns(spec, grouped.columns, final_cols))
 
     res_df = grouped[final_cols].head(15)
+    res_df.attrs["missing_numbers_by_column"] = missing_counts
     return res_df, format_preview_text(res_df, spec, effective_group_keys, rows=15)

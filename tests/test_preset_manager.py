@@ -56,6 +56,18 @@ class TestPresetManager(unittest.TestCase):
         self.assertTrue(preset_exists("TV사업부 연간 요약", dir_path=self.preset_dir))
         self.assertFalse(preset_exists("존재하지않는프리셋", dir_path=self.preset_dir))
 
+    def test_number_notation_roundtrip_and_legacy_default(self):
+        preset = AggregationPreset(name="Polish numbers", number_mode="Polish")
+        save_preset(preset, dir_path=self.preset_dir)
+        loaded = load_preset(preset.name, dir_path=self.preset_dir)
+        self.assertEqual(loaded.number_mode, "Polish")
+        self.assertEqual(loaded.to_spec("input.csv").number_mode, "Polish")
+        old = AggregationPreset.from_dict({"name": "old"})
+        self.assertIsNone(old.number_mode)
+        self.assertEqual(old.to_spec("input.csv").number_mode, "English")
+        with self.assertRaises(PresetValidationError):
+            AggregationPreset.from_dict({"name": "invalid", "number_mode": "Unknown"})
+
     def test_save_and_load_preset(self):
         saved_path = save_preset(self.sample_preset, dir_path=self.preset_dir)
         self.assertTrue(saved_path.exists())

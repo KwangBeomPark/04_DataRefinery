@@ -197,6 +197,11 @@ _UI_TEXT = {
 }
 
 _UI_TEXT["en"].update({
+    "agg_number_mode": "Number notation:",
+    "agg_numeric_error": "Column '{column}': {count:,} invalid numbers in the inspected block/sample ({notation}). Examples: {examples}. Check notation/source values; no new result was saved.",
+    "agg_number_english": "1,234.56 (decimal dot)",
+    "agg_number_polish": "1.234,56 / 1 234,56 (decimal comma)",
+    "agg_numeric_policy": "Invalid numbers stop preview/save. Blank or '-' cells stay missing; sums treat them as zero.",
     "task_label": "Task",
     "task_options": ("CSV repair", "Promotion template", "Data aggregator", "Dataset publisher"),
     "agg_initial_result": "Select a CSV file to inspect columns, configure group keys and measures, or load a saved preset.",
@@ -243,6 +248,11 @@ _UI_TEXT["en"].update({
     "error_id": "\n\nError ID: {id}. Include this ID if you contact support.",
 })
 _UI_TEXT["ko"].update({
+    "agg_number_mode": "숫자 표기:",
+    "agg_numeric_error": "'{column}' 열: 검사한 구간/표본에서 숫자 표기 {notation}에 맞지 않는 값 {count:,}건을 발견했습니다. 예: {examples}. 숫자 표기와 원본 값을 확인하세요. 새 결과는 저장하지 않았습니다.",
+    "agg_number_english": "1,234.56 (소수점 .)",
+    "agg_number_polish": "1.234,56 / 1 234,56 (소수점 ,)",
+    "agg_numeric_policy": "숫자 오류는 미리보기·저장을 중단합니다. 빈칸·'-'는 결측으로 유지하며 합계에서는 0으로 계산합니다.",
     "task_label": "작업 방식",
     "task_options": ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서", "데이터셋 배포"),
     "agg_initial_result": "대용량 CSV 파일을 선택하여 컬럼을 분석하고, 행 그룹과 합산 항목을 지정하거나 저장된 프리셋을 불러오세요.",
@@ -289,6 +299,11 @@ _UI_TEXT["ko"].update({
     "error_id": "\n\n오류 ID: {id}. 문의할 때 이 ID를 알려 주세요.",
 })
 _UI_TEXT["pl"].update({
+    "agg_number_mode": "Zapis liczb:",
+    "agg_numeric_error": "Kolumna '{column}': {count:,} błędnych liczb w badanym bloku/próbce ({notation}). Przykłady: {examples}. Sprawdź zapis i źródło; nie zapisano nowego wyniku.",
+    "agg_number_english": "1,234.56 (kropka dziesiętna)",
+    "agg_number_polish": "1.234,56 / 1 234,56 (przecinek dziesiętny)",
+    "agg_numeric_policy": "Błędne liczby blokują podgląd/zapis. Puste pola i '-' pozostają brakami; suma traktuje je jako zero.",
     "task_label": "Zadanie",
     "task_options": ("Naprawa CSV", "Szablon promocji", "Agregacja danych", "Publikacja zestawów danych"),
     "agg_initial_result": "Wybierz plik CSV, aby przeanalizować kolumny, skonfigurować grupowanie lub wczytać szablon.",

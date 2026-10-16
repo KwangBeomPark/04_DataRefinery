@@ -55,10 +55,15 @@ In everyday operations, finance and sales administrative teams frequently receiv
 
 ## Quality and verification status
 
-- **v2.0.3 local regression check**: 537 tests run; 536 passed and one optional Excel COM test skipped.
+- **v2.0.3 local regression check (2026-10-16)**: 555 tests run; 554 passed and one optional Excel COM test skipped.
   Checks cover Qt tab identity/order, three languages, retained task state and the legacy Tk order.
   Claude Opus 5.5 was consulted on the preparation/mart roadmap. These checks do not establish
   live Excel, shared-drive or newly signed release acceptance.
+
+Aggregation now provides explicit numeric notation (`1,234.56` or `1.234,56 / 1 234,56`),
+saved with presets. Invalid selected numeric values block preview/save by default; blank/`-`
+counts are reported separately. Source-file aliases are rejected as output destinations and
+existing results require confirmation. See the [phase A safety review](docs/PHASE_A_SAFETY_REVIEW.md).
 
 ## Data model direction
 

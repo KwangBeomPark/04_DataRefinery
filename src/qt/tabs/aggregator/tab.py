@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
+from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QProgressBar,
+    QScrollArea,
     QPushButton,
     QSplitter,
     QTableView,
@@ -34,9 +37,12 @@ from src.background_jobs import BackgroundJobRunner, JobCallbacks
 from src.data_aggregator import (
     AggregationResult,
     AggregationSpec,
+    AggregationNumericError,
     aggregate_dataset,
     inspect_dataset_schema,
     preview_aggregation,
+    validate_aggregation_output_path,
+    validate_aggregation_output_name,
 )
 from src.file_reveal import open_containing_folder
 from src.i18n import _UI_TEXT
@@ -59,16 +65,26 @@ from src.qt.widgets.file_picker import FilePickerWidget
 from src.ui_components import PALETTE
 
 
+class _FieldSplitter(QSplitter):
+    """Prefer compact panes in a scroll area, while expanding in a tall viewport."""
+
+    def sizeHint(self):
+        size = super().sizeHint()
+        size.setHeight(self.minimumHeight())
+        return size
+
+
 class _SamplePreviewDialog(QDialog):
     """Modal dialog displaying sampled aggregation results."""
 
-    def __init__(self, headers: List[str], rows: List[List[Any]], parent: Optional[QWidget] = None):
+    def __init__(self, headers: List[str], rows: List[List[Any]], parent: Optional[QWidget] = None, missing_note: str = ""):
         super().__init__(parent)
         self.setWindowTitle("미리보기 · 샘플 집계 결과")
         self.resize(760, 480)
 
         layout = QVBoxLayout(self)
-        lbl_note = QLabel("※ 수치 값은 원본의 샘플을 기준으로 계산되었으며 전체 저장 결과와 다를 수 있습니다.")
+        lbl_note = QLabel("※ 상위 최대 2,000행의 샘플 검사입니다. 전체 저장 결과와 다를 수 있습니다." + missing_note)
+        lbl_note.setWordWrap(True)
         lbl_note.setProperty("caption", "true")
         layout.addWidget(lbl_note)
 
@@ -134,7 +150,15 @@ class AggregatorTab(QWidget):
         return _UI_TEXT.get(self.language_code, _UI_TEXT["ko"]).get(key, key)
 
     def _init_ui(self) -> None:
-        main_layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self._scroll = QScrollArea(self)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        content = QWidget()
+        main_layout = QVBoxLayout(content)
+        self._scroll.setWidget(content)
+        outer.addWidget(self._scroll)
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(10)
 
@@ -175,10 +199,23 @@ class AggregatorTab(QWidget):
         top_lay.addWidget(self.btn_undo)
 
         top_card.content_layout.addLayout(top_lay)
+        numeric_lay = QHBoxLayout()
+        self.lbl_number_mode = QLabel()
+        numeric_lay.addWidget(self.lbl_number_mode)
+        self.combo_number_mode = QComboBox()
+        self.combo_number_mode.addItem("", "English")
+        self.combo_number_mode.addItem("", "Polish")
+        numeric_lay.addWidget(self.combo_number_mode)
+        self.lbl_numeric_policy = QLabel()
+        self.lbl_numeric_policy.setWordWrap(True)
+        self.lbl_numeric_policy.setProperty("caption", "true")
+        numeric_lay.addWidget(self.lbl_numeric_policy, stretch=1)
+        top_card.content_layout.addLayout(numeric_lay)
         main_layout.addWidget(top_card)
 
         # 2. Main Middle Splitter: Left (Source Columns) | Right (Rules & Pivot Areas)
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = _FieldSplitter(Qt.Orientation.Horizontal)
+        splitter.setMinimumHeight(300)
 
         # Left: Source Columns Explorer
         card_sources = CardWidget("원본 컬럼 탐색기 (더블 클릭하여 추가)")
@@ -193,11 +230,13 @@ class AggregatorTab(QWidget):
 
         src_lay.addWidget(QLabel("📁 차원/키 (더블클릭: 행 그룹)"))
         self.list_dims = QListWidget()
+        self.list_dims.setMinimumHeight(45)
         self.list_dims.itemDoubleClicked.connect(self._on_dim_double_clicked)
         src_lay.addWidget(self.list_dims, stretch=1)
 
         src_lay.addWidget(QLabel("📊 수치/값 (더블클릭: 값)"))
         self.list_measures = QListWidget()
+        self.list_measures.setMinimumHeight(45)
         self.list_measures.itemDoubleClicked.connect(self._on_measure_double_clicked)
         src_lay.addWidget(self.list_measures, stretch=1)
 
@@ -223,24 +262,29 @@ class AggregatorTab(QWidget):
         btn_filter = QPushButton("+ 필터")
         btn_filter.clicked.connect(self._on_add_filter_rule)
         rule_btns.addWidget(btn_filter)
+        for button in (btn_grp, btn_formula, btn_filter):
+            button.setMinimumHeight(button.sizeHint().height())
         rule_btns.addStretch()
         rules_lay.addLayout(rule_btns)
 
         # Area 1: Rows
         rules_lay.addWidget(QLabel("1. 행 그룹 (Rows):"))
         self.list_rows = QListWidget()
+        self.list_rows.setMinimumHeight(45)
         self.list_rows.itemDoubleClicked.connect(self._on_row_double_clicked)
         rules_lay.addWidget(self.list_rows, stretch=1)
 
         # Area 2: Values
         rules_lay.addWidget(QLabel("2. 값 (Values - 더블클릭 시 제거):"))
         self.list_values = QListWidget()
+        self.list_values.setMinimumHeight(45)
         self.list_values.itemDoubleClicked.connect(self._on_value_double_clicked)
         rules_lay.addWidget(self.list_values, stretch=1)
 
         # Area 3: Filters
         rules_lay.addWidget(QLabel("조건 필터 (더블클릭 시 제거):"))
         self.list_filters = QListWidget()
+        self.list_filters.setMinimumHeight(45)
         self.list_filters.itemDoubleClicked.connect(self._on_filter_double_clicked)
         rules_lay.addWidget(self.list_filters, stretch=1)
 
@@ -313,6 +357,10 @@ class AggregatorTab(QWidget):
         self.btn_preset.setText(t["agg_preset_menu"])
         self.btn_preview.setText(t["agg_preview"])
         self.btn_run.setText(t["agg_run"])
+        self.lbl_number_mode.setText(t["agg_number_mode"])
+        self.combo_number_mode.setItemText(0, t["agg_number_english"])
+        self.combo_number_mode.setItemText(1, t["agg_number_polish"])
+        self.lbl_numeric_policy.setText(t["agg_numeric_policy"])
         self.edit_search.setPlaceholderText(t["agg_search_placeholder"])
 
         if not self._last_result:
@@ -489,6 +537,8 @@ class AggregatorTab(QWidget):
             measure_functions=preset.measure_functions,
         )
         self.check_rollup.setChecked(preset.rollup_annual)
+        if preset.number_mode is not None:
+            self.combo_number_mode.setCurrentIndex(self.combo_number_mode.findData(preset.number_mode))
         self._sync_ui_lists()
         info_dialog(self, "프리셋 적용", f"프리셋 '{preset.name}'이(가) 적용되었습니다.")
 
@@ -514,6 +564,7 @@ class AggregatorTab(QWidget):
             annual_column_name=self.state.annual_column_name,
             constant_columns=dict(self.state.constant_columns),
             measure_functions=dict(self.state.measure_functions),
+            number_mode=self.combo_number_mode.currentData(),
         )
         save_preset(preset)
         info_dialog(self, "프리셋 저장", f"프리셋 '{name}'이(가) 성공적으로 저장되었습니다.")
@@ -559,6 +610,12 @@ class AggregatorTab(QWidget):
         out_dir = self.picker_output.get_path() or str(Path(src_path).parent.resolve())
         out_name = self.edit_output_name.text().strip() or "aggregated.csv"
         out_path = str(Path(out_dir) / out_name)
+        try:
+            validate_aggregation_output_name(out_name)
+            validate_aggregation_output_path(src_path, out_path)
+        except Exception as error:
+            error_dialog(self, "저장 위치 확인", str(error))
+            return None
         ext = Path(out_path).suffix.lower().lstrip(".")
         out_format = "xlsx" if ext == "xlsx" else "csv"
 
@@ -576,7 +633,9 @@ class AggregatorTab(QWidget):
             annual_column_name=self.state.annual_column_name,
             delimiter=getattr(self, "_detected_delimiter", None),
             encoding=enc if enc != "auto" else None,
-            number_mode=getattr(self, "_number_mode", "English"),
+            number_mode=self.combo_number_mode.currentData(),
+            strict_numeric=True,
+            allow_output_overwrite=False,
             output_path=out_path,
             output_format=out_format,
             constant_columns=dict(self.state.constant_columns),
@@ -592,15 +651,30 @@ class AggregatorTab(QWidget):
             df, _ = preview_aggregation(spec, sample_rows=2000)
             headers = list(df.columns)
             rows = df.values.tolist()
-            dlg = _SamplePreviewDialog(headers, rows, parent=self)
+            missing = df.attrs.get("missing_numbers_by_column", {})
+            note = ("\n표본 결측값: " + ", ".join(f"{col}: {count:,}" for col, count in missing.items())) if missing else ""
+            dlg = _SamplePreviewDialog(headers, rows, parent=self, missing_note=note)
             dlg.exec()
         except Exception as e:
-            error_dialog(self, "미리보기 오류", f"미리보기를 생성하지 못했습니다:\n{e}")
+            error_dialog(self, "미리보기 오류", self._aggregation_error_text(e))
+
+    def _aggregation_error_text(self, error: Exception) -> str:
+        if isinstance(error, AggregationNumericError):
+            return self._ui("agg_numeric_error").format(
+                column=error.column, notation=error.number_mode, count=error.count,
+                examples=", ".join(error.examples),
+            )
+        return str(error)
 
     def _on_run_clicked(self) -> None:
         spec = self._build_spec()
         if not spec:
             return
+
+        if os.path.lexists(spec.output_path):
+            if not confirm_dialog(self, "결과 파일 덮어쓰기", f"기존 결과 파일을 교체하시겠습니까?\n{spec.output_path}"):
+                return
+            spec = replace(spec, allow_output_overwrite=True)
 
         self._is_processing = True
         self.btn_run.setEnabled(False)
@@ -629,8 +703,8 @@ class AggregatorTab(QWidget):
             self._is_processing = False
             self.btn_run.setEnabled(True)
             self.progress_bar.setVisible(False)
-            self.lbl_status.setText(f"<font color='{PALETTE['danger']}'>집계 오류: {err}</font>")
-            error_dialog(self, "집계 오류", f"집계 중 오류가 발생했습니다:\n{err}")
+            self.lbl_status.setText(f"<font color='{PALETTE['danger']}'>{escape(self._aggregation_error_text(err))}</font>")
+            error_dialog(self, "집계 오류", self._aggregation_error_text(err))
 
         self.job_runner.start(
             "aggregate_dataset",
@@ -666,7 +740,10 @@ class AggregatorTab(QWidget):
             f"• <b>집계 기준:</b> {', '.join(keys)}",
         ]
         if coerced > 0:
-            lines.append(f"• <font color='{PALETTE['warning']}'>결측치/비정상 수치 {coerced:,}건이 0으로 치환되었습니다.</font>")
+            lines.append(f"• <font color='{PALETTE['warning']}'>유효하지 않은 수치 {coerced:,}건이 계산에서 제외되었습니다.</font>")
+        missing = getattr(result, "missing_numbers_by_column", {})
+        if missing:
+            lines.append("• 빈값·'-' (합계는 0, 다른 함수는 제외): " + ", ".join(f"{col}: {count:,}" for col, count in missing.items()))
 
         self.lbl_status.setText("<br>".join(lines))
 

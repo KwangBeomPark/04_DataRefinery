@@ -68,6 +68,7 @@ class AggregationPreset:
     output_format: str = "xlsx"
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    number_mode: Optional[str] = None  # Old presets leave the active UI notation unchanged.
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -88,6 +89,7 @@ class AggregationPreset:
             "month_column": self.month_column,
             "annual_column_name": self.annual_column_name,
             "output_format": self.output_format,
+            "number_mode": self.number_mode,
         }
 
     @classmethod
@@ -100,6 +102,9 @@ class AggregationPreset:
             raise PresetValidationError("Preset 'name' is required.")
 
         version = data.get("version", 1)
+        number_mode = data.get("number_mode")
+        if number_mode is not None and number_mode not in ("English", "Polish"):
+            raise PresetValidationError("Unknown numeric notation in preset.")
         description = data.get("description", "")
         group_by_keys = list(data.get("group_by_keys", []))
         measure_sums = list(data.get("measure_sums", []))
@@ -152,6 +157,7 @@ class AggregationPreset:
             month_column=data.get("month_column"),
             annual_column_name=data.get("annual_column_name", "연도"),
             output_format=data.get("output_format", "xlsx"),
+            number_mode=number_mode,
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
         )
@@ -172,6 +178,7 @@ class AggregationPreset:
             month_column=self.month_column,
             annual_column_name=self.annual_column_name,
             output_format=self.output_format,
+            number_mode=self.number_mode or "English",
             output_path=output_path,
         )
 

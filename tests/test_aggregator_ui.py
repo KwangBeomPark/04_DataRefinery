@@ -51,6 +51,15 @@ class AggregatorTestCase(unittest.TestCase):
 
 
 class TestAggregatorShell(AggregatorTestCase):
+    def test_old_preset_does_not_reset_the_shared_number_notation(self):
+        from src.preset_manager import AggregationPreset
+
+        self.app.num_format.set(self.app._ui("number_options")[1])
+        self.tab._apply_preset_to_state(AggregationPreset.from_dict({"name": "old"}))
+        self.assertEqual(self.app._number_mode(self.app.num_format.get()), "Polish")
+        self.tab._apply_preset_to_state(AggregationPreset(name="explicit", number_mode="English"))
+        self.assertEqual(self.app._number_mode(self.app.num_format.get()), "English")
+
     def test_four_tabs_exist_and_switch(self):
         self.assertEqual(len(self.app.notebook.tabs()), 4)
         self.assertEqual(
@@ -215,7 +224,7 @@ class TestAggregatorTranslations(unittest.TestCase):
         single_quoted = re.compile(r"'(agg_[a-z0-9_]+)'")
 
         used = set()
-        for name in ("src/aggregator_ui.py", "src/aggregator_dialogs.py"):
+        for name in ("src/aggregator_ui.py", "src/aggregator_dialogs.py", "src/qt/tabs/aggregator/tab.py"):
             text = Path(name).read_text(encoding="utf-8")
             used |= set(double_quoted.findall(text)) | set(single_quoted.findall(text))
 

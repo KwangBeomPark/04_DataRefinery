@@ -7,6 +7,7 @@
 - 기본 UI: PySide6(Qt), `src/qt/`의 네 가지 업무 탭.
 - 화면 순서: 집계·슬라이서 → 데이터셋 배포 → 프로모션 → CSV 복구. Qt의 번역은 화면 위치가 아닌 실제 위젯과 업무 ID에 연결하며 Tkinter 호환 UI도 같은 순서입니다.
 - 정제 탭 등 후속 제품 제안은 `docs/DATA_PREPARATION_ROADMAP.md`에서 관리합니다. 제안 기능과 현재 구현을 구분합니다.
+- A단계 첫 구현은 `data_aggregator.py`의 원본 경로 보호·엄격 수치 검사, Qt 숫자 표기 선택과 `preset_manager.py`의 표기 저장입니다. 동작·검증 경계는 `docs/PHASE_A_SAFETY_REVIEW.md`를 따릅니다.
 - 개발 실행: `python -m src.data_refinery` 또는 `run_app.bat`.
 - 버전 표시: `python -m src.data_refinery --version`.
 - 레거시 UI: `python -m src.data_refinery --legacy-tk`. Tkinter 호환 소스·테스트는 유지합니다.

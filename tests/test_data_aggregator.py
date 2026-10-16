@@ -535,6 +535,7 @@ class TestDataAggregator(unittest.TestCase):
             group_by_keys=["디비전"],
             measure_sums=["매출", "비용1"],
             output_format="csv",
+            strict_numeric=False,  # Deliberate legacy coercion; strict mode has separate coverage.
         )
         res = aggregate_dataset(spec)
         self.assertEqual(res.coerced_numbers_count, 2)
@@ -898,6 +899,7 @@ class TestAggregationFunctions(unittest.TestCase):
 
         spec = AggregationSpec(
             file_path=sparse_csv,
+            strict_numeric=False,  # Explicit legacy count semantics for unparseable cells.
             group_by_keys=["디비전"],
             measure_sums=["매출"],
             measure_functions={"매출": "count"},
@@ -955,6 +957,7 @@ class TestAggregationFunctions(unittest.TestCase):
                 with self.subTest(function=function, chunksize=chunksize):
                     spec = AggregationSpec(
                         file_path=unusable_csv,
+                        strict_numeric=False,  # Verify legacy reductions over unparseable cells.
                         group_by_keys=["디비전"],
                         measure_sums=["매출"],
                         measure_functions={"매출": function},
