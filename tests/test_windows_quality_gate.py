@@ -14,6 +14,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(os.name == "nt", "Windows quality gate")
 class TestWindowsQualityGate(unittest.TestCase):
+    def test_push_hook_does_not_inherit_foreign_powershell_modules(self):
+        with tempfile.TemporaryDirectory(prefix="DataRefinery-hook-environment-") as folder:
+            fake_python = Path(folder) / "python.cmd"
+            trace = Path(folder) / "module-path.txt"
+            fake_python.write_text(
+                '@echo off\necho %PSModulePath%>"%CHECK_TRACE%"\nexit /b 23\n', encoding="ascii",
+            )
+            environment = os.environ.copy()
+            environment["PATH"] = folder + os.pathsep + environment["PATH"]
+            environment["CHECK_TRACE"] = str(trace)
+            poisoned_path = "C:\\deliberately-foreign-ci-modules"
+            environment["PSModulePath"] = poisoned_path
+            result = subprocess.run(
+                ["git", "-c", "core.hooksPath=.githooks", "hook", "run", "pre-push"],
+                cwd=ROOT, env=environment, capture_output=True, text=True, errors="replace", timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Checks require Python 3.13 x64", result.stdout + result.stderr)
+            module_path = trace.read_text(encoding="utf-8", errors="replace")
+            self.assertNotIn(poisoned_path.casefold(), module_path.casefold())
+            self.assertIn("windowspowershell", module_path.casefold())
+
     def test_aggregation_safety_with_checkout_and_temp_on_different_drives(self):
         # SUBST creates a disposable drive without touching existing mounts.
         # The child runs only this focused suite, so discovery cannot recurse here.

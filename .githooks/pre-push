@@ -1,3 +1,5 @@
 #!/bin/sh
 # The same mandatory checks used by CI run before any remote push.
+# Git Bash can preserve incompatible PowerShell 7 module paths for Windows PowerShell.
+unset PSModulePath
 exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1

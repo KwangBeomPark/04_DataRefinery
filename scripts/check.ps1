@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $checkRoot = Join-Path $projectRoot ('build\checks-' + [guid]::NewGuid().ToString('N'))
 $savedEnvironment = @{}
-foreach ($name in @('LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP')) {
+foreach ($name in @('LOCALAPPDATA', 'APPDATA', 'TEMP', 'TMP', 'PSModulePath')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 Push-Location -LiteralPath $projectRoot
@@ -26,9 +26,12 @@ try {
     & $Python -m unittest discover -s tests -q
     if ($LASTEXITCODE -ne 0) { throw 'Application tests failed.' }
     # Separate processes contain deliberate native failure codes in fault tests.
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'tests\test_release_signing.ps1')
+    # Let Windows PowerShell rebuild its own module path instead of inheriting PS7 modules.
+    [Environment]::SetEnvironmentVariable('PSModulePath', $null, 'Process')
+    $windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'tests\test_release_signing.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Release pipeline tests failed.' }
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'scripts\test_user_data_backup.ps1')
+    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'scripts\test_user_data_backup.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'User data backup tests failed.' }
     Write-Host 'Quality checks passed: dependencies, lint, application, release and backup safety.' -ForegroundColor Green
     Write-Host "Isolated test fixtures: $checkRoot"

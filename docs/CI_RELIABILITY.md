@@ -34,6 +34,10 @@
   작업한 통합 문서·Excel 인스턴스가 정리되는지 모의 COM으로 검증합니다. 실제 Excel 연결·모델·피벗·
   새로고침은 기존 `DATAREFINERY_EXCEL_TESTS=1` 통합 검사를 명시적으로 실행합니다.
   실제 Excel의 간헐적인 COM 거부 응답 자체를 이번 변경으로 해결했다고 주장하지 않습니다.
+- **PowerShell 실행 환경 분리:** 실제 훅 검사에서 Git Bash가 상속한 PowerShell 7 모듈 경로 때문에
+  Windows PowerShell의 `Get-FileHash` 자동 로딩이 실패하는 문제를 확인했습니다.
+  훅에서 `PSModulePath` 상속을 해제하고, 공통 검사도 서명·백업 자식 프로세스에 Windows PowerShell
+  기본 모듈 경로를 사용하게 합니다. 외부 모듈 경로가 훅으로 전달되지 않는 회귀 검사도 추가했습니다.
 
 ## 실행과 완료 기준
 
