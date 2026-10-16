@@ -81,7 +81,7 @@ Python and extra libraries are not required.
 
 👉 **[Download the latest installer](https://github.com/KwangBeomPark/04_DataRefinery/releases/latest)**
 
-1. Download `App04_DataRefinery_Setup_v2.0.1.exe`.
+1. Download `App04_DataRefinery_Setup_v<version>.exe` from the latest release.
 2. Run the installer. It creates **Data Refinery** shortcuts in the Start menu
    and on the desktop.
 3. Use **CSV repair** for malformed delimited files, **Promotion template**
@@ -89,7 +89,7 @@ Python and extra libraries are not required.
    or **Dataset publisher** to accumulate, review, and publish period data for Excel.
 4. Results are saved beside the source data with a `YYYYMMDD_HHMM` timestamp.
 
-Source v2.0.3 opens **Data aggregator → Dataset publisher → Promotion template →
+Source v2.0.4 opens **Data aggregator → Dataset publisher → Promotion template →
 CSV repair** in that order. Language changes retain the selected task and its inputs.
 See the [data preparation and mart roadmap](docs/DATA_PREPARATION_ROADMAP.md) for
 the proposed preparation workspace and phased app improvements.
@@ -163,4 +163,4 @@ Installer upgrade safeguards and the remaining signed/runtime checks are recorde
 See the [public code map](docs/CODE_MAP.md), [user-data backup and restore guide](docs/USER_DATA.md), and [phases 3–5 review](docs/STANDARDIZATION_PHASE3_5_REVIEW.md). The default backup includes all UserSetting files, including workspace databases; user-selected external inputs and published files require separate backup. The desktop menu is labelled Updates / About to match its actions.
 
 
-2026-10-15 source preparation version: 2.0.3 adds reordered tabs and a data-preparation roadmap. Signing and publication remain separate release steps. New public releases contain only `App04_DataRefinery_Setup_v<version>.exe` plus manifest/checksums. Existing v2.0.1 downloads stay unchanged. See the [current release checklist](RELEASE_CHECKLIST.md).
+2026-10-16 release preparation version: 2.0.4 includes reordered tabs, aggregation source/numeric protection and shared Windows quality checks. Signing and publication remain separate release steps. New public releases contain only `App04_DataRefinery_Setup_v<version>.exe` plus manifest/checksums. Existing published versions stay unchanged. See the [v2.0.4 notes](docs/release-notes/RELEASE_NOTES_v2.0.4.md) and [current release checklist](RELEASE_CHECKLIST.md).
