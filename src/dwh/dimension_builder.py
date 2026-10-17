@@ -371,7 +371,8 @@ class DimensionBuilder:
                     header=True,
                     all_varchar=True,
                     quote='"',
-                    escape='"'
+                    escape='"',
+                    strict_mode=false
                 );
                 """
             )

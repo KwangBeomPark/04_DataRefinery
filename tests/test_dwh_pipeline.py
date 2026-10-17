@@ -664,7 +664,7 @@ class TestEndToEndDwhPipeline(unittest.TestCase):
 
             # Add 2 distinct unmapped customers for the same product OLED65C6P in 2026-02 in raw_erp_pnl.csv
             pnl_path = custom_dir / "raw_erp_pnl.csv"
-            with pnl_path.open("a", encoding="utf-8", newline="") as f:
+            with pnl_path.open("a", encoding="utf-8") as f:
                 f.write(
                     '2026-02,PL,000999888771,OLED65C6P,PLN,5,"10 000,00","500,00","6 000,00","3 500,00","200,00","100,00","300,00","100,00","400,00","600,00"\n'
                 )
@@ -674,12 +674,12 @@ class TestEndToEndDwhPipeline(unittest.TestCase):
 
             # Add an unmapped product NEW_INV_ONLY_99 to raw_inventory.csv in 2026-02
             inv_path = custom_dir / "raw_inventory.csv"
-            with inv_path.open("a", encoding="utf-8", newline="") as f:
+            with inv_path.open("a", encoding="utf-8") as f:
                 f.write("2026-02,PL,WAW_DC1,Warsaw Central DC,NEW_INV_ONLY_99,PLN,25,10000,30,500\n")
 
             # Add 2 channels of an unmapped product NEW_PRICE_MODEL_77 to raw_market_price.csv (prices 1000 and 1200 -> AVG 1100)
             price_path = custom_dir / "raw_market_price.csv"
-            with price_path.open("a", encoding="utf-8", newline="") as f:
+            with price_path.open("a", encoding="utf-8") as f:
                 f.write("2026-02,PL,CH_RETAIL_ME,MediaExpert,NEW_PRICE_MODEL_77,PLN,1000,1050,1020\n")
                 f.write("2026-02,PL,CH_RETAIL_RTV,RTV Euro AGD,NEW_PRICE_MODEL_77,PLN,1200,1250,1220\n")
 
