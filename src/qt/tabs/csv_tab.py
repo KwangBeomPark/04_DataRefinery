@@ -65,18 +65,28 @@ class CsvRepairTab(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
+        # Step Guide Banner
+        self.lbl_step_guide = QLabel()
+        self.lbl_step_guide.setWordWrap(True)
+        self.lbl_step_guide.setStyleSheet(
+            f"background-color: {PALETTE['surface_alt']}; border: 1px solid {PALETTE['border_strong']}; "
+            f"border-radius: 6px; padding: 10px 12px; color: {PALETTE['navy']}; font-size: 9.5pt;"
+        )
+        layout.addWidget(self.lbl_step_guide)
+
         # 1. Source File Card
         self.card_file = CardWidget()
         form_file = QFormLayout()
         form_file.setSpacing(8)
 
+        self.lbl_file_path = QLabel("파일 경로:")
         self.picker_file = FilePickerWidget(
             mode="file",
             filter_pattern="CSV, TXT, Excel (*.csv *.txt *.xlsx *.xlsm);;All Files (*.*)",
             placeholder="정리할 CSV, TXT, 또는 Excel 파일을 선택하세요",
         )
         self.picker_file.pathChanged.connect(self._on_file_selected)
-        form_file.addRow("파일 경로:", self.picker_file)
+        form_file.addRow(self.lbl_file_path, self.picker_file)
 
         self.lbl_file_info = QLabel()
         self.lbl_file_info.setProperty("muted", "true")
@@ -91,28 +101,31 @@ class CsvRepairTab(QWidget):
         form_import.setSpacing(10)
 
         # Delimiter
+        self.lbl_delim = QLabel("파일 구분 기호:")
         self.edit_delim = QLineEdit(",")
         self.edit_delim.setFixedWidth(80)
         self.edit_delim.textChanged.connect(self._on_delim_changed)
-        form_import.addRow("파일 구분 기호:", self.edit_delim)
+        form_import.addRow(self.lbl_delim, self.edit_delim)
 
         self.lbl_delim_help = QLabel()
         self.lbl_delim_help.setProperty("caption", "true")
         form_import.addRow("", self.lbl_delim_help)
 
         # Number format
+        self.lbl_num_format = QLabel("숫자 표기 방식:")
         self.combo_num_format = QComboBox()
         self.combo_num_format.currentIndexChanged.connect(self._on_num_format_changed)
-        form_import.addRow("숫자 표기 방식:", self.combo_num_format)
+        form_import.addRow(self.lbl_num_format, self.combo_num_format)
 
         self.lbl_num_help = QLabel()
         self.lbl_num_help.setProperty("caption", "true")
         form_import.addRow("", self.lbl_num_help)
 
         # Column count
+        self.lbl_cols = QLabel("표의 열 개수:")
         self.edit_cols = QLineEdit("0")
         self.edit_cols.setFixedWidth(80)
-        form_import.addRow("표의 열 개수:", self.edit_cols)
+        form_import.addRow(self.lbl_cols, self.edit_cols)
 
         self.lbl_cols_help = QLabel()
         self.lbl_cols_help.setProperty("caption", "true")
@@ -126,9 +139,10 @@ class CsvRepairTab(QWidget):
         form_output = QFormLayout()
         form_output.setSpacing(8)
 
+        self.lbl_out_format = QLabel("저장 파일 형식:")
         self.combo_out_format = QComboBox()
         self.combo_out_format.currentIndexChanged.connect(self._on_out_format_changed)
-        form_output.addRow("저장 파일 형식:", self.combo_out_format)
+        form_output.addRow(self.lbl_out_format, self.combo_out_format)
 
         self.lbl_out_help = QLabel()
         self.lbl_out_help.setProperty("caption", "true")
@@ -177,15 +191,34 @@ class CsvRepairTab(QWidget):
         main_lay.setContentsMargins(0, 0, 0, 0)
         main_lay.addWidget(scroll)
 
+        self._update_step_gating()
+
+    def _update_step_gating(self) -> None:
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        path_str = self.picker_file.get_path()
+        has_file = bool(path_str and os.path.isfile(path_str))
+        self.card_import.setEnabled(has_file)
+        self.card_output.setEnabled(has_file)
+        if not self._is_processing:
+            self.btn_process.setEnabled(has_file)
+        self.lbl_step_guide.setText(t.get("csv_step_guide_2" if has_file else "csv_step_guide_1", ""))
+
     def apply_language(self, lang_code: str) -> None:
         self.language_code = lang_code
         t = _UI_TEXT.get(lang_code, _UI_TEXT["ko"])
 
         self.card_file.set_title(t["section_file"])
+        self.lbl_file_path.setText(t.get("csv_file_label", "파일 경로:"))
+        self.picker_file.set_placeholder_text(t.get("csv_file_placeholder", ""))
+        self.picker_file.set_browse_text(t.get("browse", "찾아보기…"))
+        self.picker_file.set_dialog_title(t.get("picker_choose_file", "파일 선택"))
         self.lbl_file_info.setText(t["file_info"])
 
         self.card_import.set_title(t["section_import"])
+        self.lbl_delim.setText(t.get("delimiter_label", t.get("delimiter", "")))
         self.lbl_delim_help.setText(t["delimiter_help"])
+        self.lbl_num_format.setText(t.get("number_label", t.get("number_format", "")))
+        self.lbl_cols.setText(t.get("columns_label", t.get("columns", "")))
         self.lbl_cols_help.setText(t["columns_help"])
 
         # Number format options
@@ -199,6 +232,7 @@ class CsvRepairTab(QWidget):
 
         # Output options
         self.card_output.set_title(t["section_output"])
+        self.lbl_out_format.setText(t.get("output_label", t.get("output_format", "")))
         curr_out_idx = self.combo_out_format.currentIndex()
         self.combo_out_format.blockSignals(True)
         self.combo_out_format.clear()
@@ -208,6 +242,7 @@ class CsvRepairTab(QWidget):
         self._on_out_format_changed()
 
         self.btn_process.setText(t["process"])
+        self.btn_open_folder.setText(t.get("csv_open_folder", "📂 결과 폴더 열기"))
         self.card_result.set_title(t["result_title"])
 
         if not self._last_result:
@@ -215,6 +250,8 @@ class CsvRepairTab(QWidget):
             self.lbl_result_summary.setText(t["initial_result"])
         else:
             self._render_result_summary(self._last_result)
+
+        self._update_step_gating()
 
     def _on_num_format_changed(self) -> None:
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
@@ -238,6 +275,7 @@ class CsvRepairTab(QWidget):
 
     def _on_file_selected(self, path_str: str) -> None:
         self._on_out_format_changed()
+        self._update_step_gating()
         if not path_str or not os.path.isfile(path_str):
             return
 
@@ -250,6 +288,7 @@ class CsvRepairTab(QWidget):
             pass
 
         self._auto_detect_columns()
+
 
     def _auto_detect_columns(self) -> None:
         path_str = self.picker_file.get_path()

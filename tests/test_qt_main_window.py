@@ -69,6 +69,61 @@ class TestQtMainWindow(unittest.TestCase):
                 self.assertEqual(cm.exception.code, 0)
                 self.assertIn(__version__, stdout_buf.getvalue())
 
+    def test_full_localization_and_progressive_step_gating(self):
+        import re
+        from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QPushButton
+        from src.qt.widgets.card import CardWidget
+
+        hangul_re = re.compile(r"[가-힣]")
+        window = MainWindow()
+
+        # 1. Verify initial progressive step-gating (before selecting files)
+        self.assertFalse(window.tab_csv.card_import.isEnabled())
+        self.assertFalse(window.tab_csv.card_output.isEnabled())
+        self.assertFalse(window.tab_csv.btn_process.isEnabled())
+
+        self.assertFalse(window.tab_promotion.card_output.isEnabled())
+        self.assertFalse(window.tab_promotion.btn_process.isEnabled())
+
+        self.assertFalse(window.tab_aggregator.card_sources.isEnabled())
+        self.assertFalse(window.tab_aggregator.card_rules.isEnabled())
+        self.assertFalse(window.tab_aggregator.btn_preview.isEnabled())
+        self.assertFalse(window.tab_aggregator.btn_run.isEnabled())
+
+        # 2. Verify zero Hangul characters remain in English and Polish UI labels/buttons/placeholders
+        for lang in ("en", "pl"):
+            window.apply_language(lang)
+            for action in window.menu_settings.actions():
+                if action.text():
+                    self.assertIsNone(hangul_re.search(action.text()), f"Menu action has Hangul in {lang}: {action.text()}")
+            for action in window.tab_aggregator.menu_preset.actions():
+                if action.text():
+                    self.assertIsNone(hangul_re.search(action.text()), f"Preset action has Hangul in {lang}: {action.text()}")
+
+            for tab_name, tab in (
+                ("csv", window.tab_csv),
+                ("promo", window.tab_promotion),
+                ("agg", window.tab_aggregator),
+                ("ds", window.tab_dataset),
+            ):
+                widgets = []
+                for cls in (QLabel, QPushButton, QCheckBox, QLineEdit, CardWidget):
+                    widgets.extend(tab.findChildren(cls))
+                for w in widgets:
+                    if isinstance(w, CardWidget):
+                        txt = w._title_label.text() if hasattr(w, "_title_label") and w._title_label else ""
+                    elif isinstance(w, QLineEdit):
+                        txt = w.placeholderText()
+                    else:
+                        txt = w.text()
+                    self.assertIsNone(
+                        hangul_re.search(txt),
+                        f"[{lang}/{tab_name}] Widget {type(w).__name__} still contains Korean: {txt!r}",
+                    )
+
+        window.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+

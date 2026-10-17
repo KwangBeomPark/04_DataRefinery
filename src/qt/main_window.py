@@ -105,10 +105,10 @@ class MainWindow(QMainWindow):
         # Update and application information menu.
         self.btn_settings = QPushButton("업데이트 / 정보 ▾")
         self.menu_settings = QMenu(self)
-        self.menu_settings.addAction("업데이트 확인...", self._on_check_update)
-        self.menu_settings.addAction("GitHub 저장소 방문...", self._on_visit_repo)
+        self.act_check_update = self.menu_settings.addAction("업데이트 확인...", self._on_check_update)
+        self.act_visit_repo = self.menu_settings.addAction("GitHub 저장소 방문...", self._on_visit_repo)
         self.menu_settings.addSeparator()
-        self.menu_settings.addAction("정보 (About)...", self._on_about)
+        self.act_about = self.menu_settings.addAction("정보 (About)...", self._on_about)
         self.btn_settings.setMenu(self.menu_settings)
         top_layout.addWidget(self.btn_settings)
 
@@ -151,6 +151,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"Data Refinery v{__version__}")
         self.lbl_app_subtitle.setText(t.get("header_subtitle", "데이터 전처리 · 집계 · 배포 솔루션"))
         self.btn_settings.setText(t["update_info_menu"])
+        self.act_check_update.setText(t.get("menu_check_update", "업데이트 확인..."))
+        self.act_visit_repo.setText(t.get("menu_visit_repo", "GitHub 저장소 방문..."))
+        self.act_about.setText(t.get("menu_about", "정보 (About)..."))
+        self.lbl_status_msg.setText(t.get("status_ready", "준비됨"))
 
         # task_options identifies features; visual order must not change their labels.
         task_opts = t.get("task_options", ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서", "데이터셋 배포"))
@@ -172,6 +176,7 @@ class MainWindow(QMainWindow):
     def _on_check_update(self) -> None:
         from src.qt.dialogs import confirm_dialog, error_dialog, info_dialog
         from src.update_checker import fetch_latest_release, version_key
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
         try:
             rel = fetch_latest_release(timeout=4)
             if rel:
@@ -180,26 +185,31 @@ class MainWindow(QMainWindow):
                 if latest and current and latest > current:
                     if confirm_dialog(
                         self,
-                        "새 업데이트 발견",
-                        f"새로운 버전 <b>v{rel.version}</b>이(가) 출시되었습니다!<br>"
-                        f"현재 버전: v{__version__}<br><br>"
-                        "지금 다운로드 페이지를 여시겠습니까?",
+                        t.get("dlg_update_found_title", "새 업데이트 발견"),
+                        t.get("dlg_update_found_body", "").format(latest=rel.version, current=__version__),
                     ):
                         webbrowser.open(rel.url)
                     return
-            info_dialog(self, "업데이트 확인", f"현재 최신 버전(v{__version__})을 사용 중입니다.")
+            info_dialog(
+                self,
+                t.get("dlg_update_title", "업데이트 확인"),
+                t.get("dlg_update_latest", "").format(current=__version__),
+            )
         except Exception as e:
-            error_dialog(self, "업데이트 확인 실패", f"서버와 통신할 수 없습니다:\n{e}")
+            error_dialog(
+                self,
+                t.get("dlg_update_err_title", "업데이트 확인 실패"),
+                t.get("dlg_update_err_body", "").format(error=e),
+            )
 
     def _on_visit_repo(self) -> None:
         webbrowser.open("https://github.com/KwangBeomPark/04_DataRefinery")
 
     def _on_about(self) -> None:
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
         info_dialog(
             self,
-            "Data Refinery 정보",
-            f"<b>Data Refinery v{__version__}</b><br><br>"
-            "대용량 CSV/Excel 데이터 정제, 집계, 프로모션 전처리 및 데이터셋 배포 도구<br>"
-            "PySide6 (Qt for Python) 기반 최신 GUI 탑재<br><br>"
-            "© 2026 KwangBeom Park. All rights reserved.",
+            t.get("dlg_about_title", "Data Refinery 정보"),
+            t.get("dlg_about_body", "").format(version=__version__),
         )
+

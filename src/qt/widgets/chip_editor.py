@@ -154,3 +154,7 @@ class ChipEditorWidget(QWidget):
                 w.deleteLater()
         self._input.clear()
         self.chipsChanged.emit([])
+
+    def set_placeholder_text(self, text: str) -> None:
+        self._input.setPlaceholderText(text)
+

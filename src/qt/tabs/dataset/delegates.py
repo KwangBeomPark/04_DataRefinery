@@ -22,8 +22,13 @@ class RoleDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent: QWidget, option: Any, index: QModelIndex) -> QWidget:
         combo = QComboBox(parent)
-        combo.addItems(ColumnRoleTableModel.ROLE_OPTIONS)
+        model = index.model()
+        if hasattr(model, "get_role_options"):
+            combo.addItems(model.get_role_options())
+        else:
+            combo.addItems(ColumnRoleTableModel.ROLE_OPTIONS)
         return combo
+
 
     def setEditorData(self, editor: QWidget, index: QModelIndex) -> None:
         combo: QComboBox = editor  # type: ignore

@@ -58,9 +58,16 @@ class StepperWidget(QFrame):
     def _on_step_clicked(self, step_idx: int) -> None:
         self.stepClicked.emit(step_idx)
 
+    def set_steps(self, steps: List[str]) -> None:
+        self._steps = list(steps)
+        for idx, lbl in enumerate(self._labels):
+            if idx < len(self._steps):
+                lbl.setText(str(self._steps[idx]))
+
     def set_current_step(self, step_idx: int) -> None:
         self._current_step = max(0, min(step_idx, len(self._steps) - 1))
         self._update_styles()
+
 
     def _update_styles(self) -> None:
         for idx, lbl in enumerate(self._labels):

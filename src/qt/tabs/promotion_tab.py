@@ -48,6 +48,12 @@ class _PromotionPreviewModel(QAbstractTableModel):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self._rows: List[Dict[str, Any]] = []
+        self._headers: List[str] = list(self.COLUMNS)
+
+    def set_headers(self, headers: Any) -> None:
+        self._headers = list(headers)
+        if self._headers:
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self._headers) - 1)
 
     def set_rows(self, rows: List[Dict[str, Any]]) -> None:
         self.beginResetModel()
@@ -58,11 +64,12 @@ class _PromotionPreviewModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self.COLUMNS)
+        return len(self._headers)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return self.COLUMNS[section]
+            if 0 <= section < len(self._headers):
+                return self._headers[section]
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -131,6 +138,15 @@ class PromotionTab(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(14)
 
+        # Step Guide Banner
+        self.lbl_step_guide = QLabel()
+        self.lbl_step_guide.setWordWrap(True)
+        self.lbl_step_guide.setStyleSheet(
+            f"background-color: {PALETTE['surface_alt']}; border: 1px solid {PALETTE['border_strong']}; "
+            f"border-radius: 6px; padding: 10px 12px; color: {PALETTE['navy']}; font-size: 9.5pt;"
+        )
+        layout.addWidget(self.lbl_step_guide)
+
         # 1. Template Selection Card
         self.card_file = CardWidget()
         top_bar = QHBoxLayout()
@@ -143,13 +159,14 @@ class PromotionTab(QWidget):
         form_file = QFormLayout()
         form_file.setSpacing(8)
 
+        self.lbl_template_file = QLabel("템플릿 파일:")
         self.picker_file = FilePickerWidget(
             mode="file",
             filter_pattern="Excel Template (*.xlsx);;All Files (*.*)",
             placeholder="작성한 프로모션 템플릿(.xlsx)을 선택하세요",
         )
         self.picker_file.pathChanged.connect(self._on_file_selected)
-        form_file.addRow("템플릿 파일:", self.picker_file)
+        form_file.addRow(self.lbl_template_file, self.picker_file)
 
         self.lbl_file_info = QLabel()
         self.lbl_file_info.setProperty("muted", "true")
@@ -159,9 +176,10 @@ class PromotionTab(QWidget):
         layout.addWidget(self.card_file)
 
         # 2. Template Validation & Preview Card
-        self.card_preview = CardWidget("템플릿 검증 및 일별 지원금 미리보기")
-        self.lbl_validation = QLabel("템플릿을 선택하면 규칙 검증 및 미리보기가 생성됩니다.")
+        self.card_preview = CardWidget("2. 템플릿 규칙 검증 및 일별 지원금 미리보기")
+        self.lbl_validation = QLabel("1단계에서 템플릿 파일을 선택하면 규칙 검증 및 미리보기가 자동으로 표시됩니다.")
         self.lbl_validation.setProperty("subheading", "true")
+        self.lbl_validation.setWordWrap(True)
         self.card_preview.content_layout.addWidget(self.lbl_validation)
 
         self.table_preview = QTableView()
@@ -183,9 +201,10 @@ class PromotionTab(QWidget):
         form_output = QFormLayout()
         form_output.setSpacing(8)
 
+        self.lbl_out_format = QLabel("일별 지원금 형식:")
         self.combo_out_format = QComboBox()
         self.combo_out_format.currentIndexChanged.connect(self._on_out_format_changed)
-        form_output.addRow("일별 지원금 형식:", self.combo_out_format)
+        form_output.addRow(self.lbl_out_format, self.combo_out_format)
 
         self.lbl_out_help = QLabel()
         self.lbl_out_help.setProperty("caption", "true")
@@ -234,15 +253,41 @@ class PromotionTab(QWidget):
         main_lay.setContentsMargins(0, 0, 0, 0)
         main_lay.addWidget(scroll)
 
+        self._update_step_gating()
+
+    def _update_step_gating(self) -> None:
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        is_ready = self._promotion_data is not None
+        self.card_output.setEnabled(is_ready)
+        if not self._is_processing:
+            self.btn_process.setEnabled(is_ready)
+        self.lbl_step_guide.setText(t.get("promo_step_guide_2" if is_ready else "promo_step_guide_1", ""))
+
     def apply_language(self, lang_code: str) -> None:
         self.language_code = lang_code
         t = _UI_TEXT.get(lang_code, _UI_TEXT["ko"])
 
-        self.card_file.set_title(t["promo_file_section"])
+        self.card_file.set_title(t.get("promo_section_1", t["promo_file_section"]))
         self.btn_download.setText(t["promo_download"])
+        self.lbl_template_file.setText(t.get("promo_template_label", "템플릿 파일:"))
+        self.picker_file.set_placeholder_text(t.get("promo_file_placeholder", ""))
+        self.picker_file.set_browse_text(t.get("browse", "찾아보기…"))
+        self.picker_file.set_dialog_title(t.get("picker_choose_file", "파일 선택"))
         self.lbl_file_info.setText(t["promo_file_info"])
 
-        self.card_output.set_title(t["promo_output_section"])
+        self.card_preview.set_title(t.get("promo_section_2", "2. 템플릿 규칙 검증 및 일별 지원금 미리보기"))
+        self.model_preview.set_headers(t.get("promo_cols", _PromotionPreviewModel.COLUMNS))
+        if not self.picker_file.get_path():
+            self.lbl_validation.setText(t.get("promo_validation_wait", ""))
+        elif self._promotion_data:
+            summary_msg = [
+                f"<font color='{PALETTE['success']}'><b>✓ {t['promo_valid'].format(rules=len(self._promotion_data.support_rules), rows=f'{self._promotion_data.estimated_daily_rows:,}')}</b></font>",
+                f"<font color='{PALETTE['muted']}'>{t['promo_overlap'].format(count=self._promotion_data.overlapping_rule_pairs)}</font>",
+            ]
+            self.lbl_validation.setText("<br>".join(summary_msg))
+
+        self.card_output.set_title(t.get("promo_section_3", t["promo_output_section"]))
+        self.lbl_out_format.setText(t.get("promo_output_label", t.get("promo_output_format", "")))
         curr_out_idx = self.combo_out_format.currentIndex()
         self.combo_out_format.blockSignals(True)
         self.combo_out_format.clear()
@@ -254,16 +299,26 @@ class PromotionTab(QWidget):
         self._on_out_format_changed()
 
         self.btn_process.setText(t["promo_process"])
+        self.btn_open_folder.setText(t.get("csv_open_folder", "📂 결과 폴더 열기"))
         self.card_result.set_title(t["promo_result_title"])
 
         if not self._last_result:
             self.lbl_status.setText(t["promo_initial_result"])
             self.lbl_result_summary.setText(t["promo_initial_result"])
+        else:
+            self._render_result_summary(self._last_result)
+
+        self._update_step_gating()
 
     def _on_out_format_changed(self) -> None:
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
         is_excel = self.combo_out_format.currentIndex() == 1
         ext = ".xlsx" if is_excel else ".csv"
-        self.lbl_out_hint.setText(f"저장 파일 이름: promotion_daily_support_YYYYMMDD_HHMM{ext}")
+        name = f"promotion_daily_support_YYYYMMDD_HHMM{ext}"
+        if self.picker_file.get_path():
+            self.lbl_out_hint.setText(t.get("output_hint_with_file", "{name}").format(name=name))
+        else:
+            self.lbl_out_hint.setText(t.get("output_hint", "{name}").format(name=name))
 
     def _on_download_template(self) -> None:
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
@@ -291,24 +346,27 @@ class PromotionTab(QWidget):
                 ws2.append(["promotion_id", "model_code", "start_date", "end_date", "support_per_unit", "currency"])
                 wb.save(dest)
 
-            info_dialog(self, "다운로드 완료", t["promo_template_saved"].format(name=os.path.basename(dest)))
+            info_dialog(self, t["promo_download"], t["promo_template_saved"].format(name=os.path.basename(dest)))
         except Exception as e:
             error_dialog(self, t["promo_file_section"], str(e))
 
     def _on_file_selected(self, path_str: str) -> None:
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        self._on_out_format_changed()
         if not path_str or not os.path.isfile(path_str):
             self._promotion_data = None
             self.model_preview.set_rows([])
-            self.lbl_validation.setText("템플릿을 선택하면 규칙 검증 및 미리보기가 생성됩니다.")
+            self.lbl_validation.setText(t.get("promo_validation_wait", ""))
+            self._update_step_gating()
             return
 
-        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
         try:
             data, issues = load_template(path_str)
         except Exception as err:
             self._promotion_data = None
             self.model_preview.set_rows([])
-            self.lbl_validation.setText(f"<font color='{PALETTE['danger']}'>템플릿 로드 실패: {err}</font>")
+            self.lbl_validation.setText(f"<font color='{PALETTE['danger']}'>{t['error_title']}: {err}</font>")
+            self._update_step_gating()
             return
 
         if issues:
@@ -319,6 +377,7 @@ class PromotionTab(QWidget):
                 shown.append(t["promo_issue_more"].format(count=len(issues) - len(shown)))
             msg = f"<font color='{PALETTE['danger']}'><b>{t['promo_invalid'].format(count=len(issues))}</b></font><br>" + "<br>".join(shown)
             self.lbl_validation.setText(msg)
+            self._update_step_gating()
             return
 
         self._promotion_data = data
@@ -330,6 +389,8 @@ class PromotionTab(QWidget):
             f"<font color='{PALETTE['muted']}'>{t['promo_overlap'].format(count=data.overlapping_rule_pairs)}</font>",
         ]
         self.lbl_validation.setText("<br>".join(summary_msg))
+        self._update_step_gating()
+
 
     def _run_process(self) -> None:
         path_str = self.picker_file.get_path()

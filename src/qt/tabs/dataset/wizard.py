@@ -39,6 +39,7 @@ from src.dataset_profiler import (
     check_sample_key_uniqueness,
     profile_dataset_sample,
 )
+from src.i18n import _UI_TEXT
 from src.qt.dialogs import error_dialog, info_dialog
 from src.qt.tabs.dataset.delegates import RoleDelegate
 from src.qt.tabs.dataset.models import ColumnRoleTableModel, DatasetFileTableModel
@@ -58,13 +59,20 @@ class DatasetWizardDialog(QDialog):
         dataset: Optional[DatasetDefinition] = None,
         registry: Optional[DatasetRegistry] = None,
         parent: Optional[QWidget] = None,
+        language_code: str = "ko",
     ):
         super().__init__(parent)
+        self.language_code = language_code
         self._initial_dataset = dataset
         self._registry = registry or DatasetRegistry(get_default_storage_dir())
         self._is_edit = dataset is not None
 
-        title = f"데이터셋 수정: {dataset.name}" if self._is_edit else "새 데이터셋 등록 마법사"
+        t = _UI_TEXT.get(language_code, _UI_TEXT["ko"])
+        title = (
+            t.get("wiz_title_edit", "데이터셋 수정: {name}").format(name=dataset.name)
+            if self._is_edit and dataset
+            else t.get("wiz_title_new", "새 데이터셋 등록 마법사")
+        )
         self.setWindowTitle(title)
         self.resize(960, 720)
         self.setMinimumSize(850, 620)
@@ -76,7 +84,7 @@ class DatasetWizardDialog(QDialog):
 
         # 1. Stepper indicator
         self._stepper = StepperWidget(
-            ["파일 선택 및 필터", "컬럼 자동인식 및 역할 지정", "설정 확인 및 저장"]
+            list(t.get("wiz_steps", ("1. 파일 선택 및 필터", "2. 컬럼 자동인식 및 역할 지정", "3. 설정 확인 및 저장")))
         )
         self._stepper.stepClicked.connect(self._on_stepper_step_clicked)
         main_layout.addWidget(self._stepper)
@@ -97,23 +105,23 @@ class DatasetWizardDialog(QDialog):
         btn_bar.setContentsMargins(0, 0, 0, 0)
         btn_bar.setSpacing(8)
 
-        self._btn_cancel = QPushButton("취소")
+        self._btn_cancel = QPushButton(t.get("wiz_btn_cancel", "취소"))
         self._btn_cancel.clicked.connect(self.reject)
         btn_bar.addWidget(self._btn_cancel)
 
         btn_bar.addStretch()
 
-        self._btn_prev = QPushButton("◀ 이전 단계")
+        self._btn_prev = QPushButton(t.get("wiz_btn_prev", "◀ 이전 단계"))
         self._btn_prev.clicked.connect(self._on_prev_clicked)
         self._btn_prev.setEnabled(False)
         btn_bar.addWidget(self._btn_prev)
 
-        self._btn_next = QPushButton("다음 단계 ▶")
+        self._btn_next = QPushButton(t.get("wiz_btn_next", "다음 단계 ▶"))
         self._btn_next.setProperty("primary", "true")
         self._btn_next.clicked.connect(self._on_next_clicked)
         btn_bar.addWidget(self._btn_next)
 
-        self._btn_save = QPushButton("✓ 데이터셋 저장")
+        self._btn_save = QPushButton(t.get("wiz_btn_save", "✓ 데이터셋 저장"))
         self._btn_save.setProperty("primary", "true")
         self._btn_save.clicked.connect(self._on_save_clicked)
         self._btn_save.setVisible(False)
@@ -129,47 +137,61 @@ class DatasetWizardDialog(QDialog):
         if self._initial_dataset:
             self._load_dataset_fields(self._initial_dataset)
 
+    def _t(self) -> dict[str, Any]:
+        return _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+
     # -------------------------------------------------------------------------
     # Page 1: File Selection & Keyword Filters
     # -------------------------------------------------------------------------
     def _build_page1_files(self) -> QWidget:
+        t = self._t()
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
         # Folder settings card
-        card_dir = CardWidget("1. 데이터셋 경로 및 기본 정보")
+        card_dir = CardWidget(t.get("wiz_p1_card_dir", "1. 데이터셋 경로 및 기본 정보"))
         form_dir = QFormLayout()
         form_dir.setSpacing(8)
 
         self._edit_name = QLineEdit()
-        self._edit_name.setPlaceholderText("예: TV 매출 실적 (구분하기 쉬운 이름을 입력하세요)")
-        form_dir.addRow("데이터셋 이름 *", self._edit_name)
+        self._edit_name.setPlaceholderText(t.get("wiz_p1_name_ph", ""))
+        form_dir.addRow(t.get("wiz_p1_name_label", "데이터셋 이름 *"), self._edit_name)
 
-        self._picker_input = FilePickerWidget(mode="folder", placeholder="CSV 파일들이 위치한 입력 폴더를 선택하세요")
+        self._picker_input = FilePickerWidget(
+            mode="folder",
+            placeholder=t.get("wiz_p1_input_ph", ""),
+            browse_text=t.get("picker_browse", "찾아보기…"),
+            dialog_title=t.get("picker_choose_folder", "폴더 선택"),
+        )
         self._picker_input.pathChanged.connect(self._on_input_folder_changed)
-        form_dir.addRow("입력 폴더 *", self._picker_input)
+        form_dir.addRow(t.get("wiz_p1_input_label", "입력 폴더 *"), self._picker_input)
 
-        self._picker_public = FilePickerWidget(mode="folder", placeholder="정제/배포된 결과물이 저장될 폴더 (미지정 시 기본 폴더)")
-        form_dir.addRow("배포 폴더", self._picker_public)
+        self._picker_public = FilePickerWidget(
+            mode="folder",
+            placeholder=t.get("wiz_p1_pub_ph", ""),
+            browse_text=t.get("picker_browse", "찾아보기…"),
+            dialog_title=t.get("picker_choose_folder", "폴더 선택"),
+        )
+        form_dir.addRow(t.get("wiz_p1_pub_label", "배포 폴더"), self._picker_public)
 
         self._edit_pattern = QLineEdit("*.csv")
-        self._edit_pattern.setPlaceholderText("기본값: *.csv")
+        self._edit_pattern.setPlaceholderText("*.csv")
         self._edit_pattern.textChanged.connect(self._trigger_rescan)
-        form_dir.addRow("파일 확장자/패턴", self._edit_pattern)
+        form_dir.addRow(t.get("wiz_p1_pat_label", "파일 확장자/패턴"), self._edit_pattern)
 
         card_dir.content_layout.addLayout(form_dir)
         layout.addWidget(card_dir)
 
         # Filter settings card
-        card_filter = CardWidget("2. 파일 필터링 규칙 (키워드/체크 선택)")
+        card_filter = CardWidget(t.get("wiz_p1_card_filter", "2. 파일 필터링 규칙 (키워드/체크 선택)"))
         grid_filter = QGridLayout()
         grid_filter.setSpacing(8)
 
         # Include keywords
-        grid_filter.addWidget(QLabel("포함할 키워드:"), 0, 0)
-        self._chip_include = ChipEditorWidget(placeholder="파일명에 포함될 단어 입력 후 Enter (예: sales, monthly)")
+        grid_filter.addWidget(QLabel(t.get("wiz_p1_inc_label", "포함할 키워드:")), 0, 0)
+        self._chip_include = ChipEditorWidget(placeholder=t.get("wiz_p1_inc_ph", ""))
         self._chip_include.chipsChanged.connect(self._trigger_rescan)
         grid_filter.addWidget(self._chip_include, 0, 1)
 
@@ -177,8 +199,8 @@ class DatasetWizardDialog(QDialog):
         mode_box = QWidget()
         mode_layout = QHBoxLayout(mode_box)
         mode_layout.setContentsMargins(0, 0, 0, 0)
-        self._radio_or = QRadioButton("하나라도 포함 (OR)")
-        self._radio_and = QRadioButton("모두 포함 (AND)")
+        self._radio_or = QRadioButton(t.get("wiz_p1_or", "하나라도 포함 (OR)"))
+        self._radio_and = QRadioButton(t.get("wiz_p1_and", "모두 포함 (AND)"))
         self._radio_or.setChecked(True)
         self._radio_or.toggled.connect(self._trigger_rescan)
         mode_layout.addWidget(self._radio_or)
@@ -187,13 +209,13 @@ class DatasetWizardDialog(QDialog):
         grid_filter.addWidget(mode_box, 0, 2)
 
         # Exclude keywords
-        grid_filter.addWidget(QLabel("제외할 키워드:"), 1, 0)
-        self._chip_exclude = ChipEditorWidget(placeholder="파일명에 포함되면 제외할 단어 입력 후 Enter (예: temp, test, old)")
+        grid_filter.addWidget(QLabel(t.get("wiz_p1_exc_label", "제외할 키워드:")), 1, 0)
+        self._chip_exclude = ChipEditorWidget(placeholder=t.get("wiz_p1_exc_ph", ""))
         self._chip_exclude.chipsChanged.connect(self._trigger_rescan)
         grid_filter.addWidget(self._chip_exclude, 1, 1, 1, 2)
 
         # Recursive check
-        self._check_recursive = QCheckBox("하위 폴더의 파일도 모두 포함하여 탐색")
+        self._check_recursive = QCheckBox(t.get("wiz_p1_recursive", "하위 폴더의 파일도 모두 포함하여 탐색"))
         self._check_recursive.toggled.connect(self._trigger_rescan)
         grid_filter.addWidget(self._check_recursive, 2, 1, 1, 2)
 
@@ -201,29 +223,29 @@ class DatasetWizardDialog(QDialog):
         layout.addWidget(card_filter)
 
         # File Candidate Table card
-        card_table = CardWidget("3. 대상 파일 선택 (체크 해제된 파일은 처리에서 제외됩니다)")
+        card_table = CardWidget(t.get("wiz_p1_card_table", "3. 대상 파일 선택"))
         tbl_actions = QHBoxLayout()
-        self._lbl_file_count = QLabel("발견된 파일: 0개 (선택됨: 0개)")
+        self._lbl_file_count = QLabel(t.get("wiz_p1_file_count", "발견된 파일: {total:,}개 (선택됨: {included:,}개)").format(total=0, included=0))
         self._lbl_file_count.setProperty("subheading", "true")
         tbl_actions.addWidget(self._lbl_file_count)
         tbl_actions.addStretch()
 
-        btn_select_all = QPushButton("전체 선택")
+        btn_select_all = QPushButton(t.get("wiz_p1_sel_all", "전체 선택"))
         btn_select_all.clicked.connect(lambda: self._file_model.select_all(True))
         tbl_actions.addWidget(btn_select_all)
 
-        btn_deselect_all = QPushButton("전체 해제")
+        btn_deselect_all = QPushButton(t.get("wiz_p1_desel_all", "전체 해제"))
         btn_deselect_all.clicked.connect(lambda: self._file_model.select_all(False))
         tbl_actions.addWidget(btn_deselect_all)
 
-        btn_rescan = QPushButton("🔄 다시 검색")
+        btn_rescan = QPushButton(t.get("wiz_p1_rescan", "🔄 다시 검색"))
         btn_rescan.clicked.connect(self._trigger_rescan)
         tbl_actions.addWidget(btn_rescan)
         card_table.content_layout.addLayout(tbl_actions)
 
         # File table view
         self._file_table = QTableView()
-        self._file_model = DatasetFileTableModel(self)
+        self._file_model = DatasetFileTableModel(self, language_code=self.language_code)
         self._file_model.selectionChanged.connect(self._update_file_count_label)
         self._file_table.setModel(self._file_model)
         self._file_table.setAlternatingRowColors(True)
@@ -244,6 +266,7 @@ class DatasetWizardDialog(QDialog):
     # Page 2: Discovered Columns & Role Assignment
     # -------------------------------------------------------------------------
     def _build_page2_columns(self) -> QWidget:
+        t = self._t()
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -255,28 +278,27 @@ class DatasetWizardDialog(QDialog):
         tb_layout.setContentsMargins(0, 0, 0, 0)
         tb_layout.setSpacing(10)
 
-        btn_auto_guess = QPushButton("✨ 역할 자동 추천 (Auto-Guess)")
+        btn_auto_guess = QPushButton(t.get("wiz_p2_auto_guess", "✨ 역할 자동 추천 (Auto-Guess)"))
         btn_auto_guess.setProperty("primary", "true")
-        btn_auto_guess.setToolTip("헤더 이름과 샘플 데이터 1,000행을 분석하여 최적의 기간, 식별키, 수치 역할을 자동 지정합니다.")
         btn_auto_guess.clicked.connect(self._on_auto_guess_clicked)
         tb_layout.addWidget(btn_auto_guess)
 
-        lbl_shortcuts = QLabel("단축키: 행 선택 후 [P: 기간]  [K: 식별키]  [N: 수치]  [I: 제외]")
+        lbl_shortcuts = QLabel(t.get("wiz_p2_shortcuts", "단축키: 행 선택 후 [P: 기간]  [K: 식별키]  [N: 수치]  [I: 제외]"))
         lbl_shortcuts.setProperty("muted", "true")
         tb_layout.addWidget(lbl_shortcuts)
 
         tb_layout.addStretch()
 
         # Batch actions
-        btn_set_key = QPushButton("선택 ➔ 식별키")
+        btn_set_key = QPushButton(t.get("wiz_p2_set_key", "선택 ➔ 식별키"))
         btn_set_key.clicked.connect(lambda: self._set_selected_roles("key"))
         tb_layout.addWidget(btn_set_key)
 
-        btn_set_num = QPushButton("선택 ➔ 수치")
+        btn_set_num = QPushButton(t.get("wiz_p2_set_num", "선택 ➔ 수치"))
         btn_set_num.clicked.connect(lambda: self._set_selected_roles("numeric"))
         tb_layout.addWidget(btn_set_num)
 
-        btn_set_ign = QPushButton("선택 ➔ 제외")
+        btn_set_ign = QPushButton(t.get("wiz_p2_set_ign", "선택 ➔ 제외"))
         btn_set_ign.clicked.connect(lambda: self._set_selected_roles("ignore"))
         tb_layout.addWidget(btn_set_ign)
 
@@ -287,9 +309,9 @@ class DatasetWizardDialog(QDialog):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left: Table
-        left_card = CardWidget("인식된 컬럼 목록 (드롭다운으로 역할 변경)")
+        left_card = CardWidget(t.get("wiz_p2_left_card", "인식된 컬럼 목록 (드롭다운으로 역할 변경)"))
         self._col_table = QTableView()
-        self._col_model = ColumnRoleTableModel(self)
+        self._col_model = ColumnRoleTableModel(self, language_code=self.language_code)
         self._col_model.rolesChanged.connect(self._update_column_diagnostics)
         self._col_table.setModel(self._col_model)
         self._col_table.setAlternatingRowColors(True)
@@ -307,43 +329,43 @@ class DatasetWizardDialog(QDialog):
         splitter.addWidget(left_card)
 
         # Right: Validation & Summary Panel
-        right_card = CardWidget("역할 요약 및 실시간 무결성 진단")
+        right_card = CardWidget(t.get("wiz_p2_right_card", "역할 요약 및 실시간 무결성 진단"))
         right_layout = QVBoxLayout()
         right_layout.setSpacing(12)
 
         # Period info
-        grp_period = QGroupBox("기준 기간 (필수 1개)")
+        grp_period = QGroupBox(t.get("wiz_p2_grp_period", "기준 기간 (필수 1개)"))
         lay_p = QVBoxLayout(grp_period)
-        self._lbl_period_status = QLabel("지정되지 않음 (미선택 시 진행 불가)")
+        self._lbl_period_status = QLabel(t.get("wiz_p2_period_unset", "지정되지 않음"))
         self._lbl_period_status.setStyleSheet(f"color: {PALETTE['danger']}; font-weight: bold;")
         lay_p.addWidget(self._lbl_period_status)
 
         form_p = QFormLayout()
         self._combo_period_format = QComboBox()
-        self._combo_period_format.addItems(["YYYY-MM (월별 · 권장)", "YYYYMM (6자리)", "YYYY-WW (주별)", "RAW (원형 유지)"])
-        form_p.addRow("기간 형식:", self._combo_period_format)
+        self._combo_period_format.addItems(["YYYY-MM", "YYYYMM", "YYYY-WW", "RAW"])
+        form_p.addRow(t.get("wiz_p2_period_fmt", "기간 형식:"), self._combo_period_format)
         lay_p.addLayout(form_p)
         right_layout.addWidget(grp_period)
 
         # Compound Key info
-        grp_key = QGroupBox("복합 식별 키 (다중 선택 가능)")
+        grp_key = QGroupBox(t.get("wiz_p2_grp_key", "복합 식별 키"))
         lay_k = QVBoxLayout(grp_key)
-        self._lbl_key_status = QLabel("선택된 키 없음 (단순 누적 모드)")
+        self._lbl_key_status = QLabel(t.get("wiz_p2_key_none", "선택된 키 없음"))
         self._lbl_key_status.setProperty("subheading", "true")
         lay_k.addWidget(self._lbl_key_status)
 
-        self._badge_key_uniqueness = StatusBadge("샘플 고유성 검사 대기", variant="neutral")
+        self._badge_key_uniqueness = StatusBadge(t.get("wiz_p2_key_wait", "샘플 고유성 검사 대기"), variant="neutral")
         lay_k.addWidget(self._badge_key_uniqueness)
-        lbl_k_help = QLabel("※ 2개 이상의 키를 지정하면 복합 기본키(Composite Key)로 결합되어 기간 내 중복을 방지합니다.")
+        lbl_k_help = QLabel(t.get("wiz_p2_key_help", ""))
         lbl_k_help.setWordWrap(True)
         lbl_k_help.setProperty("caption", "true")
         lay_k.addWidget(lbl_k_help)
         right_layout.addWidget(grp_key)
 
         # Numeric measures info
-        grp_num = QGroupBox("수치 합산 항목 (측도)")
+        grp_num = QGroupBox(t.get("wiz_p2_grp_num", "수치 합산 항목 (측도)"))
         lay_n = QVBoxLayout(grp_num)
-        self._lbl_num_status = QLabel("수치 컬럼: 0개 선택됨")
+        self._lbl_num_status = QLabel(t.get("wiz_p2_num_count", "수치 컬럼: {count}개").format(count=0))
         lay_n.addWidget(self._lbl_num_status)
         right_layout.addWidget(grp_num)
 
@@ -361,13 +383,14 @@ class DatasetWizardDialog(QDialog):
     # Page 3: Review & Advanced Settings
     # -------------------------------------------------------------------------
     def _build_page3_review(self) -> QWidget:
+        t = self._t()
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
         # Summary card
-        card_sum = CardWidget("데이터셋 구성 최종 확인")
+        card_sum = CardWidget(t.get("wiz_p3_card_sum", "데이터셋 구성 최종 확인"))
         self._lbl_final_summary = QLabel()
         self._lbl_final_summary.setStyleSheet("font-size: 9.5pt; line-height: 1.5;")
         self._lbl_final_summary.setWordWrap(True)
@@ -375,36 +398,36 @@ class DatasetWizardDialog(QDialog):
         layout.addWidget(card_sum)
 
         # Advanced options card
-        card_adv = CardWidget("고급 적재 및 호환성 옵션")
+        card_adv = CardWidget(t.get("wiz_p3_card_adv", "고급 적재 및 호환성 옵션"))
         form_adv = QFormLayout()
         form_adv.setSpacing(10)
 
         # Encoding
         self._combo_encoding = QComboBox()
-        self._combo_encoding.addItems(["auto (자동 감지 · 권장)", "utf-8", "cp949 (한국어 레거시)", "cp1250 (중앙유럽/폴란드/체코)"])
-        form_adv.addRow("파일 인코딩:", self._combo_encoding)
+        self._combo_encoding.addItems([f"auto ({t.get('agg_encoding_auto', 'auto')})", "utf-8", "cp949", "cp1250"])
+        form_adv.addRow(t.get("wiz_p3_enc_label", "파일 인코딩:"), self._combo_encoding)
 
         # Delimiter
         self._combo_delim = QComboBox()
-        self._combo_delim.addItems([", (쉼표)", "; (세미콜론)", "\\t (탭)"])
-        form_adv.addRow("구분 기호:", self._combo_delim)
+        self._combo_delim.addItems([",", ";", "\\t"])
+        form_adv.addRow(t.get("wiz_p3_delim_label", "구분 기호:"), self._combo_delim)
 
         # Number format
         self._combo_number_format = QComboBox()
-        self._combo_number_format.addItem("자동 감지 · 권장", "auto")
-        self._combo_number_format.addItem("폴란드/유럽식 · 1 234,56 쉼표 소수점", "1 234,56")
-        self._combo_number_format.addItem("영어식 · 1,234.56 점 소수점", "1,234.56")
-        form_adv.addRow("숫자 표기 방식:", self._combo_number_format)
+        self._combo_number_format.addItem(t.get("agg_encoding_auto", "auto"), "auto")
+        self._combo_number_format.addItem(t.get("agg_number_polish", "1 234,56"), "1 234,56")
+        self._combo_number_format.addItem(t.get("agg_number_english", "1,234.56"), "1,234.56")
+        form_adv.addRow(t.get("wiz_p3_num_label", "숫자 표기 방식:"), self._combo_number_format)
 
         # Same period policy
         self._combo_period_policy = QComboBox()
-        self._combo_period_policy.addItem("동일 월의 여러 파일 모두 합치기", "union")
-        self._combo_period_policy.addItem("동일 월의 여러 파일·중복 키 차단", "error")
-        form_adv.addRow("동일 기간 파일 처리:", self._combo_period_policy)
-        form_adv.addRow("수정 기간 처리:", QLabel("해당 기간 전체 교체 · 식별 키별 병합은 지원하지 않음"))
+        self._combo_period_policy.addItem("Union (Append)", "union")
+        self._combo_period_policy.addItem("Strict (Block duplicates)", "error")
+        form_adv.addRow(t.get("wiz_p3_pol_label", "동일 기간 파일 처리:"), self._combo_period_policy)
+        form_adv.addRow(t.get("wiz_p3_mod_label", "수정 기간 처리:"), QLabel(t.get("wiz_p3_mod_desc", "")))
 
         # Header policy
-        form_adv.addRow("헤더 검사:", QLabel("필수 열 누락은 차단 · 열 순서 변경은 이름 기준 정렬"))
+        form_adv.addRow(t.get("wiz_p3_hdr_label", "헤더 검사:"), QLabel(t.get("wiz_p3_hdr_desc", "")))
 
         card_adv.content_layout.addLayout(form_adv)
         layout.addWidget(card_adv, stretch=1)
@@ -477,28 +500,29 @@ class DatasetWizardDialog(QDialog):
             self._prepare_page3_review()
 
     def _validate_step(self, step: int) -> bool:
+        t = self._t()
         if step == 0:
             name = self._edit_name.text().strip()
             if not name:
-                error_dialog(self, "입력 확인", "데이터셋 이름을 입력해 주세요.")
+                error_dialog(self, t.get("agg_dlg_check_title", "입력 확인"), t.get("wiz_p1_name_label", ""))
                 self._edit_name.setFocus()
                 return False
 
             inp = self._picker_input.get_path()
             if not inp or not Path(inp).is_dir():
-                error_dialog(self, "입력 확인", "유효한 입력 폴더를 선택해 주세요.")
+                error_dialog(self, t.get("agg_dlg_check_title", "입력 확인"), t.get("wiz_p1_input_ph", ""))
                 return False
 
             inc_files = self._file_model.get_included_files()
             if not inc_files:
-                error_dialog(self, "입력 확인", "선택된 대상 파일이 없습니다. 최소 1개 이상의 파일을 선택해야 합니다.")
+                error_dialog(self, t.get("agg_dlg_check_title", "입력 확인"), t.get("wiz_p1_card_table", ""))
                 return False
             return True
 
         elif step == 1:
             summary = self._col_model.get_role_summary()
             if not summary["period"]:
-                error_dialog(self, "역할 지정 확인", "기준 기간(Period) 컬럼이 지정되지 않았습니다.\n기간 역할을 수행할 컬럼을 반드시 1개 지정해 주세요.")
+                error_dialog(self, t.get("agg_dlg_check_title", "역할 지정 확인"), t.get("wiz_p2_period_unset", ""))
                 return False
             return True
 
@@ -535,11 +559,15 @@ class DatasetWizardDialog(QDialog):
         self._file_model.set_files(scan.files)
 
     def _update_file_count_label(self) -> None:
+        t = self._t()
         total = self._file_model.rowCount()
         included = len(self._file_model.get_included_files())
-        self._lbl_file_count.setText(f"발견된 파일: {total:,}개 (선택됨: {included:,}개)")
+        self._lbl_file_count.setText(
+            t.get("wiz_p1_file_count", "발견된 파일: {total:,}개 (선택됨: {included:,}개)").format(total=total, included=included)
+        )
 
     def _prepare_page2_columns(self) -> None:
+        t = self._t()
         inc_files = self._file_model.get_included_files()
         if not inc_files:
             return
@@ -577,29 +605,31 @@ class DatasetWizardDialog(QDialog):
                 initial_numerics=init_nums,
             )
         except Exception as e:
-            error_dialog(self, "파일 분석 실패", f"샘플 파일 분석 중 오류가 발생했습니다:\n{e}")
+            error_dialog(self, t.get("agg_msg_schema_error_title", "파일 분석 오류"), str(e))
 
     def _on_auto_guess_clicked(self) -> None:
+        t = self._t()
         self._col_model.apply_auto_guess()
-        info_dialog(self, "자동 추천 완료", "헤더 이름과 1,000행 샘플 데이터를 분석하여 기간, 키, 수치 역할을 지정했습니다.")
+        info_dialog(self, t.get("wiz_p2_auto_guess", "Auto-Guess"), t.get("wiz_p2_auto_guess", "Auto-Guess"))
 
     def _update_column_diagnostics(self) -> None:
+        t = self._t()
         summary = self._col_model.get_role_summary()
 
         # 1. Period status
         period = summary["period"]
         if period:
-            self._lbl_period_status.setText(f"✓ '{period}' (지정됨)")
+            self._lbl_period_status.setText(t.get("wiz_p2_period_set", "✓ '{period}'").format(period=period))
             self._lbl_period_status.setStyleSheet(f"color: {PALETTE['success']}; font-weight: bold;")
         else:
-            self._lbl_period_status.setText("지정되지 않음 (미선택 시 진행 불가)")
+            self._lbl_period_status.setText(t.get("wiz_p2_period_unset", "지정되지 않음"))
             self._lbl_period_status.setStyleSheet(f"color: {PALETTE['danger']}; font-weight: bold;")
 
         # 2. Key status & compound uniqueness check
         keys = summary["keys"]
         if keys:
             key_str = ", ".join(keys)
-            self._lbl_key_status.setText(f"선택된 키 ({len(keys)}개): {key_str}")
+            self._lbl_key_status.setText(f"{len(keys)}: {key_str}")
 
             if self._sample_file_path and self._sample_file_path.exists() and period:
                 delim = self._get_selected_delimiter()
@@ -608,37 +638,37 @@ class DatasetWizardDialog(QDialog):
                 )
                 if dup_cnt == 0:
                     self._badge_key_uniqueness.set_variant(
-                        "success", f"✓ 샘플 {total_sample:,}행에서 중복 없음 (유니크)"
+                        "success", f"✓ Unique ({total_sample:,})"
                     )
                 else:
                     self._badge_key_uniqueness.set_variant(
                         "warning",
-                        f"⚠️ 샘플에서 중복 키 발견 ({dup_cnt:,}개 중복 그룹) - 식별키 추가 권장"
+                        f"⚠️ Duplicates ({dup_cnt:,})"
                     )
         else:
-            self._lbl_key_status.setText("선택된 키 없음 (단순 누적 모드)")
-            self._badge_key_uniqueness.set_variant("neutral", "단순 기간 누적 (중복 키 검사 없음)")
+            self._lbl_key_status.setText(t.get("wiz_p2_key_none", "선택된 키 없음"))
+            self._badge_key_uniqueness.set_variant("neutral", t.get("wiz_p2_key_wait", ""))
 
         # 3. Numeric status
         nums = summary["numerics"]
-        self._lbl_num_status.setText(f"수치 컬럼 ({len(nums)}개): {', '.join(nums) if nums else '없음'}")
+        self._lbl_num_status.setText(t.get("wiz_p2_num_count", "수치 컬럼: {count}개").format(count=len(nums)))
 
     def _prepare_page3_review(self) -> None:
+        t = self._t()
         summary = self._col_model.get_role_summary()
         inc_files = self._file_model.get_included_files()
-        exc_names = self._file_model.get_excluded_file_names()
 
         lines = [
-            f"<b>데이터셋 이름:</b> {self._edit_name.text().strip()}",
-            f"<b>입력 폴더:</b> {self._picker_input.get_path()}",
-            f"<b>배포 폴더:</b> {self._picker_public.get_path() or '(기본 배포 폴더)'}",
-            f"<b>대상 파일:</b> 총 {len(inc_files):,}개 선택됨 (수동 제외: {len(exc_names):,}개)",
-            f"<b>기준 기간 컬럼:</b> <font color='{PALETTE['accent']}'><b>{summary['period']}</b></font>",
-            f"<b>식별 키 컬럼:</b> {', '.join(summary['keys']) if summary['keys'] else '(미지정)'}",
-            f"<b>수치 집계 컬럼:</b> {', '.join(summary['numerics']) if summary['numerics'] else '(미지정)'}",
-            f"<b>제외 컬럼:</b> {len(summary['ignores'])}개",
+            f"<b>{t.get('wiz_p1_name_label', 'Name')}:</b> {self._edit_name.text().strip()}",
+            t.get("ds_info_input", "• Input: {path}").format(path=self._picker_input.get_path()),
+            t.get("ds_info_publish", "• Publish: {path}").format(path=self._picker_public.get_path() or self._picker_input.get_path()),
+            t.get("ds_info_period", "• Period: {col} ({fmt})").format(col=summary["period"], fmt=self._combo_period_format.currentText()),
+            t.get("ds_info_keys", "• Keys: {keys}").format(keys=", ".join(summary["keys"]) if summary["keys"] else t.get("ds_unassigned", "-")),
+            t.get("ds_info_nums", "• Numerics: {nums}").format(nums=", ".join(summary["numerics"]) if summary["numerics"] else t.get("ds_unassigned", "-")),
+            f"• <b>Files:</b> {len(inc_files):,}",
         ]
         self._lbl_final_summary.setText("<br>".join(lines))
+
 
     # -------------------------------------------------------------------------
     # Saving Dataset

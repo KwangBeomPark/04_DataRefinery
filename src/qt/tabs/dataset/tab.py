@@ -34,6 +34,7 @@ from src.dataset_engine import (
 )
 from src.dataset_excel import create_excel_template_workbook
 from src.file_reveal import open_containing_folder
+from src.i18n import _UI_TEXT
 from src.qt.dialogs import confirm_dialog, error_dialog, info_dialog, warning_dialog
 from src.qt.jobs import create_qt_job_runner
 from src.qt.tabs.dataset.wizard import DatasetWizardDialog
@@ -51,6 +52,12 @@ class _DatasetListModel(QAbstractTableModel):
         self._datasets: List[DatasetDefinition] = []
         self._periods_map: Dict[str, str] = {}
         self._status_map: Dict[str, str] = {}
+        self._headers: List[str] = list(self.COLUMNS)
+
+    def set_headers(self, headers: Any) -> None:
+        self._headers = list(headers)
+        if self._headers:
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self._headers) - 1)
 
     def set_datasets(
         self,
@@ -68,11 +75,12 @@ class _DatasetListModel(QAbstractTableModel):
         return len(self._datasets)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self.COLUMNS)
+        return len(self._headers)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return self.COLUMNS[section]
+            if 0 <= section < len(self._headers):
+                return self._headers[section]
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -88,7 +96,7 @@ class _DatasetListModel(QAbstractTableModel):
             elif col == 1:
                 return self._periods_map.get(ds.id, "-")
             elif col == 2:
-                return self._status_map.get(ds.id, "준비됨")
+                return self._status_map.get(ds.id, "Ready")
             elif col == 3:
                 return ds.last_published_at[:16].replace("T", " ") if ds.last_published_at else "-"
 
@@ -127,13 +135,25 @@ class DatasetPublisherTab(QWidget):
         self._cancel_event: Optional[threading.Event] = None
 
         self._init_ui()
-        self.refresh_dataset_list()
         self.apply_language(self.language_code)
+        self.refresh_dataset_list()
+
+    def _t(self) -> Dict[str, Any]:
+        return _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
 
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(12, 12, 12, 12)
         main_layout.setSpacing(10)
+
+        # Step Guide Banner
+        self.lbl_step_guide = QLabel()
+        self.lbl_step_guide.setWordWrap(True)
+        self.lbl_step_guide.setStyleSheet(
+            f"background-color: {PALETTE['surface_alt']}; border: 1px solid {PALETTE['border_strong']}; "
+            f"border-radius: 6px; padding: 10px 12px; color: {PALETTE['navy']}; font-size: 9.5pt;"
+        )
+        main_layout.addWidget(self.lbl_step_guide)
 
         # Splitter: Left (Dataset list) | Right (Workspace)
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -147,19 +167,19 @@ class DatasetPublisherTab(QWidget):
         # Left Actions
         hdr_actions = QHBoxLayout()
         hdr_actions.setSpacing(6)
-        btn_add = QPushButton("✨ 새 데이터셋 등록")
-        btn_add.setProperty("primary", "true")
-        btn_add.clicked.connect(self._on_add_dataset)
-        hdr_actions.addWidget(btn_add)
+        self.btn_add = QPushButton("✨ 새 데이터셋 등록")
+        self.btn_add.setProperty("primary", "true")
+        self.btn_add.clicked.connect(self._on_add_dataset)
+        hdr_actions.addWidget(self.btn_add)
 
-        btn_edit = QPushButton("마법사 수정")
-        btn_edit.clicked.connect(self._on_edit_dataset)
-        hdr_actions.addWidget(btn_edit)
+        self.btn_edit = QPushButton("⚙ 설정 수정")
+        self.btn_edit.clicked.connect(self._on_edit_dataset)
+        hdr_actions.addWidget(self.btn_edit)
 
-        btn_del = QPushButton("삭제")
-        btn_del.setProperty("danger", "true")
-        btn_del.clicked.connect(self._on_delete_dataset)
-        hdr_actions.addWidget(btn_del)
+        self.btn_del = QPushButton("삭제")
+        self.btn_del.setProperty("danger", "true")
+        self.btn_del.clicked.connect(self._on_delete_dataset)
+        hdr_actions.addWidget(self.btn_del)
         left_layout.addLayout(hdr_actions)
 
         # Left Table
@@ -185,7 +205,7 @@ class DatasetPublisherTab(QWidget):
         self._ws_layout.setSpacing(12)
 
         # Card 1: Overview
-        self._card_overview = CardWidget("1. 데이터셋 개요 및 경로")
+        self._card_overview = CardWidget("1. 선택된 데이터셋 개요 및 경로")
         self._lbl_ds_title = QLabel("등록된 데이터셋을 선택하세요.")
         self._lbl_ds_title.setProperty("subheading", "true")
         self._card_overview.content_layout.addWidget(self._lbl_ds_title)
@@ -196,7 +216,7 @@ class DatasetPublisherTab(QWidget):
         self._ws_layout.addWidget(self._card_overview)
 
         # Card 2: Scan & Changes
-        self._card_scan = CardWidget("2. 입력 파일 스캔 및 변경 감지")
+        self._card_scan = CardWidget("2. 입력 폴더 스캔 및 변경 감지")
         scan_top = QHBoxLayout()
         self._lbl_scan_status = QLabel("스캔 대기 중")
         self._lbl_scan_status.setProperty("subheading", "true")
@@ -216,12 +236,12 @@ class DatasetPublisherTab(QWidget):
         # Card 3: Accumulate & Inspect
         self._card_inspect = CardWidget("3. 기간 누적 / 교체 및 수치 검수")
         inspect_top = QHBoxLayout()
-        self._btn_accumulate = QPushButton("★ 기간 누적 및 검수 실행")
+        self._btn_accumulate = QPushButton("★ 1단계: 기간 누적 및 검수 실행")
         self._btn_accumulate.setProperty("primary", "true")
         self._btn_accumulate.clicked.connect(self._run_accumulation)
         inspect_top.addWidget(self._btn_accumulate)
 
-        self._btn_approve = QPushButton("✓ 검수 승인 및 Excel 배포")
+        self._btn_approve = QPushButton("✓ 2단계: 검수 승인 및 최종 배포")
         self._btn_approve.setProperty("primary", "true")
         self._btn_approve.setEnabled(False)
         self._btn_approve.clicked.connect(self._run_publish)
@@ -239,7 +259,7 @@ class DatasetPublisherTab(QWidget):
         self._ws_layout.addWidget(self._card_inspect)
 
         # Card 4: Publication & Excel
-        self._card_pub = CardWidget("4. 배포 관리 및 Excel 연결")
+        self._card_pub = CardWidget("4. 배포 완료 파일 관리 및 Excel 연결")
         pub_top = QHBoxLayout()
         self._btn_open_folder = QPushButton("📂 배포 폴더 열기")
         self._btn_open_folder.clicked.connect(self._on_open_publish_folder)
@@ -249,7 +269,7 @@ class DatasetPublisherTab(QWidget):
         self._btn_open_csv.clicked.connect(self._on_open_published_csv)
         pub_top.addWidget(self._btn_open_csv)
 
-        self._btn_export_excel = QPushButton("📊 Excel 템플릿 생성")
+        self._btn_export_excel = QPushButton("📊 Excel 피벗 템플릿 생성")
         self._btn_export_excel.clicked.connect(self._on_export_excel_template)
         pub_top.addWidget(self._btn_export_excel)
         pub_top.addStretch()
@@ -266,12 +286,38 @@ class DatasetPublisherTab(QWidget):
 
         splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 3)
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(splitter, stretch=1)
+
+    def _update_step_gating(self) -> None:
+        t = self._t()
+        has_ds = self.current_dataset is not None
+        has_valid_inspection = bool(has_ds and self.last_inspection and self.last_inspection.is_valid)
+        has_pub_csv = bool(has_ds and self.current_dataset and self.current_dataset.published_csv_path().exists())
+
+        self.btn_edit.setEnabled(has_ds)
+        self.btn_del.setEnabled(has_ds)
+        self._card_scan.setEnabled(has_ds)
+        self._btn_scan.setEnabled(has_ds)
+        self._card_inspect.setEnabled(has_ds)
+        self._btn_accumulate.setEnabled(has_ds and not self._progress_bar.isVisible())
+        self._btn_approve.setEnabled(has_valid_inspection and not self._progress_bar.isVisible())
+        self._card_pub.setEnabled(has_ds)
+        self._btn_open_folder.setEnabled(has_ds)
+        self._btn_open_csv.setEnabled(has_pub_csv)
+        self._btn_export_excel.setEnabled(has_pub_csv)
+
+        if not has_ds:
+            self.lbl_step_guide.setText(t.get("ds_step_guide_none", ""))
+        elif has_valid_inspection:
+            self.lbl_step_guide.setText(t.get("ds_step_guide_inspected", ""))
+        else:
+            self.lbl_step_guide.setText(t.get("ds_step_guide_selected", ""))
 
     # -------------------------------------------------------------------------
     # Dataset Management
     # -------------------------------------------------------------------------
     def refresh_dataset_list(self, select_id: Optional[str] = None) -> None:
+        t = self._t()
         datasets = self.registry.list_datasets()
         periods_map: Dict[str, str] = {}
         status_map: Dict[str, str] = {}
@@ -283,11 +329,15 @@ class DatasetPublisherTab(QWidget):
                 if pers:
                     periods_map[ds.id] = f"{pers[0]} ~ {pers[-1]}" if len(pers) > 1 else pers[0]
                 else:
-                    periods_map[ds.id] = "(데이터 없음)"
+                    periods_map[ds.id] = t.get("ds_no_data", "(데이터 없음)")
             except Exception:
                 periods_map[ds.id] = "-"
 
-            status_map[ds.id] = "배포됨" if ds.last_published_at else "준비됨"
+            status_map[ds.id] = (
+                t.get("ds_status_published", "배포됨")
+                if ds.last_published_at
+                else t.get("ds_status_ready", "준비됨")
+            )
 
         self._list_model.set_datasets(datasets, periods_map, status_map)
 
@@ -299,6 +349,8 @@ class DatasetPublisherTab(QWidget):
                         target_row = idx
                         break
             self._list_table.selectRow(target_row)
+        else:
+            self._clear_workspace()
 
     def _on_dataset_selected(self) -> None:
         indexes = self._list_table.selectionModel().selectedRows()
@@ -316,30 +368,41 @@ class DatasetPublisherTab(QWidget):
     def _select_dataset(self, ds: DatasetDefinition) -> None:
         self.current_dataset = ds
         self.current_engine = DatasetEngine(ds, self.registry)
+        self.last_inspection = None
         self._update_workspace()
         self._run_scan()
+        self._update_step_gating()
 
     def _clear_workspace(self) -> None:
+        t = self._t()
         self.current_dataset = None
         self.current_engine = None
-        self._lbl_ds_title.setText("등록된 데이터셋을 선택하세요.")
+        self.last_scan = None
+        self.last_inspection = None
+        self._lbl_ds_title.setText(t.get("ds_select_prompt", ""))
         self._lbl_ds_paths.setText("")
+        self._lbl_scan_status.setText(t.get("ds_scan_waiting", ""))
         self._lbl_scan_summary.setText("")
-        self._lbl_inspect_summary.setText("아직 누적/검수가 실행되지 않았습니다.")
+        self._lbl_inspect_summary.setText(t.get("ds_inspect_waiting", ""))
+        self._lbl_pub_info.setText(t.get("ds_pub_missing", ""))
         self._btn_approve.setEnabled(False)
+        self._update_step_gating()
 
     def _update_workspace(self) -> None:
+        t = self._t()
         if not self.current_dataset or not self.current_engine:
+            self._clear_workspace()
             return
         ds = self.current_dataset
+        unassigned = t.get("ds_unassigned", "(미지정)")
 
-        self._lbl_ds_title.setText(f"선택된 데이터셋: <b>{ds.name}</b>")
+        self._lbl_ds_title.setText(t.get("ds_selected_title", "{name}").format(name=ds.name))
         lines = [
-            f"• <b>입력 폴더:</b> {ds.input_folder}",
-            f"• <b>배포 폴더:</b> {ds.publish_folder}",
-            f"• <b>기준 기간:</b> {ds.period_column} ({ds.period_format})",
-            f"• <b>식별 키:</b> {', '.join(ds.key_columns) if ds.key_columns else '(미지정)'}",
-            f"• <b>수치 컬럼:</b> {', '.join(ds.numeric_columns) if ds.numeric_columns else '(미지정)'}",
+            t.get("ds_info_input", "").format(path=ds.input_folder),
+            t.get("ds_info_publish", "").format(path=ds.publish_folder),
+            t.get("ds_info_period", "").format(col=ds.period_column, fmt=ds.period_format),
+            t.get("ds_info_keys", "").format(keys=", ".join(ds.key_columns) if ds.key_columns else unassigned),
+            t.get("ds_info_nums", "").format(nums=", ".join(ds.numeric_columns) if ds.numeric_columns else unassigned),
         ]
         self._lbl_ds_paths.setText("<br>".join(lines))
 
@@ -348,91 +411,125 @@ class DatasetPublisherTab(QWidget):
         if pub_csv.exists():
             stat = pub_csv.stat()
             self._lbl_pub_info.setText(
-                f"✓ 배포 파일 존재: <b>{pub_csv.name}</b> ({stat.st_size / 1024:.1f} KB)<br>"
-                f"위치: {pub_csv}"
+                t.get("ds_pub_exists", "").format(
+                    name=pub_csv.name,
+                    size=stat.st_size / 1024,
+                    path=pub_csv,
+                )
             )
         else:
-            self._lbl_pub_info.setText("아직 배포된 파일이 없습니다. [검수 승인 및 Excel 배포]를 실행하세요.")
+            self._lbl_pub_info.setText(t.get("ds_pub_missing", ""))
 
     def _on_add_dataset(self) -> None:
-        dlg = DatasetWizardDialog(registry=self.registry, parent=self)
+        t = self._t()
+        dlg = DatasetWizardDialog(registry=self.registry, parent=self, language_code=self.language_code)
         if dlg.exec() == DatasetWizardDialog.DialogCode.Accepted:
             new_ds = dlg.get_dataset()
             if new_ds:
                 self.registry.save_dataset(new_ds)
                 self.refresh_dataset_list(select_id=new_ds.id)
-                info_dialog(self, "등록 완료", f"데이터셋 '{new_ds.name}'이(가) 성공적으로 등록되었습니다.")
+                info_dialog(
+                    self,
+                    t.get("ds_dlg_reg_title", "등록 완료"),
+                    t.get("ds_dlg_reg_body", "").format(name=new_ds.name),
+                )
 
     def _on_edit_dataset(self) -> None:
+        t = self._t()
         if not self.current_dataset:
-            warning_dialog(self, "선택 필요", "수정할 데이터셋을 먼저 선택해 주세요.")
+            warning_dialog(self, t.get("ds_dlg_sel_title", ""), t.get("ds_dlg_sel_edit", ""))
             return
 
-        dlg = DatasetWizardDialog(dataset=self.current_dataset, registry=self.registry, parent=self)
+        dlg = DatasetWizardDialog(
+            dataset=self.current_dataset,
+            registry=self.registry,
+            parent=self,
+            language_code=self.language_code,
+        )
         if dlg.exec() == DatasetWizardDialog.DialogCode.Accepted:
             updated_ds = dlg.get_dataset()
             if updated_ds:
                 self.registry.save_dataset(updated_ds)
                 self.refresh_dataset_list(select_id=updated_ds.id)
-                info_dialog(self, "수정 완료", f"데이터셋 '{updated_ds.name}' 설정이 갱신되었습니다.")
+                info_dialog(
+                    self,
+                    t.get("ds_dlg_edit_title", "수정 완료"),
+                    t.get("ds_dlg_edit_body", "").format(name=updated_ds.name),
+                )
 
     def _on_delete_dataset(self) -> None:
+        t = self._t()
         if not self.current_dataset:
-            warning_dialog(self, "선택 필요", "삭제할 데이터셋을 먼저 선택해 주세요.")
+            warning_dialog(self, t.get("ds_dlg_sel_title", ""), t.get("ds_dlg_sel_del", ""))
             return
 
         name = self.current_dataset.name
-        if confirm_dialog(self, "데이터셋 삭제", f"정말로 데이터셋 '{name}' 및 로컬 축적 데이터를 모두 삭제하시겠습니까?"):
+        if confirm_dialog(
+            self,
+            t.get("ds_dlg_del_title", "데이터셋 삭제"),
+            t.get("ds_dlg_del_confirm", "").format(name=name),
+        ):
             self.registry.delete_dataset(self.current_dataset.id)
             self.current_dataset = None
             self.refresh_dataset_list()
-            info_dialog(self, "삭제 완료", f"데이터셋 '{name}'이(가) 삭제되었습니다.")
+            info_dialog(
+                self,
+                t.get("ds_dlg_del_done", "삭제 완료"),
+                t.get("ds_dlg_del_body", "").format(name=name),
+            )
 
     # -------------------------------------------------------------------------
     # Scan Operation
     # -------------------------------------------------------------------------
     def _run_scan(self) -> None:
+        t = self._t()
         if not self.current_engine:
             return
 
-        self._lbl_scan_status.setText("스캔 중...")
+        self._lbl_scan_status.setText(t.get("ds_scanning", "스캔 중..."))
         try:
             scan = self.current_engine.scan_input_folder()
             self.last_scan = scan
-
-            new_cnt = len(scan.new_periods)
-            mod_cnt = len(scan.modified_periods)
-            unchanged_cnt = len(scan.unchanged_files)
-            conflict_cnt = len(scan.conflicts)
-
-            status_str = f"스캔 완료: 총 {len(scan.files)}개 파일"
-            self._lbl_scan_status.setText(status_str)
-
-            lines = [
-                f"• <b>새로운 기간:</b> {new_cnt}개 ({', '.join(scan.new_periods) if new_cnt else '없음'})",
-                f"• <b>수정/갱신 기간:</b> {mod_cnt}개 ({', '.join(scan.modified_periods) if mod_cnt else '없음'})",
-                f"• <b>변경 없는 파일:</b> {unchanged_cnt}개",
-            ]
-            if conflict_cnt:
-                lines.append(f"• <font color='{PALETTE['danger']}'><b>충돌/에러 파일:</b> {conflict_cnt}개</font>")
-
-            self._lbl_scan_summary.setText("<br>".join(lines))
+            self._render_scan_summary(scan)
         except Exception as e:
-            self._lbl_scan_status.setText("스캔 실패")
-            self._lbl_scan_summary.setText(f"<font color='{PALETTE['danger']}'>스캔 오류: {e}</font>")
+            self._lbl_scan_status.setText(t.get("ds_scan_failed", "스캔 실패"))
+            self._lbl_scan_summary.setText(
+                f"<font color='{PALETTE['danger']}'>{t.get('ds_scan_error', '{error}').format(error=e)}</font>"
+            )
+
+    def _render_scan_summary(self, scan: ScanSummary) -> None:
+        t = self._t()
+        new_cnt = len(scan.new_periods)
+        mod_cnt = len(scan.modified_periods)
+        unchanged_cnt = len(scan.unchanged_files)
+        conflict_cnt = len(scan.conflicts)
+        none_str = t.get("ds_scan_none", "없음")
+
+        self._lbl_scan_status.setText(t.get("ds_scan_done", "").format(count=len(scan.files)))
+
+        lines = [
+            t.get("ds_scan_new", "").format(count=new_cnt, items=", ".join(scan.new_periods) if new_cnt else none_str),
+            t.get("ds_scan_mod", "").format(count=mod_cnt, items=", ".join(scan.modified_periods) if mod_cnt else none_str),
+            t.get("ds_scan_unchanged", "").format(count=unchanged_cnt),
+        ]
+        if conflict_cnt:
+            lines.append(t.get("ds_scan_conflict", "").format(color=PALETTE["danger"], count=conflict_cnt))
+
+        self._lbl_scan_summary.setText("<br>".join(lines))
 
     # -------------------------------------------------------------------------
     # Accumulation & Inspection
     # -------------------------------------------------------------------------
     def _run_accumulation(self) -> None:
-        if not self.current_engine:
+        t = self._t()
+        if not self.current_engine or not self.current_dataset:
             return
 
         self._btn_accumulate.setEnabled(False)
         self._btn_approve.setEnabled(False)
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(10)
-        self._lbl_inspect_summary.setText("기간 누적 및 수치 검수 진행 중...")
+        self._lbl_inspect_summary.setText(t.get("ds_inspect_running", ""))
 
         engine = self.current_engine
 
@@ -441,38 +538,22 @@ class DatasetPublisherTab(QWidget):
 
         def on_success(result: InspectionResult):
             self.last_inspection = result
-            self._btn_accumulate.setEnabled(True)
             self._progress_bar.setVisible(False)
-
-            if result.is_valid:
-                self._btn_approve.setEnabled(True)
-                periods = result.all_periods or []
-                period_range = f" ({periods[0]} ~ {periods[-1]})" if periods else ""
-                lines = [
-                    f"<font color='{PALETTE['success']}'><b>✓ 검수 완료: 모든 무결성 및 수치 검증 통과</b></font>",
-                    f"• <b>반영 후 총 행 수:</b> {result.after_row_count:,}행 (이전 대비: {result.after_row_count - result.before_row_count:+,}행)",
-                    f"• <b>기간 수:</b> {len(periods)}개{period_range}",
-                ]
-                if result.numeric_deltas:
-                    lines.append("• <b>수치 합계 변동:</b>")
-                    for k, v in result.numeric_deltas.items():
-                        lines.append(f"  - {k}: {v:+,.2f}")
-                self._lbl_inspect_summary.setText("<br>".join(lines))
-            else:
-                self._btn_approve.setEnabled(False)
-                lines = [
-                    f"<font color='{PALETTE['danger']}'><b>⚠️ 검수 실패: 데이터에 오류가 발견되어 배포가 차단되었습니다.</b></font>",
-                ]
-                for err in result.errors:
-                    lines.append(f"• <font color='{PALETTE['danger']}'>{err}</font>")
-                self._lbl_inspect_summary.setText("<br>".join(lines))
+            self._render_inspection_summary(result)
+            self._update_step_gating()
 
         def on_error(err: Exception):
-            self._btn_accumulate.setEnabled(True)
-            self._btn_approve.setEnabled(False)
+            t_err = self._t()
             self._progress_bar.setVisible(False)
-            self._lbl_inspect_summary.setText(f"<font color='{PALETTE['danger']}'>누적 실패: {err}</font>")
-            error_dialog(self, "누적 오류", f"기간 누적 중 오류가 발생했습니다:\n{err}")
+            self._lbl_inspect_summary.setText(
+                f"<font color='{PALETTE['danger']}'>{t_err.get('ds_inspect_err', '{error}').format(error=err)}</font>"
+            )
+            self._update_step_gating()
+            error_dialog(
+                self,
+                t_err.get("ds_dlg_acc_err_title", "누적 오류"),
+                t_err.get("ds_dlg_acc_err_body", "{error}").format(error=err),
+            )
 
         self.job_runner.start(
             f"accumulate_{self.current_dataset.id}",
@@ -485,11 +566,38 @@ class DatasetPublisherTab(QWidget):
             ),
         )
 
+    def _render_inspection_summary(self, result: InspectionResult) -> None:
+        t = self._t()
+        if result.is_valid:
+            periods = result.all_periods or []
+            period_range = f" ({periods[0]} ~ {periods[-1]})" if periods else ""
+            lines = [
+                f"<font color='{PALETTE['success']}'><b>{t.get('ds_inspect_ok', '')}</b></font>",
+                t.get("ds_inspect_rows", "").format(
+                    after=result.after_row_count,
+                    delta=result.after_row_count - result.before_row_count,
+                ),
+                t.get("ds_inspect_periods", "").format(count=len(periods), range_str=period_range),
+            ]
+            if result.numeric_deltas:
+                lines.append(t.get("ds_inspect_deltas", ""))
+                for k, v in result.numeric_deltas.items():
+                    lines.append(f"  - {k}: {v:+,.2f}")
+            self._lbl_inspect_summary.setText("<br>".join(lines))
+        else:
+            lines = [
+                f"<font color='{PALETTE['danger']}'><b>{t.get('ds_inspect_fail', '')}</b></font>",
+            ]
+            for err in result.errors:
+                lines.append(f"• <font color='{PALETTE['danger']}'>{err}</font>")
+            self._lbl_inspect_summary.setText("<br>".join(lines))
+
     # -------------------------------------------------------------------------
     # Publish Operation
     # -------------------------------------------------------------------------
     def _run_publish(self) -> None:
-        if not self.current_engine or not self.last_inspection:
+        t = self._t()
+        if not self.current_engine or not self.last_inspection or not self.current_dataset:
             return
 
         token = self.last_inspection.approval_token
@@ -497,60 +605,105 @@ class DatasetPublisherTab(QWidget):
             self.current_engine.approve_inspection(token)
             manifest = self.current_engine.publish_dataset()
             self.registry.save_dataset(self.current_dataset)
-            self._update_workspace()
-            self._btn_approve.setEnabled(False)
+            self.last_inspection = None
+            self.refresh_dataset_list(select_id=self.current_dataset.id)
             pub_csv = self.current_dataset.published_csv_path()
             version_str = manifest.get("version", "")
             info_dialog(
                 self,
-                "배포 성공",
-                f"데이터셋이 성공적으로 배포되었습니다! (버전: {version_str})\n\n저장 경로:\n{pub_csv}",
+                t.get("ds_dlg_pub_ok_title", "배포 성공"),
+                t.get("ds_dlg_pub_ok_body", "").format(version=version_str, path=pub_csv),
             )
         except DatasetPublishLockError as lock_err:
             warning_dialog(
                 self,
-                "배포 파일 잠김",
-                f"배포 대상 파일이 다른 프로그램(예: Excel)에서 열려 있어 갱신하지 못했습니다.\n"
-                f"파일을 닫은 후 다시 시도해 주세요:\n{lock_err}",
+                t.get("ds_dlg_pub_lock_title", "배포 파일 잠김"),
+                t.get("ds_dlg_pub_lock_body", "").format(error=lock_err),
             )
         except Exception as e:
-            error_dialog(self, "배포 실패", f"배포 중 오류가 발생했습니다:\n{e}")
+            error_dialog(
+                self,
+                t.get("ds_dlg_pub_err_title", "배포 실패"),
+                t.get("ds_dlg_pub_err_body", "").format(error=e),
+            )
 
     # -------------------------------------------------------------------------
     # Open / Export Helpers
     # -------------------------------------------------------------------------
     def _on_open_publish_folder(self) -> None:
+        t = self._t()
         if self.current_dataset:
             pub_dir = Path(self.current_dataset.publish_folder)
             if pub_dir.exists():
                 open_containing_folder(str(pub_dir))
             else:
-                warning_dialog(self, "폴더 없음", f"배포 폴더가 아직 생성되지 않았습니다:\n{pub_dir}")
+                warning_dialog(
+                    self,
+                    t.get("ds_dlg_no_folder_title", ""),
+                    t.get("ds_dlg_no_folder_body", "").format(path=pub_dir),
+                )
 
     def _on_open_published_csv(self) -> None:
+        t = self._t()
         if self.current_dataset:
             csv_path = self.current_dataset.published_csv_path()
             if csv_path.exists():
                 os.startfile(str(csv_path))
             else:
-                warning_dialog(self, "파일 없음", "아직 배포된 CSV 파일이 없습니다.")
+                warning_dialog(self, t.get("ds_dlg_no_csv_title", ""), t.get("ds_dlg_no_csv_body", ""))
 
     def _on_export_excel_template(self) -> None:
+        t = self._t()
         if not self.current_dataset:
             return
         csv_path = self.current_dataset.published_csv_path()
         if not csv_path.exists():
-            warning_dialog(self, "배포 필요", "Excel 템플릿을 생성하려면 먼저 데이터셋을 배포해야 합니다.")
+            warning_dialog(self, t.get("ds_dlg_need_pub_title", ""), t.get("ds_dlg_need_pub_body", ""))
             return
 
         out_xlsx = csv_path.parent / f"{self.current_dataset.published_filename.replace('.csv', '')}_Template.xlsx"
         try:
             create_excel_template_workbook(out_xlsx, csv_path, self.current_dataset)
-            info_dialog(self, "Excel 템플릿 생성 완료", f"Excel 템플릿이 성공적으로 생성되었습니다:\n{out_xlsx}")
+            info_dialog(
+                self,
+                t.get("ds_dlg_excel_ok_title", ""),
+                t.get("ds_dlg_excel_ok_body", "").format(path=out_xlsx),
+            )
             open_containing_folder(str(out_xlsx))
         except Exception as e:
-            error_dialog(self, "템플릿 생성 실패", f"Excel 템플릿 생성 중 오류가 발생했습니다:\n{e}")
+            error_dialog(
+                self,
+                t.get("ds_dlg_excel_err_title", ""),
+                t.get("ds_dlg_excel_err_body", "").format(error=e),
+            )
 
     def apply_language(self, lang_code: str) -> None:
         self.language_code = lang_code
-        # Tab-level dynamic UI strings can be refreshed here if needed
+        t = self._t()
+
+        self.btn_add.setText(t.get("ds_btn_add", "✨ 새 데이터셋 등록"))
+        self.btn_edit.setText(t.get("ds_btn_edit", "⚙ 설정 수정"))
+        self.btn_del.setText(t.get("ds_btn_del", "삭제"))
+        self._list_model.set_headers(t.get("ds_list_cols", _DatasetListModel.COLUMNS))
+
+        self._card_overview.set_title(t.get("ds_card_1", "1. 선택된 데이터셋 개요 및 경로"))
+        self._card_scan.set_title(t.get("ds_card_2", "2. 입력 폴더 스캔 및 변경 감지"))
+        self._btn_scan.setText(t.get("ds_btn_rescan", "🔄 입력 폴더 다시 스캔"))
+        self._card_inspect.set_title(t.get("ds_card_3", "3. 기간 누적 / 교체 및 수치 검수"))
+        self._btn_accumulate.setText(t.get("ds_btn_accumulate", "★ 1단계: 기간 누적 및 검수 실행"))
+        self._btn_approve.setText(t.get("ds_btn_approve", "✓ 2단계: 검수 승인 및 최종 배포"))
+        self._card_pub.set_title(t.get("ds_card_4", "4. 배포 완료 파일 관리 및 Excel 연결"))
+        self._btn_open_folder.setText(t.get("ds_btn_open_folder", "📂 배포 폴더 열기"))
+        self._btn_open_csv.setText(t.get("ds_btn_open_csv", "📄 배포 CSV 열기"))
+        self._btn_export_excel.setText(t.get("ds_btn_export_excel", "📊 Excel 피벗 템플릿 생성"))
+
+        current_id = self.current_dataset.id if self.current_dataset else None
+        saved_inspection = self.last_inspection
+        self.refresh_dataset_list(select_id=current_id)
+        if saved_inspection and self.current_dataset:
+            self.last_inspection = saved_inspection
+            self._render_inspection_summary(saved_inspection)
+        elif self.current_dataset:
+            self._lbl_inspect_summary.setText(t.get("ds_inspect_waiting", ""))
+        self._update_step_gating()
+

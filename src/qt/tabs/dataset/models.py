@@ -9,6 +9,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 
 from src.dataset_engine import ScannedFile
 from src.dataset_profiler import ColumnProfile
+from src.i18n import _UI_TEXT
 
 
 class DatasetFileTableModel(QAbstractTableModel):
@@ -18,10 +19,18 @@ class DatasetFileTableModel(QAbstractTableModel):
 
     COLUMNS = ["선택", "파일명", "기간", "크기", "헤더 상태", "수정일시"]
 
-    def __init__(self, parent: Optional[Any] = None):
+    def __init__(self, parent: Optional[Any] = None, language_code: str = "ko"):
         super().__init__(parent)
         self._files: List[ScannedFile] = []
         self._included: List[bool] = []
+        self._headers: List[str] = list(self.COLUMNS)
+        self.set_language(language_code)
+
+    def set_language(self, lang_code: str) -> None:
+        t = _UI_TEXT.get(lang_code, _UI_TEXT["ko"])
+        self._headers = list(t.get("wiz_file_cols", self.COLUMNS))
+        if self._headers:
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self._headers) - 1)
 
     def set_files(self, files: List[ScannedFile], excluded_names: Optional[Set[str]] = None) -> None:
         self.beginResetModel()
@@ -35,11 +44,12 @@ class DatasetFileTableModel(QAbstractTableModel):
         return len(self._files)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self.COLUMNS)
+        return len(self._headers)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return self.COLUMNS[section]
+            if 0 <= section < len(self._headers):
+                return self._headers[section]
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -146,12 +156,38 @@ class ColumnRoleTableModel(QAbstractTableModel):
     }
     CODE_FROM_ROLE = {v: k for k, v in ROLE_CODE_MAP.items()}
 
-    def __init__(self, parent: Optional[Any] = None):
+    def __init__(self, parent: Optional[Any] = None, language_code: str = "ko"):
         super().__init__(parent)
         self._profiles: List[ColumnProfile] = []
         self._roles: List[str] = []  # "key", "numeric", "period", "ignore"
         self._filter_query = ""
         self._role_filter = "all"  # "all", "period", "key", "numeric", "ignore", "unassigned"
+        self._headers: List[str] = list(self.COLUMNS)
+        self._role_code_map: Dict[str, str] = dict(self.ROLE_CODE_MAP)
+        self._code_from_role: Dict[str, str] = dict(self.CODE_FROM_ROLE)
+        self.set_language(language_code)
+
+    def set_language(self, lang_code: str) -> None:
+        t = _UI_TEXT.get(lang_code, _UI_TEXT["ko"])
+        self._headers = list(t.get("wiz_col_headers", self.COLUMNS))
+        self._role_code_map = dict(t.get("wiz_role_map", self.ROLE_CODE_MAP))
+        self._code_from_role = {v: k for k, v in self._role_code_map.items()}
+        # Also accept Korean/English/Polish role codes directly
+        for code_dict in (_UI_TEXT["ko"].get("wiz_role_map", {}), _UI_TEXT["en"].get("wiz_role_map", {}), _UI_TEXT["pl"].get("wiz_role_map", {})):
+            for k, v in code_dict.items():
+                self._code_from_role[v] = k
+        if self._headers:
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, len(self._headers) - 1)
+        if self._profiles:
+            self.dataChanged.emit(self.index(0, 3), self.index(len(self._profiles) - 1, 3), [Qt.ItemDataRole.DisplayRole])
+
+    def get_role_options(self) -> List[str]:
+        return [
+            self._role_code_map["key"],
+            self._role_code_map["numeric"],
+            self._role_code_map["period"],
+            self._role_code_map["ignore"],
+        ]
 
     def set_profiles(
         self,
@@ -190,11 +226,12 @@ class ColumnRoleTableModel(QAbstractTableModel):
         return len(self._profiles)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self.COLUMNS)
+        return len(self._headers)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return self.COLUMNS[section]
+            if 0 <= section < len(self._headers):
+                return self._headers[section]
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -214,7 +251,7 @@ class ColumnRoleTableModel(QAbstractTableModel):
                 samples = prof.sample_values[:3]
                 return " | ".join(samples) if samples else "-"
             elif col == 3:
-                return self.ROLE_CODE_MAP.get(current_role, "제외")
+                return self._role_code_map.get(current_role, self._role_code_map.get("ignore", "제외"))
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if col == 1:
@@ -233,7 +270,7 @@ class ColumnRoleTableModel(QAbstractTableModel):
 
     def setData(self, index: QModelIndex, value: Any, role: int = Qt.ItemDataRole.EditRole) -> bool:
         if index.isValid() and index.column() == 3 and role == Qt.ItemDataRole.EditRole:
-            new_role_code = self.CODE_FROM_ROLE.get(value, value)
+            new_role_code = self._code_from_role.get(value, value)
             if new_role_code not in ("period", "key", "numeric", "ignore"):
                 return False
 
@@ -251,6 +288,7 @@ class ColumnRoleTableModel(QAbstractTableModel):
             self.rolesChanged.emit()
             return True
         return False
+
 
     def set_role_for_row(self, row: int, role_code: str) -> None:
         if 0 <= row < len(self._roles):

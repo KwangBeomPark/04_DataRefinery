@@ -26,11 +26,13 @@ class FilePickerWidget(QWidget):
         filter_pattern: str = "All Files (*.*)",
         placeholder: str = "",
         browse_text: str = "찾아보기…",
+        dialog_title: str = "",
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self._mode = mode
         self._filter_pattern = filter_pattern
+        self._dialog_title = dialog_title or ("폴더 선택" if mode == "folder" else "파일 선택")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -50,9 +52,9 @@ class FilePickerWidget(QWidget):
 
     def _on_browse_clicked(self) -> None:
         if self._mode == "folder":
-            chosen = choose_folder_dialog(self, "폴더 선택")
+            chosen = choose_folder_dialog(self, self._dialog_title)
         else:
-            chosen = choose_file_dialog(self, "파일 선택", self._filter_pattern)
+            chosen = choose_file_dialog(self, self._dialog_title, self._filter_pattern)
 
         if chosen:
             self._line_edit.setText(chosen)
@@ -65,3 +67,13 @@ class FilePickerWidget(QWidget):
 
     def set_read_only(self, read_only: bool) -> None:
         self._line_edit.setReadOnly(read_only)
+
+    def set_placeholder_text(self, text: str) -> None:
+        self._line_edit.setPlaceholderText(text)
+
+    def set_browse_text(self, text: str) -> None:
+        self._browse_btn.setText(text)
+
+    def set_dialog_title(self, title: str) -> None:
+        self._dialog_title = title
+
