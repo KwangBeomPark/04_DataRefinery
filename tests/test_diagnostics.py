@@ -7,6 +7,9 @@ from src import diagnostics
 
 
 class TestDiagnostics(unittest.TestCase):
+    def setUp(self):
+        self._close_handlers()
+
     def _close_handlers(self):
         for handler in diagnostics._LOGGER.handlers[:]:
             diagnostics._LOGGER.removeHandler(handler)

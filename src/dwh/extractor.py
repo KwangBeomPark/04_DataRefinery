@@ -235,7 +235,9 @@ class EntityExtractor:
                     {_quote_literal(safe_csv_path)},
                     delim={_quote_literal(delimiter)},
                     header=True,
-                    all_varchar=True
+                    all_varchar=True,
+                    quote='"',
+                    escape='"'
                 );
                 """
             )

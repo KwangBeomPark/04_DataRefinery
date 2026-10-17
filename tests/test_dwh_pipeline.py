@@ -666,10 +666,10 @@ class TestEndToEndDwhPipeline(unittest.TestCase):
             pnl_path = custom_dir / "raw_erp_pnl.csv"
             with pnl_path.open("a", encoding="utf-8", newline="") as f:
                 f.write(
-                    "2026-02,PL,000999888771,OLED65C6P,PLN,5,10000,500,6000,3500,200,100,300,100,400,600\n"
+                    '2026-02,PL,000999888771,OLED65C6P,PLN,5,"10 000,00","500,00","6 000,00","3 500,00","200,00","100,00","300,00","100,00","400,00","600,00"\n'
                 )
                 f.write(
-                    "2026-02,PL,000999888772,OLED65C6P,PLN,5,10000,500,6000,3500,200,100,300,100,400,600\n"
+                    '2026-02,PL,000999888772,OLED65C6P,PLN,5,"10 000,00","500,00","6 000,00","3 500,00","200,00","100,00","300,00","100,00","400,00","600,00"\n'
                 )
 
             # Add an unmapped product NEW_INV_ONLY_99 to raw_inventory.csv in 2026-02
