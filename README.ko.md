@@ -1,4 +1,4 @@
-﻿*다른 언어로 읽기: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
+*다른 언어로 읽기: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
 
 # 💎 Data Refinery: 업무 데이터 정제 및 리포트용 데이터셋 준비 도구
 
@@ -112,6 +112,7 @@ Python 소스 파일은 기존 소문자·밑줄 이름을 유지합니다.
 
 ```powershell
 python -m src.data_refinery
+python -m src.data_refinery mart-run --entity PL --period 2026-Q1
 ```
 
 개발 의존성을 설치하고 저장소 전용 푸시 검사를 활성화한 뒤, CI와 같은 검사를 실행합니다.

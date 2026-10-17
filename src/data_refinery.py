@@ -1364,10 +1364,74 @@ class DataRefineryApp:
         if not started:
             self._finish_csv_processing()
 
+def _run_mart_cli(argv: list[str]) -> int:
+    import argparse
+    import json
+
+    from src.dwh.mart_config import DwhConfigError
+    from src.dwh.serving_loader import run_dwh_pipeline
+
+    parser = argparse.ArgumentParser(
+        prog="python -m src.data_refinery mart-run",
+        description="Run the Star Schema & AI Mart DWH pipeline.",
+    )
+    parser.add_argument("--entity", "--target", dest="entity", default="PL", help="Target entity code (default: PL)")
+    parser.add_argument("--period", dest="period", default="ALL", help="Period filter, e.g. 2026-Q1, 2026-01, ALL")
+    parser.add_argument("--input-dir", dest="input_dir", default=None, help="Directory containing source CSV files")
+    parser.add_argument(
+        "--demo",
+        dest="demo",
+        action="store_true",
+        help="Run with bundled synthetic Polish sample data in an isolated sample workspace",
+    )
+    parser.add_argument("--workspace-dir", dest="workspace_dir", default=None, help="Override DWH workspace directory")
+    parser.add_argument("--mapping-file", dest="mapping_file", default=None, help="Optional account_mapping.csv/.json path")
+    parser.add_argument("--fx-rates", dest="fx_rates_file", default=None, help="Optional fx_rates.csv/.json path")
+    parser.add_argument("--json", dest="json_output", action="store_true", help="Print full result as JSON")
+    parsed = parser.parse_args(argv)
+
+    if parsed.input_dir is not None and parsed.demo:
+        parser.error("--input-dir and --demo are mutually exclusive; choose one.")
+    if parsed.input_dir is None and not parsed.demo:
+        parser.error("Either --input-dir <path> or --demo must be specified to prevent overwriting production workspaces.")
+
+    try:
+        result = run_dwh_pipeline(
+            input_dir=None if parsed.demo else parsed.input_dir,
+            entity_code=parsed.entity,
+            period_spec=parsed.period,
+            workspace_dir=parsed.workspace_dir,
+            account_mapping_path=parsed.mapping_file,
+            fx_rates_path=parsed.fx_rates_file,
+            is_demo=bool(parsed.demo),
+        )
+    except DwhConfigError as exc:
+        print(f"[DWH Mart Failed] {exc}", file=sys.stderr)
+        return 1
+
+    if parsed.json_output:
+        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(
+            f"[DWH Mart Completed] entity={result.entity_code} period={result.period_spec} "
+            f"currency={result.reporting_currency} "
+            f"Fact_PnL={result.fact_summary.fact_pnl_rows} "
+            f"Fact_Inventory={result.fact_summary.fact_inventory_rows} "
+            f"Fact_Price={result.fact_summary.fact_price_rows} "
+            f"unmapped={len(result.unmapped_records)} "
+            f"reconciled={result.reconciliation_passed}"
+        )
+        print(f"Warehouse DB: {result.warehouse_db_path}")
+        print(f"Audit Log: {result.audit_log_path}")
+    return 0 if result.reconciliation_passed else 2
+
+
 def main() -> None:
     if "--version" in sys.argv or "-v" in sys.argv:
         print(f"Data Refinery v{__version__}")
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] in ("mart-run", "dwh-run"):
+        sys.exit(_run_mart_cli(sys.argv[2:]))
     if "--legacy-tk" in sys.argv:
         root = tk.Tk()
         app = DataRefineryApp(root)

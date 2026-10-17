@@ -55,7 +55,8 @@ flowchart TD
 
 | 모듈 | 책임 | 변경 시 주의 |
 | --- | --- | --- |
-| `src/data_refinery.py` | CLI 진입점·Qt/레거시 선택, 기존 Tkinter 화면 | 기본은 Qt, 버전은 `src.version`에서 import |
+| `src/data_refinery.py` | CLI 진입점·Qt/레거시 선택·`mart-run` DWH CLI, 기존 Tkinter 화면 | 기본은 Qt, 버전은 `src.version`에서 import |
+| `src/dwh/` (`mart_config.py`, `extractor.py`, `dimension_builder.py`, `fact_builder.py`, `serving_loader.py`) | 법인·기간 격리 추출, 영속 대리키(`dim_key_registry`)·공통 차원(`Dim_*`), P&L Wide-to-Long·워터폴·미매핑(`-1`, `unmapped_codes.csv`) 팩트(`Fact_*`), Fan-out 방지 Drill-Across AI 마트 뷰(`v_ai_mart_pnl_inventory_price`) 및 LLM 스키마 사전 생성 | `UserSetting/datasets/dwh_<entity>` 격리, 대리키 재할당 금지, 통화 단순 합산 금지 |
 | `src/qt/app.py` | QApplication·폰트·테마·자산 경로 초기화 | 개발/번들 자산 탐색을 함께 유지 |
 | `src/qt/main_window.py` | 네 탭·언어·메뉴·업데이트 확인 | 업무 엔진과 화면 책임 분리 |
 | `src/qt/jobs.py`, `src/background_jobs.py` | Qt 타이머 연동·백그라운드 실행·콜백 | UI 갱신은 UI 스레드에서 수행 |

@@ -1,0 +1,10 @@
+period,entity_code,warehouse_code,warehouse_name,product_code,currency_code,ending_qty,ending_inventory_val,dio_days,warehouse_logistics_cost
+2026-01,PL,WAW_DC1,Warsaw Central DC,OLED65C6P,PLN,12,"45 000,00","28,50","1 100,00"
+2026-01,PL,WRO_DC2,Wroclaw Regional DC,OLED65C6P,PLN,8,"30 000,00","24,50","700,00"
+2026-01,PL,WAW_DC1,Warsaw Central DC,QNED55B6P,EUR,10,"8 000,00","22,00","400,00"
+2026-02,PL,WAW_DC1,Warsaw Central DC,WM9000PL,PLN,20,"38 000,00","25,00","800,00"
+2026-02,PL,WRO_DC2,Wroclaw Regional DC,WM9000PL,PLN,10,"19 000,00","21,00","500,00"
+2026-03,PL,WAW_DC1,Warsaw Central DC,OLED65C6P,PLN,15,"56 250,00","26,00","1 250,00"
+2026-03,PL,WRO_DC2,Wroclaw Regional DC,OLED65C6P,PLN,10,"37 500,00","22,00","750,00"
+2026-04,PL,WAW_DC1,Warsaw Central DC,OLED65C6P,PLN,14,"52 500,00","27,00","1 150,00"
+2026-01,DE,BER_DC1,Berlin Central DC,OLED65C6P,EUR,25,"35 000,00","30,00","1 000,00"

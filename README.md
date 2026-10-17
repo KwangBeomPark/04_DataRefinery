@@ -1,4 +1,4 @@
-﻿*Read this in other languages: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
+*Read this in other languages: [English](README.md), [한국어](README.ko.md), [Polski](README.pl.md)*
 
 # 💎 Data Refinery: Business Data Cleansing & Report-Ready Dataset Preparation
 
@@ -126,6 +126,7 @@ Run the desktop app during development with:
 
 ```powershell
 python -m src.data_refinery
+python -m src.data_refinery mart-run --entity PL --period 2026-Q1
 ```
 
 Install the development dependencies, enable the repository-local push guard
