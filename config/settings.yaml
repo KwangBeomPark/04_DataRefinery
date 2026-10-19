@@ -1,0 +1,39 @@
+# Data Refinery DWH & Data Mart Settings
+project:
+  name: "DataRefinery_DWH"
+  version: "2.2.0"
+
+entity:
+  code: "PL"
+  name: "Poland Subsidiary"
+  allowed_currencies:
+    - "PLN"
+    - "EUR"
+  reporting_currency: "PLN"
+  number_format: "polish"
+
+paths:
+  raw_dir: "data/01_raw"
+  masters_dir: "data/01_raw/masters"
+  pnl_dir: "data/01_raw/pnl"
+  inventory_dir: "data/01_raw/inventory"
+  price_dir: "data/01_raw/price"
+  staging_dir: "data/02_staging"
+  warehouse_dir: "data/03_warehouse"
+  warehouse_db: "data/03_warehouse/warehouse.duckdb"
+  mart_export_dir: "data/04_mart_export"
+  logs_dir: "logs"
+
+fx_rates:
+  "2026-01":
+    PLN: 1.0000
+    EUR: 4.3250
+  "2026-02":
+    PLN: 1.0000
+    EUR: 4.3120
+  "2026-03":
+    PLN: 1.0000
+    EUR: 4.2980
+  "DEFAULT":
+    PLN: 1.0000
+    EUR: 4.3000

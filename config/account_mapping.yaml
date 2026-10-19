@@ -1,0 +1,191 @@
+# Account Mapping & Roll-up Rules for Data Refinery DWH
+version: "1.0"
+
+waterfall_lines:
+  GROSS_REVENUE:
+    name: "총매출액"
+    category: "REVENUE"
+    sign_multiplier: 1
+    waterfall_step: "GROSS_MARGIN"
+    is_subtotal: false
+
+  SALES_DEDUCTION:
+    name: "매출차감및할인"
+    category: "DEDUCTION"
+    sign_multiplier: -1
+    waterfall_step: "GROSS_MARGIN"
+    is_subtotal: false
+
+  COGS:
+    name: "제조및매입원가"
+    category: "COGS"
+    sign_multiplier: -1
+    waterfall_step: "GROSS_MARGIN"
+    is_subtotal: false
+
+  LOGISTICS_COST:
+    name: "물류보관운송비"
+    category: "LOGISTICS"
+    sign_multiplier: -1
+    waterfall_step: "CONTRIBUTION_MARGIN"
+    is_subtotal: false
+
+  PROMOTION_COST:
+    name: "유통판촉마케팅비"
+    category: "PROMOTION"
+    sign_multiplier: -1
+    waterfall_step: "CONTRIBUTION_MARGIN"
+    is_subtotal: false
+
+  WARRANTY_COST:
+    name: "품질보증및서비스비"
+    category: "WARRANTY"
+    sign_multiplier: -1
+    waterfall_step: "CONTRIBUTION_MARGIN"
+    is_subtotal: false
+
+  FIXED_SGNA:
+    name: "고정판매관리비"
+    category: "FIXED_COST"
+    sign_multiplier: -1
+    waterfall_step: "OPERATING_PROFIT"
+    is_subtotal: false
+
+  SUBTOTAL_IGNORED:
+    name: "원천계산소계(이중집계방지)"
+    category: "SUBTOTAL"
+    sign_multiplier: 1
+    waterfall_step: "NON_ADDITIVE"
+    is_subtotal: true
+
+# 100+ Detailed Account Mapping Matrix
+accounts:
+  # --- 1. Revenue Accounts (REV_001 ~ REV_010) ---
+  REV_001: { name: "상품매출_오프라인리테일", statement_line: "GROSS_REVENUE" }
+  REV_002: { name: "상품매출_온라인이커머스", statement_line: "GROSS_REVENUE" }
+  REV_003: { name: "상품매출_B2B특판", statement_line: "GROSS_REVENUE" }
+  REV_004: { name: "제품매출_TV가전", statement_line: "GROSS_REVENUE" }
+  REV_005: { name: "제품매출_생활가전", statement_line: "GROSS_REVENUE" }
+  REV_006: { name: "용역및설치매출", statement_line: "GROSS_REVENUE" }
+  REV_007: { name: "수수료매출", statement_line: "GROSS_REVENUE" }
+  REV_008: { name: "스크랩부산물매출", statement_line: "GROSS_REVENUE" }
+  REV_009: { name: "수출매출_역내거래", statement_line: "GROSS_REVENUE" }
+  REV_010: { name: "기타영업수익", statement_line: "GROSS_REVENUE" }
+
+  # --- 2. Sales Deductions (DED_001 ~ DED_015) ---
+  DED_001: { name: "기본매출할인", statement_line: "SALES_DEDUCTION" }
+  DED_002: { name: "성장달성리베이트", statement_line: "SALES_DEDUCTION" }
+  DED_003: { name: "분기물량리베이트", statement_line: "SALES_DEDUCTION" }
+  DED_004: { name: "조기결제할인(CashDiscount)", statement_line: "SALES_DEDUCTION" }
+  DED_005: { name: "유통협력비차감(Co-op)", statement_line: "SALES_DEDUCTION" }
+  DED_006: { name: "반품충당할인", statement_line: "SALES_DEDUCTION" }
+  DED_007: { name: "가격보상(PriceProtection)", statement_line: "SALES_DEDUCTION" }
+  DED_008: { name: "매장진열할인(DisplayDiscount)", statement_line: "SALES_DEDUCTION" }
+  DED_009: { name: "시즌오프마크다운지원", statement_line: "SALES_DEDUCTION" }
+  DED_010: { name: "신규입점인센티브", statement_line: "SALES_DEDUCTION" }
+  DED_011: { name: "물류손실보상차감", statement_line: "SALES_DEDUCTION" }
+  DED_012: { name: "단기프로모션리베이트", statement_line: "SALES_DEDUCTION" }
+  DED_013: { name: "재고보유인센티브(FloorStock)", statement_line: "SALES_DEDUCTION" }
+  DED_014: { name: "VIP고객포인트적립차감", statement_line: "SALES_DEDUCTION" }
+  DED_015: { name: "기타매출차감", statement_line: "SALES_DEDUCTION" }
+
+  # --- 3. COGS Accounts (COG_001 ~ COG_020) ---
+  COG_001: { name: "원재료비_패널및핵심부품", statement_line: "COGS" }
+  COG_002: { name: "원재료비_기구물및사출품", statement_line: "COGS" }
+  COG_003: { name: "원재료비_전자부품및PCB", statement_line: "COGS" }
+  COG_004: { name: "직접노무비", statement_line: "COGS" }
+  COG_005: { name: "제조외주가공비", statement_line: "COGS" }
+  COG_006: { name: "포장재료비", statement_line: "COGS" }
+  COG_007: { name: "금형및치공구상각비", statement_line: "COGS" }
+  COG_008: { name: "제조간접비_공장전력", statement_line: "COGS" }
+  COG_009: { name: "제조간접비_설비감가상각", statement_line: "COGS" }
+  COG_010: { name: "재고자산평가손실(LCM)", statement_line: "COGS" }
+  COG_011: { name: "원자재폐기손실", statement_line: "COGS" }
+  COG_012: { name: "수입관세및통관비", statement_line: "COGS" }
+  COG_013: { name: "항만하역료(InboundPort)", statement_line: "COGS" }
+  COG_014: { name: "해상해상운임(InboundOcean)", statement_line: "COGS" }
+  COG_015: { name: "수입내륙운송비(InboundTransit)", statement_line: "COGS" }
+  COG_016: { name: "생산품질검사비", statement_line: "COGS" }
+  COG_017: { name: "공장입고보관료", statement_line: "COGS" }
+  COG_018: { name: "제조재작업비(Rework)", statement_line: "COGS" }
+  COG_019: { name: "표준원가차이(CostVariance)", statement_line: "COGS" }
+  COG_020: { name: "기타매출원가", statement_line: "COGS" }
+
+  # --- 4. Logistics Accounts (LOG_001 ~ LOG_015) ---
+  LOG_001: { name: "간선운송료_공장to물류센터", statement_line: "LOGISTICS_COST" }
+  LOG_002: { name: "배송운송료_물류to고객(LastMile)", statement_line: "LOGISTICS_COST" }
+  LOG_003: { name: "창고입고하역료", statement_line: "LOGISTICS_COST" }
+  LOG_004: { name: "창고보관료_팔레트임차", statement_line: "LOGISTICS_COST" }
+  LOG_005: { name: "주문피킹및패킹료", statement_line: "LOGISTICS_COST" }
+  LOG_006: { name: "박스포장및부자재비", statement_line: "LOGISTICS_COST" }
+  LOG_007: { name: "물류센터간이동운임(CrossDock)", statement_line: "LOGISTICS_COST" }
+  LOG_008: { name: "고객반품회수운임", statement_line: "LOGISTICS_COST" }
+  LOG_009: { name: "컨테이너지체료(Demurrage)", statement_line: "LOGISTICS_COST" }
+  LOG_010: { name: "냉장정밀온도유지비", statement_line: "LOGISTICS_COST" }
+  LOG_011: { name: "긴급항공운송료(AirFreight)", statement_line: "LOGISTICS_COST" }
+  LOG_012: { name: "창고상하역용역비", statement_line: "LOGISTICS_COST" }
+  LOG_013: { name: "물류지게차임차료", statement_line: "LOGISTICS_COST" }
+  LOG_014: { name: "적재물보험료", statement_line: "LOGISTICS_COST" }
+  LOG_015: { name: "기타물류비", statement_line: "LOGISTICS_COST" }
+
+  # --- 5. Promotion Accounts (PRM_001 ~ PRM_020) ---
+  PRM_001: { name: "유통카탈로그협찬비", statement_line: "PROMOTION_COST" }
+  PRM_002: { name: "엔드캡(Endcap)매대비", statement_line: "PROMOTION_COST" }
+  PRM_003: { name: "전단지광고지원금", statement_line: "PROMOTION_COST" }
+  PRM_004: { name: "블랙프라이데이판촉비", statement_line: "PROMOTION_COST" }
+  PRM_005: { name: "판촉인력지원비(Spiff)", statement_line: "PROMOTION_COST" }
+  PRM_006: { name: "온라인배너광고비", statement_line: "PROMOTION_COST" }
+  PRM_007: { name: "인플루언서마케팅비", statement_line: "PROMOTION_COST" }
+  PRM_008: { name: "매장POSM제작비", statement_line: "PROMOTION_COST" }
+  PRM_009: { name: "전시시연기기지원비(DemoUnit)", statement_line: "PROMOTION_COST" }
+  PRM_010: { name: "소비자캐시백환급금", statement_line: "PROMOTION_COST" }
+  PRM_011: { name: "보상판매지원금(Trade-in)", statement_line: "PROMOTION_COST" }
+  PRM_012: { name: "매장인스토어이벤트비", statement_line: "PROMOTION_COST" }
+  PRM_013: { name: "사은품제작및지급비", statement_line: "PROMOTION_COST" }
+  PRM_014: { name: "디지털검색광고비(SEO/SEM)", statement_line: "PROMOTION_COST" }
+  PRM_015: { name: "지면잡지인쇄광고비", statement_line: "PROMOTION_COST" }
+  PRM_016: { name: "행사후원및협찬비", statement_line: "PROMOTION_COST" }
+  PRM_017: { name: "신제품런칭쇼케이스비", statement_line: "PROMOTION_COST" }
+  PRM_018: { name: "리플렛인쇄배포비", statement_line: "PROMOTION_COST" }
+  PRM_019: { name: "온라인쿠폰할인부담금", statement_line: "PROMOTION_COST" }
+  PRM_020: { name: "기타판매촉진비", statement_line: "PROMOTION_COST" }
+
+  # --- 6. Warranty Accounts (WAR_001 ~ WAR_010) ---
+  WAR_001: { name: "무상수리부품비", statement_line: "WARRANTY_COST" }
+  WAR_002: { name: "지정AS센터공임비", statement_line: "WARRANTY_COST" }
+  WAR_003: { name: "고객클레임합의금", statement_line: "WARRANTY_COST" }
+  WAR_004: { name: "생산물배상책임보험료(PL)", statement_line: "WARRANTY_COST" }
+  WAR_005: { name: "필드서비스엔지니어출장비", statement_line: "WARRANTY_COST" }
+  WAR_006: { name: "고객콜센터위탁운영비", statement_line: "WARRANTY_COST" }
+  WAR_007: { name: "불량제품폐기충당금", statement_line: "WARRANTY_COST" }
+  WAR_008: { name: "긴급수리물류특송비", statement_line: "WARRANTY_COST" }
+  WAR_009: { name: "보증기간연장서비스원가", statement_line: "WARRANTY_COST" }
+  WAR_010: { name: "리콜및품질보증충당부채", statement_line: "WARRANTY_COST" }
+
+  # --- 7. Fixed SG&A Accounts (FIX_001 ~ FIX_020) ---
+  FIX_001: { name: "법인사무실임차료", statement_line: "FIXED_SGNA" }
+  FIX_002: { name: "본사임원급여", statement_line: "FIXED_SGNA" }
+  FIX_003: { name: "영업직원급여", statement_line: "FIXED_SGNA" }
+  FIX_004: { name: "관리직원급여", statement_line: "FIXED_SGNA" }
+  FIX_005: { name: "사회보험료및복리후생비", statement_line: "FIXED_SGNA" }
+  FIX_006: { name: "사무실전기수도광열비", statement_line: "FIXED_SGNA" }
+  FIX_007: { name: "IT소프트웨어라이선스료", statement_line: "FIXED_SGNA" }
+  FIX_008: { name: "ERP시스템유지보수료", statement_line: "FIXED_SGNA" }
+  FIX_009: { name: "사무용소모품비", statement_line: "FIXED_SGNA" }
+  FIX_010: { name: "회계감사및법률자문료", statement_line: "FIXED_SGNA" }
+  FIX_011: { name: "임직원여비교통비", statement_line: "FIXED_SGNA" }
+  FIX_012: { name: "법인차량리스료", statement_line: "FIXED_SGNA" }
+  FIX_013: { name: "통신비및네트워크료", statement_line: "FIXED_SGNA" }
+  FIX_014: { name: "임직원교육훈련비", statement_line: "FIXED_SGNA" }
+  FIX_015: { name: "사무집기감가상각비", statement_line: "FIXED_SGNA" }
+  FIX_016: { name: "금융기관송금수수료", statement_line: "FIXED_SGNA" }
+  FIX_017: { name: "공식번역및공증료", statement_line: "FIXED_SGNA" }
+  FIX_018: { name: "인재채용수수료", statement_line: "FIXED_SGNA" }
+  FIX_019: { name: "기업브랜딩및홍보비", statement_line: "FIXED_SGNA" }
+  FIX_020: { name: "기타일반관리비", statement_line: "FIXED_SGNA" }
+
+  # --- 8. Subtotal Columns (To be excluded from Long accumulation to prevent double-counting) ---
+  CALC_GROSS_PROFIT: { name: "원천_매출총이익소계", statement_line: "SUBTOTAL_IGNORED" }
+  CALC_NET_SALES: { name: "원천_순매출소계", statement_line: "SUBTOTAL_IGNORED" }
+  CALC_CONTRIBUTION_MARGIN: { name: "원천_공헌이익소계", statement_line: "SUBTOTAL_IGNORED" }
+  CALC_OPERATING_PROFIT: { name: "원천_영업이익소계", statement_line: "SUBTOTAL_IGNORED" }

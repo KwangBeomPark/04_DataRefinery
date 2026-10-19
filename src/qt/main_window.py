@@ -29,6 +29,7 @@ from src.qt.jobs import create_qt_job_runner
 from src.qt.tabs.aggregator.tab import AggregatorTab
 from src.qt.tabs.csv_tab import CsvRepairTab
 from src.qt.tabs.dataset.tab import DatasetPublisherTab
+from src.qt.tabs.dwh_tab import DwhPipelineTab
 from src.qt.tabs.promotion_tab import PromotionTab
 from src.qt.theme import PALETTE
 from src.update_checker import load_settings
@@ -118,16 +119,19 @@ class MainWindow(QMainWindow):
         self.tab_widget = QTabWidget()
         self.tab_widget.setDocumentMode(True)
 
-        # Instantiate 4 tabs
+        # Instantiate 5 tabs in logical business workflow order:
+        # 1. Raw CSV Repair -> 2. Promotion Prep -> 3. Core DWH & Mart -> 4. Dataset Accumulation -> 5. Data Aggregator / Slicer
         self.tab_csv = CsvRepairTab(language_code=self.language_code, job_runner=self.job_runner)
         self.tab_promotion = PromotionTab(language_code=self.language_code, job_runner=self.job_runner)
-        self.tab_aggregator = AggregatorTab(language_code=self.language_code, job_runner=self.job_runner)
+        self.tab_dwh = DwhPipelineTab(language_code=self.language_code, job_runner=self.job_runner)
         self.tab_dataset = DatasetPublisherTab(language_code=self.language_code, job_runner=self.job_runner)
+        self.tab_aggregator = AggregatorTab(language_code=self.language_code, job_runner=self.job_runner)
 
-        self.tab_widget.addTab(self.tab_aggregator, "데이터 집계·슬라이서")
-        self.tab_widget.addTab(self.tab_dataset, "데이터셋 배포")
+        self.tab_widget.addTab(self.tab_csv, "CSV 구조 복구")
         self.tab_widget.addTab(self.tab_promotion, "프로모션 템플릿")
-        self.tab_widget.addTab(self.tab_csv, "CSV 복구/분할")
+        self.tab_widget.addTab(self.tab_dwh, "DWH & 손익 마트")
+        self.tab_widget.addTab(self.tab_dataset, "데이터셋 배포")
+        self.tab_widget.addTab(self.tab_aggregator, "데이터 집계·슬라이서")
 
         main_layout.addWidget(self.tab_widget, stretch=1)
 
@@ -156,22 +160,24 @@ class MainWindow(QMainWindow):
         self.act_about.setText(t.get("menu_about", "정보 (About)..."))
         self.lbl_status_msg.setText(t.get("status_ready", "준비됨"))
 
-        # task_options identifies features; visual order must not change their labels.
-        task_opts = t.get("task_options", ("CSV 구조 복구", "프로모션 템플릿", "데이터 집계·슬라이서", "데이터셋 배포"))
-        if len(task_opts) >= 4:
+        # task_options identifies features in logical order:
+        task_opts = t.get("task_options", ("CSV 구조 복구", "프로모션 템플릿", "DWH & 손익 마트", "데이터셋 배포", "데이터 집계·슬라이서"))
+        if len(task_opts) >= 5:
             for tab, task_index in (
                 (self.tab_csv, 0),
                 (self.tab_promotion, 1),
-                (self.tab_aggregator, 2),
+                (self.tab_dwh, 2),
                 (self.tab_dataset, 3),
+                (self.tab_aggregator, 4),
             ):
                 self.tab_widget.setTabText(self.tab_widget.indexOf(tab), task_opts[task_index])
 
         # Propagate to all tabs
         self.tab_csv.apply_language(lang_code)
         self.tab_promotion.apply_language(lang_code)
-        self.tab_aggregator.apply_language(lang_code)
+        self.tab_dwh.apply_language(lang_code)
         self.tab_dataset.apply_language(lang_code)
+        self.tab_aggregator.apply_language(lang_code)
 
     def _on_check_update(self) -> None:
         from src.qt.dialogs import confirm_dialog, error_dialog, info_dialog

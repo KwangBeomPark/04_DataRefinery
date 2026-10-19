@@ -19,6 +19,8 @@ tools/
 
 # Private runtime settings, databases and credentials
 UserSetting/
+/data/
+/logs/
 .env
 .env.*
 !.env.example

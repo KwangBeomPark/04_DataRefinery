@@ -20,9 +20,13 @@ a = Analysis(
     binaries=duckdb_binaries,
     datas=[
         (str(project_root / 'assets'), 'assets'),
+        (str(project_root / 'config'), 'config'),
     ] + duckdb_datas,
     hiddenimports=[
         'duckdb',
+        'polars',
+        'pyarrow',
+        'yaml',
         'win32com',
         'win32com.client',
         'pythoncom',

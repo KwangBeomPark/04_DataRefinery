@@ -931,9 +931,10 @@ class DataRefineryApp:
             else:
                 self._show_promotion_preview(self._promotion_data)
         elif self._selected_task_id() == "aggregator":
-            self.result_section.configure(text=self._ui("task_options")[2])
+            agg_idx = 4 if len(self._ui("task_options")) >= 5 else 2
+            self.result_section.configure(text=self._ui("task_options")[agg_idx])
             self._set_result_text(self._ui("agg_initial_result"))
-            self.log_text.set(self._ui("task_options")[2])
+            self.log_text.set(self._ui("task_options")[agg_idx])
         elif self._selected_task_id() == "publisher":
             self.result_section.configure(text=self._ui("task_options")[3])
             self._set_result_text(self._ui("pub_initial_result"))
@@ -1074,12 +1075,13 @@ class DataRefineryApp:
         self.btn_process.configure(text=text['process'])
         self.notebook.tab(self.csv_tab, text=text['task_options'][0])
         self.notebook.tab(self.promotion_tab, text=text['task_options'][1])
-        self.notebook.tab(self.aggregator_tab, text=text['task_options'][2])
+        agg_idx = 4 if len(text['task_options']) >= 5 else 2
+        self.notebook.tab(self.aggregator_tab, text=text['task_options'][agg_idx])
         if hasattr(self, "publisher_tab"):
             self.notebook.tab(self.publisher_tab, text=text['task_options'][3])
         self.csv_tab_button.configure(text=text['task_options'][0])
         self.promotion_tab_button.configure(text=text['task_options'][1])
-        self.aggregator_tab_button.configure(text=text['task_options'][2])
+        self.aggregator_tab_button.configure(text=text['task_options'][agg_idx])
         if hasattr(self, "publisher_tab_button"):
             self.publisher_tab_button.configure(text=text['task_options'][3])
         self.update_menu.set_texts(
