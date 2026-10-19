@@ -931,14 +931,19 @@ class DataRefineryApp:
             else:
                 self._show_promotion_preview(self._promotion_data)
         elif self._selected_task_id() == "aggregator":
-            agg_idx = 4 if len(self._ui("task_options")) >= 5 else 2
-            self.result_section.configure(text=self._ui("task_options")[agg_idx])
+            opts = self._ui("task_options")
+            agg_idx = 2 if len(opts) == 4 else (4 if len(opts) >= 5 else 2)
+            agg_title = opts[agg_idx] if len(opts) > agg_idx else "Aggregator"
+            self.result_section.configure(text=agg_title)
             self._set_result_text(self._ui("agg_initial_result"))
-            self.log_text.set(self._ui("task_options")[agg_idx])
+            self.log_text.set(agg_title)
         elif self._selected_task_id() == "publisher":
-            self.result_section.configure(text=self._ui("task_options")[3])
+            opts = self._ui("task_options")
+            pub_idx = 1 if len(opts) == 4 else (3 if len(opts) >= 4 else 0)
+            pub_title = opts[pub_idx] if len(opts) > pub_idx else "Publisher"
+            self.result_section.configure(text=pub_title)
             self._set_result_text(self._ui("pub_initial_result"))
-            self.log_text.set(self._ui("task_options")[3])
+            self.log_text.set(pub_title)
         else:
             self.result_section.configure(text=self._ui("result_title"))
             if self._last_result is None:
@@ -1073,17 +1078,31 @@ class DataRefineryApp:
         self.columns_help_label.configure(text=text['columns_help'])
         self.output_format_label.configure(text=text['output_label'])
         self.btn_process.configure(text=text['process'])
-        self.notebook.tab(self.csv_tab, text=text['task_options'][0])
-        self.notebook.tab(self.promotion_tab, text=text['task_options'][1])
-        agg_idx = 4 if len(text['task_options']) >= 5 else 2
-        self.notebook.tab(self.aggregator_tab, text=text['task_options'][agg_idx])
-        if hasattr(self, "publisher_tab"):
-            self.notebook.tab(self.publisher_tab, text=text['task_options'][3])
-        self.csv_tab_button.configure(text=text['task_options'][0])
-        self.promotion_tab_button.configure(text=text['task_options'][1])
-        self.aggregator_tab_button.configure(text=text['task_options'][agg_idx])
-        if hasattr(self, "publisher_tab_button"):
-            self.publisher_tab_button.configure(text=text['task_options'][3])
+        opts = text.get('task_options', ())
+        if len(opts) == 4:
+            tools_title = opts[3]
+            self.notebook.tab(self.csv_tab, text=f"{tools_title} - CSV")
+            self.notebook.tab(self.promotion_tab, text=f"{tools_title} - Promo")
+            self.notebook.tab(self.aggregator_tab, text=opts[2])
+            if hasattr(self, "publisher_tab"):
+                self.notebook.tab(self.publisher_tab, text=opts[1])
+            self.csv_tab_button.configure(text=f"{tools_title} - CSV")
+            self.promotion_tab_button.configure(text=f"{tools_title} - Promo")
+            self.aggregator_tab_button.configure(text=opts[2])
+            if hasattr(self, "publisher_tab_button"):
+                self.publisher_tab_button.configure(text=opts[1])
+        else:
+            self.notebook.tab(self.csv_tab, text=opts[0] if len(opts) > 0 else "CSV")
+            self.notebook.tab(self.promotion_tab, text=opts[1] if len(opts) > 1 else "Promo")
+            agg_idx = 4 if len(opts) >= 5 else (2 if len(opts) > 2 else 0)
+            self.notebook.tab(self.aggregator_tab, text=opts[agg_idx])
+            if hasattr(self, "publisher_tab"):
+                self.notebook.tab(self.publisher_tab, text=opts[3] if len(opts) > 3 else "Publisher")
+            self.csv_tab_button.configure(text=opts[0] if len(opts) > 0 else "CSV")
+            self.promotion_tab_button.configure(text=opts[1] if len(opts) > 1 else "Promo")
+            self.aggregator_tab_button.configure(text=opts[agg_idx])
+            if hasattr(self, "publisher_tab_button"):
+                self.publisher_tab_button.configure(text=opts[3] if len(opts) > 3 else "Publisher")
         self.update_menu.set_texts(
             status="",
             check=text['check_updates'],
@@ -1429,6 +1448,16 @@ def _run_mart_cli(argv: list[str]) -> int:
 
 
 def main() -> None:
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "KwangBeomPark.DataRefinery.App"
+            )
+        except Exception:
+            pass
+
     if "--version" in sys.argv or "-v" in sys.argv:
         print(f"Data Refinery v{__version__}")
         sys.exit(0)

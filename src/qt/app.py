@@ -25,6 +25,18 @@ def create_or_get_app() -> QApplication:
     """Initialize or return the single QApplication instance with HiDPI and theme configured."""
     app = QApplication.instance()
     if app is None:
+        if sys.platform == "win32":
+            try:
+                import ctypes
+
+                # Explicit AppUserModelID ensures Windows Taskbar associates this process
+                # with its own custom icon instead of grouping under python.exe or generic host.
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "KwangBeomPark.DataRefinery.App"
+                )
+            except Exception:
+                pass
+
         # High DPI configuration
         QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
             Qt.HighDpiScaleFactorRoundingPolicy.PassThrough

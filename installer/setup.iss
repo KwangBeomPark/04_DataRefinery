@@ -74,8 +74,8 @@ Type: files; Name: "{userprograms}\{#LegacyAppName}.lnk"
 Type: files; Name: "{autodesktop}\{#LegacyAppName}.lnk"
 
 [Icons]
-Name: "{userprograms}\{#MyAppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
+Name: "{userprograms}\{#MyAppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; AppUserModelID: "KwangBeomPark.DataRefinery.App"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; AppUserModelID: "KwangBeomPark.DataRefinery.App"
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent

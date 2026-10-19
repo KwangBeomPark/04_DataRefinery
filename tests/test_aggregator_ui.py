@@ -134,18 +134,18 @@ class TestAggregatorShell(AggregatorTestCase):
     def test_language_switch_updates_task_tabs(self):
         self.app.language.set("English")
         self.app._apply_language()
-        self.assertEqual(self.app.aggregator_tab_button.cget("text"), "Data aggregator")
-        self.assertEqual(self.app.publisher_tab_button.cget("text"), "Dataset publisher")
+        self.assertEqual(self.app.aggregator_tab_button.cget("text"), self.app._ui("task_options")[2])
+        self.assertEqual(self.app.publisher_tab_button.cget("text"), self.app._ui("task_options")[1])
 
         self.app.language.set("한국어")
         self.app._apply_language()
-        self.assertEqual(self.app.aggregator_tab_button.cget("text"), "데이터 집계·슬라이서")
-        self.assertEqual(self.app.publisher_tab_button.cget("text"), "데이터셋 배포")
+        self.assertEqual(self.app.aggregator_tab_button.cget("text"), self.app._ui("task_options")[2])
+        self.assertEqual(self.app.publisher_tab_button.cget("text"), self.app._ui("task_options")[1])
 
         self.app.language.set("Polski")
         self.app._apply_language()
-        self.assertEqual(self.app.aggregator_tab_button.cget("text"), "Agregacja danych")
-        self.assertEqual(self.app.publisher_tab_button.cget("text"), "Publikacja zestawów danych")
+        self.assertEqual(self.app.aggregator_tab_button.cget("text"), self.app._ui("task_options")[2])
+        self.assertEqual(self.app.publisher_tab_button.cget("text"), self.app._ui("task_options")[1])
 
     def test_language_switch_translates_aggregator_controls(self):
         self.app.language.set("English")
