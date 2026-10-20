@@ -21,6 +21,7 @@ a = Analysis(
     datas=[
         (str(project_root / 'assets'), 'assets'),
         (str(project_root / 'config'), 'config'),
+        (str(project_root / 'docs'), 'docs'),
     ] + duckdb_datas,
     hiddenimports=[
         'duckdb',
