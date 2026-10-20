@@ -6,7 +6,6 @@ import os
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Optional
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
@@ -45,7 +44,7 @@ class MainWindow(QMainWindow):
             return os.path.join(bundle_root, "assets", relative_path)
         return str(Path(__file__).resolve().parents[2] / "assets" / relative_path)
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.language_code = "en"
         self.job_runner: BackgroundJobRunner = create_qt_job_runner()
@@ -182,21 +181,28 @@ class MainWindow(QMainWindow):
         self.tab_tools.apply_language(lang_code)
 
     def _on_check_update(self) -> None:
-        from src.qt.dialogs import confirm_dialog, error_dialog, info_dialog
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+
+        from src.qt.dialogs import error_dialog, info_dialog
+        from src.qt.widgets.update_dialog import UpdateDialog
         from src.update_checker import fetch_latest_release, version_key
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            rel = fetch_latest_release(timeout=4)
+            rel = fetch_latest_release(timeout=5)
+            QGuiApplication.restoreOverrideCursor()
             if rel:
                 latest = version_key(rel.version)
                 current = version_key(__version__)
                 if latest and current and latest > current:
-                    if confirm_dialog(
-                        self,
-                        t.get("dlg_update_found_title", "새 업데이트 발견"),
-                        t.get("dlg_update_found_body", "").format(latest=rel.version, current=__version__),
-                    ):
-                        webbrowser.open(rel.url)
+                    dlg = UpdateDialog(
+                        release_info=rel,
+                        current_version=__version__,
+                        parent=self,
+                        language_code=self.language_code,
+                    )
+                    dlg.exec()
                     return
             info_dialog(
                 self,
@@ -204,6 +210,7 @@ class MainWindow(QMainWindow):
                 t.get("dlg_update_latest", "").format(current=__version__),
             )
         except Exception as e:
+            QGuiApplication.restoreOverrideCursor()
             error_dialog(
                 self,
                 t.get("dlg_update_err_title", "업데이트 확인 실패"),
