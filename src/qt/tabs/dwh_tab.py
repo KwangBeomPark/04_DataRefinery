@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.background_jobs import BackgroundJobRunner, JobCallbacks
+from src.background_jobs import BackgroundJobRunner, JobCallbacks, ProgressCallback
+from src.qt.jobs import create_qt_job_runner
 from src.config_loader import load_account_mapping, load_settings
 from src.dimension_builder import DimensionBuilder
 from src.dwh_template import create_dwh_excel_template
@@ -40,7 +41,21 @@ from src.qt.dialogs import (
 from src.qt.widgets.card import CardWidget
 from src.qt.widgets.dwh_guide_dialog import DwhGuideDialog
 from src.qt.widgets.dwh_preview_dialog import DwhPreviewDialog
+from src.qt.ui_state import set_button_enabled_with_nudge
 from src.ui_components import PALETTE
+
+
+def _make_unique_backup_path(path: Path, timestamp: str) -> Path:
+    """Generate a unique backup path preventing timestamp collisions."""
+    base = path.with_name(f"{path.name}.bak_{timestamp}")
+    if not base.exists():
+        return base
+    seq = 1
+    while True:
+        candidate = path.with_name(f"{path.name}.bak_{timestamp}_{seq}")
+        if not candidate.exists():
+            return candidate
+        seq += 1
 
 
 class DwhPipelineTab(QWidget):
@@ -54,9 +69,11 @@ class DwhPipelineTab(QWidget):
     ) -> None:
         super().__init__(parent)
         self.language_code = language_code
-        self.job_runner = job_runner
+        self.job_runner = job_runner or create_qt_job_runner()
         self._last_error_log: Optional[Path] = None
         self._last_parquet_path: Optional[Path] = None
+        self._source_state: tuple[bool, bool, bool] = (False, False, False)
+        self._is_running = False
 
         self._init_ui()
         self.apply_language(self.language_code)
@@ -136,6 +153,27 @@ class DwhPipelineTab(QWidget):
         self.lbl_config_summary = QLabel()
         self.lbl_config_summary.setStyleSheet("color: #555555; font-size: 11px;")
         c1_layout.addWidget(self.lbl_config_summary)
+
+        # Empty State card: shown until every required source is registered
+        self.empty_state_frame = QFrame()
+        self.empty_state_frame.setStyleSheet(
+            "background-color: #F0F9FF; border: 1px dashed #7DD3FC; border-radius: 6px; padding: 8px;"
+        )
+        empty_box = QVBoxLayout(self.empty_state_frame)
+        empty_box.setSpacing(4)
+        self.lbl_empty_title = QLabel()
+        self.lbl_empty_title.setStyleSheet("color: #075985; font-weight: bold; border: none;")
+        self.lbl_empty_body = QLabel()
+        self.lbl_empty_body.setWordWrap(True)
+        self.lbl_empty_body.setStyleSheet("color: #0C4A6E; font-size: 11px; border: none;")
+        self.lbl_empty_safe = QLabel()
+        self.lbl_empty_safe.setWordWrap(True)
+        self.lbl_empty_safe.setStyleSheet("color: #065F46; font-size: 11px; font-weight: bold; border: none;")
+        empty_box.addWidget(self.lbl_empty_title)
+        empty_box.addWidget(self.lbl_empty_body)
+        empty_box.addWidget(self.lbl_empty_safe)
+        self.empty_state_frame.setVisible(False)
+        c1_layout.addWidget(self.empty_state_frame)
 
         # Buttons row
         btn_row = QHBoxLayout()
@@ -295,7 +333,8 @@ class DwhPipelineTab(QWidget):
         try:
             settings = load_settings()
             rules = load_account_mapping()
-        except Exception:
+        except Exception as e:
+            self._apply_settings_error(str(e))
             return
 
         cust_path = settings.masters_dir / "master_customers.csv"
@@ -373,12 +412,7 @@ class DwhPipelineTab(QWidget):
         )
 
         # Step-Gating: Enable build button ONLY if all sources exist
-        is_ready = has_cust and has_prod and has_pnl
-        self.btn_run_dwh.setEnabled(is_ready)
-        if is_ready:
-            self.btn_run_dwh.setToolTip(t.get("dwh_build_tooltip_ready", ""))
-        else:
-            self.btn_run_dwh.setToolTip(t.get("dwh_build_tooltip_disabled", "Please ensure customer, product masters, and P&L source files exist."))
+        self._apply_source_gate(has_cust, has_prod, has_pnl)
 
         # Check existing Parquet file
         parquet_file = settings.mart_export_dir / "v_ai_pnl_summary.parquet"
@@ -389,21 +423,133 @@ class DwhPipelineTab(QWidget):
                 f"✔ {parquet_file.name} ({size_kb:.1f} KB)"
             )
             self.lbl_parquet_ready.setStyleSheet("color: #047857; font-weight: bold;")
-            self.btn_preview_mart.setEnabled(True)
-            self.btn_copy_parquet_path.setEnabled(True)
-            self.btn_copy_mcode.setEnabled(True)
         else:
-            if not self._last_parquet_path:
-                self.lbl_parquet_ready.setText(t.get("dwh_card3_initial", ""))
-                self.lbl_parquet_ready.setStyleSheet("color: #333333;")
-                self.btn_preview_mart.setEnabled(False)
-                self.btn_copy_parquet_path.setEnabled(False)
-                self.btn_copy_mcode.setEnabled(False)
+            self._last_parquet_path = None
+            self.lbl_parquet_ready.setText(t.get("dwh_card3_initial", ""))
+            self.lbl_parquet_ready.setStyleSheet("color: #333333;")
+        self._apply_mart_gate()
+
+    # -----------------------------------------------------------------
+    # "Explain, don't block" Nudge Gates
+    # -----------------------------------------------------------------
+    def _mart_ready(self) -> bool:
+        return bool(self._last_parquet_path and self._last_parquet_path.is_file())
+
+    def _apply_source_gate(self, has_cust: bool, has_prod: bool, has_pnl: bool) -> None:
+        """Gate the build button and name exactly which sources are missing."""
+        self._source_state = (has_cust, has_prod, has_pnl)
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        is_ready = all(self._source_state)
+        self.empty_state_frame.setVisible(not is_ready)
+
+        if self._is_running:
+            reason = t.get("dwh_nudge_running", "The DWH pipeline is running.")
+            action = t.get("dwh_nudge_running_action", "")
+        else:
+            missing = [
+                t.get(key, default)
+                for present, key, default in (
+                    (has_cust, "dwh_nudge_missing_cust", "Customer master"),
+                    (has_prod, "dwh_nudge_missing_prod", "Product master"),
+                    (has_pnl, "dwh_nudge_missing_pnl", "P&L source CSV"),
+                )
+                if not present
+            ]
+            reason = "\n".join(
+                [t.get("dwh_nudge_missing_header", "Missing source files:")]
+                + [f"• {m}" for m in missing]
+            )
+            action = t.get("dwh_nudge_missing_action", "")
+
+        set_button_enabled_with_nudge(
+            self.btn_run_dwh,
+            is_ready and not self._is_running,
+            language_code=self.language_code,
+            ready_tip=t.get("dwh_build_tooltip_ready", ""),
+            reason=reason,
+            action=action,
+        )
+
+    def _apply_mart_gate(self) -> None:
+        """Gate mart consumers until a Parquet mart has been published."""
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        if self._is_running:
+            reason = t.get("dwh_nudge_running", "The DWH pipeline is running.")
+            action = t.get("dwh_nudge_running_action", "")
+        else:
+            reason = t.get("dwh_nudge_mart_not_built", "The Parquet mart has not been built yet.")
+            action = t.get("dwh_nudge_mart_action", "")
+        enabled = self._mart_ready() and not self._is_running
+        for btn, tip_key in (
+            (self.btn_preview_mart, "dwh_tip_preview_ready"),
+            (self.btn_copy_mcode, "dwh_tip_copy_mcode_ready"),
+            (self.btn_copy_parquet_path, "dwh_tip_copy_path_ready"),
+        ):
+            set_button_enabled_with_nudge(
+                btn,
+                enabled,
+                language_code=self.language_code,
+                ready_tip=t.get(tip_key, ""),
+                reason=reason,
+                action=action,
+            )
+
+    def _apply_error_log_gate(self) -> None:
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        has_log = bool(self._last_error_log and self._last_error_log.is_file())
+        set_button_enabled_with_nudge(
+            self.btn_open_err_log,
+            has_log,
+            language_code=self.language_code,
+            ready_tip=t.get("dwh_tip_error_log_ready", ""),
+            reason=t.get("dwh_nudge_no_error_log", "No error report has been created yet."),
+            action=t.get("dwh_nudge_no_error_log_action", ""),
+        )
+
+    def _apply_settings_error(self, detail: str) -> None:
+        """Disable pipeline controls when settings cannot be loaded, and say why."""
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        reason = t.get("dwh_nudge_settings_error", "Could not load DWH settings: {error}").format(error=detail)
+        action = t.get("dwh_nudge_settings_action", "")
+        for btn in (self.btn_run_dwh, self.btn_preview_mart, self.btn_copy_mcode, self.btn_copy_parquet_path):
+            set_button_enabled_with_nudge(
+                btn, False, language_code=self.language_code, reason=reason, action=action
+            )
+
+    def _set_running(self, running: bool) -> None:
+        """Lock controls during a build and explain the temporary lock."""
+        self._is_running = running
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        reason = t.get("dwh_nudge_running", "The DWH pipeline is running.")
+        action = t.get("dwh_nudge_running_action", "")
+        buttons_and_tips = (
+            (self.btn_download_template, "dwh_tip_download_template"),
+            (self.btn_gen_sample, "dwh_tip_gen_sample"),
+            (self.btn_refresh, "dwh_tip_refresh"),
+            (self.btn_import_cust, "dwh_tip_import_cust"),
+            (self.btn_import_prod, "dwh_tip_import_prod"),
+            (self.btn_import_pnl, "dwh_tip_import_pnl"),
+        )
+        for btn, tip_key in buttons_and_tips:
+            set_button_enabled_with_nudge(
+                btn,
+                not running,
+                language_code=self.language_code,
+                ready_tip=t.get(tip_key, ""),
+                reason=reason,
+                action=action,
+            )
+        self._apply_source_gate(*self._source_state)
+        self._apply_mart_gate()
 
     def _on_import_file(self, target_type: str) -> None:
-        """Import external CSV file into canonical DWH raw folders."""
+        """Import external CSV file into canonical DWH raw folders with automated backup and rollback."""
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
-        settings = load_settings()
+        try:
+            settings = load_settings()
+        except Exception as e:
+            error_dialog(self, t.get("dwh_btn_import_file", "가져오기"), str(e))
+            return
 
         if target_type == "customer":
             dest = settings.masters_dir / "master_customers.csv"
@@ -412,7 +558,7 @@ class DwhPipelineTab(QWidget):
             dest = settings.masters_dir / "master_products.csv"
             title = t.get("dwh_card1_prod", "제품 마스터").rstrip(":")
         else:
-            dest = settings.pnl_dir / "raw_pnl.csv"
+            dest = settings.pnl_dir / "raw_pnl_active.csv"
             title = t.get("dwh_card1_pnl", "P&L 실적 원천").rstrip(":")
 
         selected = choose_file_dialog(
@@ -423,7 +569,23 @@ class DwhPipelineTab(QWidget):
         if not selected:
             return
 
-        if dest.is_file():
+        selected_path = Path(selected).resolve()
+        if not selected_path.is_file():
+            error_dialog(self, t.get("dwh_btn_import_file", "가져오기"), f"File not found: {selected_path}")
+            return
+
+        # Check for existing active files in the target destination
+        existing_active: list[Path] = []
+        if target_type == "pnl":
+            if settings.pnl_dir.is_dir():
+                existing_active = [
+                    p for p in settings.pnl_dir.glob("*.csv")
+                    if ".bak_" not in p.name and not p.name.endswith(".tmp")
+                ]
+        elif dest.is_file():
+            existing_active = [dest]
+
+        if existing_active:
             prompt = t.get(
                 "dwh_import_overwrite_prompt",
                 "해당 마스터/실적 파일이 이미 존재합니다:\n{path}\n\n새로운 파일로 덮어쓰시겠습니까?",
@@ -431,17 +593,67 @@ class DwhPipelineTab(QWidget):
             if not confirm_dialog(self, t.get("dwh_btn_import_file", "가져오기"), prompt):
                 return
 
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        tmp_dest = dest.with_name(f"{dest.stem}_{ts}_{os.getpid()}.tmp")
+        moved_files: list[tuple[Path, Path]] = []
+
         try:
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(selected, dest)
+            # 1. First copy selected source to a temporary staged file.
+            # This guarantees that even if selected_path is inside the target folder
+            # (e.g. settings.pnl_dir / 'raw_pnl_2026_q1.csv'), its content is safely staged
+            # before any existing files are moved to backup.
+            shutil.copy2(str(selected_path), str(tmp_dest))
+
+            # 2. Archive existing active files so the newly imported file will be the sole active source.
+            if target_type == "pnl":
+                for old_f in existing_active:
+                    if old_f.resolve() == tmp_dest.resolve():
+                        continue
+                    bak_path = _make_unique_backup_path(old_f, ts)
+                    shutil.move(str(old_f), str(bak_path))
+                    moved_files.append((old_f, bak_path))
+            elif dest.is_file():
+                bak_path = _make_unique_backup_path(dest, ts)
+                shutil.move(str(dest), str(bak_path))
+                moved_files.append((dest, bak_path))
+
+            # 3. Atomically replace destination with staged temporary file.
+            tmp_dest.replace(dest)
+        except Exception as e:
+            # Rollback: restore all moved files in reverse order
+            for orig, bak in reversed(moved_files):
+                try:
+                    if bak.is_file():
+                        if orig.is_file():
+                            orig.unlink()
+                        shutil.move(str(bak), str(orig))
+                except Exception:
+                    pass
+
+            if tmp_dest.is_file():
+                try:
+                    tmp_dest.unlink()
+                except Exception:
+                    pass
+
+            self._check_source_files()
+
+            if isinstance(e, PermissionError):
+                msg = t.get(
+                    "dwh_dlg_file_lock_err",
+                    "파일이 Excel 등 다른 프로그램에서 열려 있어 접근할 수 없습니다.\n파일을 닫고 다시 시도해 주세요:\n{err}",
+                ).format(err=str(e))
+            else:
+                msg = str(e)
+            error_dialog(self, t.get("dwh_btn_import_file", "가져오기"), msg)
+        else:
             self._check_source_files()
             info_dialog(
                 self,
                 t.get("dwh_btn_import_file", "가져오기"),
                 t.get("dwh_import_success", "파일이 성공적으로 복사 및 등록되었습니다:\n{path}").format(path=dest),
             )
-        except Exception as e:
-            error_dialog(self, t.get("dwh_btn_import_file", "가져오기"), str(e))
 
     def _on_preview_mart(self) -> None:
         """Open quick preview dialog for exported Parquet mart."""
@@ -486,19 +698,94 @@ class DwhPipelineTab(QWidget):
         """Generate synthetic master and P&L files for testing."""
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
         try:
-            from scripts.generate_sample_data import generate_sample_data
-            generate_sample_data()
-            self._check_source_files()
-            info_dialog(
-                self,
-                t.get("dwh_dlg_sample_success_title", "샘플 데이터 생성 완료"),
-                t.get("dwh_dlg_sample_success_msg", "테스트용 공식 마스터 2종과 100+ 컬럼 P&L 실적 데이터가 생성되었습니다."),
-            )
+            settings = load_settings()
         except Exception as e:
             error_dialog(
                 self,
                 t.get("dwh_dlg_sample_fail_title", "샘플 생성 실패"),
                 str(e),
+            )
+            return
+
+        target_dirs = [settings.masters_dir, settings.pnl_dir, settings.inventory_dir, settings.price_dir]
+        target_files = [
+            settings.masters_dir / "master_customers.csv",
+            settings.masters_dir / "master_products.csv",
+            settings.pnl_dir / "raw_pnl_2026_q1.csv",
+            settings.inventory_dir / "raw_inventory.csv",
+            settings.price_dir / "raw_market_price.csv",
+        ]
+        has_existing = any(f.is_file() for f in target_files)
+        if not has_existing:
+            for d in target_dirs:
+                if d.is_dir() and (any(d.glob("*.csv")) or any(d.glob("*.parquet"))):
+                    has_existing = True
+                    break
+
+        if has_existing:
+            if not confirm_dialog(
+                self,
+                t.get("dwh_dlg_sample_confirm_title", "샘플 데이터 생성 확인"),
+                t.get(
+                    "dwh_dlg_sample_confirm_body",
+                    "기존 원천 데이터(마스터 또는 P&L 등)가 이미 존재합니다.\n샘플 데이터 생성 시 기존 대상 파일은 자동 백업(.bak)되며, 샘플 파일이 빌드에 우선 반영될 수 있습니다.\n계속 진행하시겠습니까?",
+                ),
+            ):
+                return
+
+        # Safely archive existing active CSV/Parquet files in all 4 source directories with rollback capability
+        moved_files: list[tuple[Path, Path]] = []
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            for folder in target_dirs:
+                if folder.is_dir():
+                    for f in list(folder.glob("*.csv")) + list(folder.glob("*.parquet")):
+                        if ".bak_" not in f.name and not f.name.endswith(".tmp"):
+                            bak_path = _make_unique_backup_path(f, timestamp)
+                            shutil.move(str(f), str(bak_path))
+                            moved_files.append((f, bak_path))
+
+            from src.sample_data import generate_sample_data
+
+            generate_sample_data(
+                masters_dir=settings.masters_dir,
+                pnl_dir=settings.pnl_dir,
+                inv_dir=settings.inventory_dir,
+                price_dir=settings.price_dir,
+            )
+        except Exception as e:
+            # Rollback: restore all moved backup files in reverse order.
+            # If generate_sample_data wrote an incomplete new file at orig before failing,
+            # remove that incomplete file first so orig is cleanly restored from the backup.
+            for orig, bak in reversed(moved_files):
+                try:
+                    if bak.is_file():
+                        if orig.is_file():
+                            orig.unlink()
+                        shutil.move(str(bak), str(orig))
+                except Exception:
+                    pass
+
+            self._check_source_files()
+
+            if isinstance(e, PermissionError):
+                msg = t.get(
+                    "dwh_dlg_file_lock_err",
+                    "파일이 Excel 등 다른 프로그램에서 열려 있어 접근할 수 없습니다.\n파일을 닫고 다시 시도해 주세요:\n{err}",
+                ).format(err=str(e))
+            else:
+                msg = str(e)
+            error_dialog(
+                self,
+                t.get("dwh_dlg_sample_fail_title", "샘플 생성 실패"),
+                msg,
+            )
+        else:
+            self._check_source_files()
+            info_dialog(
+                self,
+                t.get("dwh_dlg_sample_success_title", "샘플 데이터 생성 완료"),
+                t.get("dwh_dlg_sample_success_msg", "테스트용 공식 마스터 2종과 100+ 컬럼 P&L 실적 데이터가 생성되었습니다."),
             )
 
     def _on_open_source_folder(self) -> None:
@@ -571,16 +858,12 @@ class DwhPipelineTab(QWidget):
     # -----------------------------------------------------------------
     def _on_run_dwh_pipeline(self) -> None:
         """Trigger complete DWH pipeline execution in background thread."""
-        self.btn_run_dwh.setEnabled(False)
-        self.btn_download_template.setEnabled(False)
-        self.btn_gen_sample.setEnabled(False)
-        self.btn_refresh.setEnabled(False)
-        self.btn_preview_mart.setEnabled(False)
+        self._set_running(True)
         self.error_frame.setVisible(False)
         self.progress_bar.setValue(0)
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
 
-        def worker_task(callbacks: JobCallbacks) -> dict:
+        def worker_task(report: ProgressCallback) -> dict:
             import duckdb
             start_time = time.time()
             settings = load_settings()
@@ -591,23 +874,23 @@ class DwhPipelineTab(QWidget):
                 con.execute("BEGIN TRANSACTION;")
 
                 # Step 1: Staging
-                callbacks.on_progress(1, 5, t.get("dwh_step1_name", "1. 법인 격리 및 Staging 추출"))
+                report(1, t.get("dwh_step1_name", "1. 법인 격리 및 Staging 추출"))
                 extractor = DataExtractor(settings=settings, con=con)
                 extractor.extract_all()
 
                 # Step 2: Dimensions
-                callbacks.on_progress(2, 5, t.get("dwh_step2_name", "2. 마스터 Conformed 차원 빌드"))
+                report(2, t.get("dwh_step2_name", "2. 마스터 Conformed 차원 빌드"))
                 dim_builder = DimensionBuilder(settings=settings, con=con)
                 dim_builder.build_all()
 
                 # Step 3 & 4: Fact Builder (Anti-join & Roll-up)
-                callbacks.on_progress(3, 5, t.get("dwh_step3_name", "3. Anti-Join 외래키 무결성 검증"))
-                callbacks.on_progress(4, 5, t.get("dwh_step4_name", "4. 114개 계정 롤업 및 손익 계산"))
+                report(3, t.get("dwh_step3_name", "3. Anti-Join 외래키 무결성 검증"))
+                report(4, t.get("dwh_step4_name", "4. 114개 계정 롤업 및 손익 계산"))
                 fact_builder = FactBuilder(settings=settings, account_rules=rules, con=con)
                 fact_stats = fact_builder.build_fact_pnl()
 
                 # Step 5: Loader & Parquet Export
-                callbacks.on_progress(5, 5, t.get("dwh_step5_name", "5. AI OBT 뷰 및 Parquet 발행"))
+                report(5, t.get("dwh_step5_name", "5. AI OBT 뷰 및 Parquet 발행"))
                 loader = DwhLoader(settings=settings, con=con)
                 loader_stats = loader.run_all()
 
@@ -630,29 +913,27 @@ class DwhPipelineTab(QWidget):
             finally:
                 con.close()
 
-        def on_progress(current: int, total: int, status: str) -> None:
+        def on_progress(current: int, status: str) -> None:
             self.progress_bar.setValue(current)
+            t_curr = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
             if current >= 1:
-                self.lbl_step1.setText(f"✔ {t.get('dwh_step1_name', '1. Staging')}")
+                self.lbl_step1.setText(f"✔ {t_curr.get('dwh_step1_name', '1. Staging')}")
                 self.lbl_step1.setStyleSheet("color: #0E7490; font-weight: bold;")
             if current >= 2:
-                self.lbl_step2.setText(f"✔ {t.get('dwh_step2_name', '2. Dimensions')}")
+                self.lbl_step2.setText(f"✔ {t_curr.get('dwh_step2_name', '2. Dimensions')}")
                 self.lbl_step2.setStyleSheet("color: #0E7490; font-weight: bold;")
             if current >= 3:
-                self.lbl_step3.setText(f"✔ {t.get('dwh_step3_name', '3. Integrity')}")
+                self.lbl_step3.setText(f"✔ {t_curr.get('dwh_step3_name', '3. Integrity')}")
                 self.lbl_step3.setStyleSheet("color: #0E7490; font-weight: bold;")
             if current >= 4:
-                self.lbl_step4.setText(f"✔ {t.get('dwh_step4_name', '4. Fact P&L')}")
+                self.lbl_step4.setText(f"✔ {t_curr.get('dwh_step4_name', '4. Fact P&L')}")
                 self.lbl_step4.setStyleSheet("color: #0E7490; font-weight: bold;")
             if current >= 5:
-                self.lbl_step5.setText(f"✔ {t.get('dwh_step5_name', '5. OBT View & Parquet')}")
+                self.lbl_step5.setText(f"✔ {t_curr.get('dwh_step5_name', '5. OBT View & Parquet')}")
                 self.lbl_step5.setStyleSheet("color: #0E7490; font-weight: bold;")
 
         def on_success(result: dict) -> None:
-            self.btn_run_dwh.setEnabled(True)
-            self.btn_download_template.setEnabled(True)
-            self.btn_gen_sample.setEnabled(True)
-            self.btn_refresh.setEnabled(True)
+            t_curr = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
             settings = result["settings"]
             loader_stats = result["loader_stats"]
             fact_stats = result["fact_stats"]
@@ -660,23 +941,21 @@ class DwhPipelineTab(QWidget):
 
             parquet_file = settings.mart_export_dir / "v_ai_pnl_summary.parquet"
             self._last_parquet_path = parquet_file
+            self._set_running(False)
             size_kb = parquet_file.stat().st_size / 1024 if parquet_file.exists() else 0
 
             self.lbl_parquet_ready.setText(
-                t.get("dwh_parquet_ready", "✔ {name} ({rows:,} rows, {size})").format(
+                t_curr.get("dwh_parquet_ready", "✔ {name} ({rows:,} rows, {size})").format(
                     name=parquet_file.name,
                     rows=loader_stats.total_obt_rows,
                     size=f"{size_kb:.1f} KB",
                 ) + f" - {elapsed:.2f}s"
             )
             self.lbl_parquet_ready.setStyleSheet("color: #047857; font-weight: bold;")
-            self.btn_preview_mart.setEnabled(True)
-            self.btn_copy_parquet_path.setEnabled(True)
-            self.btn_copy_mcode.setEnabled(True)
 
             # Update step 4 text with actual numbers
             self.lbl_step4.setText(
-                t.get("dwh_step4_summary", "✔ 4. Revenue: {rev:,.0f} {cur} | OP: {op:,.0f} {cur}").format(
+                t_curr.get("dwh_step4_summary", "✔ 4. Revenue: {rev:,.0f} {cur} | OP: {op:,.0f} {cur}").format(
                     rev=fact_stats.total_gross_revenue_reporting,
                     op=fact_stats.total_operating_profit_reporting,
                     cur=settings.reporting_currency,
@@ -684,8 +963,8 @@ class DwhPipelineTab(QWidget):
             )
             info_dialog(
                 self,
-                t.get("dwh_dlg_build_success_title", "DWH 빌드 완료"),
-                t.get("dwh_dlg_build_success_msg", "").format(
+                t_curr.get("dwh_dlg_build_success_title", "DWH 빌드 완료"),
+                t_curr.get("dwh_dlg_build_success_msg", "").format(
                     elapsed=elapsed,
                     rows=loader_stats.total_obt_rows,
                     name=parquet_file.name,
@@ -693,10 +972,8 @@ class DwhPipelineTab(QWidget):
             )
 
         def on_error(err: Exception) -> None:
-            self.btn_run_dwh.setEnabled(True)
-            self.btn_download_template.setEnabled(True)
-            self.btn_gen_sample.setEnabled(True)
-            self.btn_refresh.setEnabled(True)
+            self._set_running(False)
+            t_curr = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
             err_str = str(err)
 
             # Find latest dumped error CSV if fail-fast occurred and extract unmapped code hints
@@ -725,22 +1002,29 @@ class DwhPipelineTab(QWidget):
 
             self.lbl_err_msg.setText(err_str + unmapped_hint)
             self.error_frame.setVisible(True)
-            self.btn_open_err_log.setEnabled(bool(self._last_error_log))
+            self._apply_error_log_gate()
             self.btn_open_masters.setEnabled(True)
 
             error_dialog(
                 self,
-                t.get("dwh_dlg_build_fail_title", "파이프라인 실행 중단 (Fail-Fast)"),
-                t.get("dwh_dlg_build_fail_msg", "데이터 무결성 검증 실패:\n\n{error}").format(error=err_str),
+                t_curr.get("dwh_dlg_build_fail_title", "파이프라인 실행 중단 (Fail-Fast)"),
+                t_curr.get("dwh_dlg_build_fail_msg", "데이터 무결성 검증 실패:\n\n{error}").format(error=err_str),
             )
 
+        callbacks = JobCallbacks(
+            on_progress=on_progress,
+            on_success=on_success,
+            on_error=on_error,
+            on_finished=lambda: None,
+        )
         if self.job_runner:
-            self.job_runner.run_job(worker_task, on_success, on_error, on_progress)
+            started = self.job_runner.start("dwh_pipeline", worker_task, callbacks)
+            if not started:
+                self._set_running(False)
         else:
-            # Synchronous fallback
-            cb = JobCallbacks(on_progress=on_progress)
+            # Fallback for headless/unit-test environments where job_runner is explicitly None
             try:
-                res = worker_task(cb)
+                res = worker_task(on_progress)
                 on_success(res)
             except Exception as e:
                 on_error(e)
@@ -766,11 +1050,21 @@ class DwhPipelineTab(QWidget):
 
         self.card_pipeline.set_title(t.get("dwh_card2_title", "2. DWH 빌드 및 무결성 검증 (Kimball Star Schema)"))
         self.btn_run_dwh.setText(t.get("dwh_btn_build", "★ 1-Click DWH 파이프라인 전체 빌드"))
-        self.lbl_step1.setText(f"○ {t.get('dwh_step1_name', '1. Staging')}")
-        self.lbl_step2.setText(f"○ {t.get('dwh_step2_name', '2. Dimensions')}")
-        self.lbl_step3.setText(f"○ {t.get('dwh_step3_name', '3. Integrity')}")
-        self.lbl_step4.setText(f"○ {t.get('dwh_step4_name', '4. Fact P&L')}")
-        self.lbl_step5.setText(f"○ {t.get('dwh_step5_name', '5. OBT View & Parquet')}")
+        cur_progress = self.progress_bar.value() if self._is_running else 0
+        step_labels = (
+            (1, self.lbl_step1, "dwh_step1_name", "1. Staging"),
+            (2, self.lbl_step2, "dwh_step2_name", "2. Dimensions"),
+            (3, self.lbl_step3, "dwh_step3_name", "3. Integrity"),
+            (4, self.lbl_step4, "dwh_step4_name", "4. Fact P&L"),
+            (5, self.lbl_step5, "dwh_step5_name", "5. OBT View & Parquet"),
+        )
+        for step_idx, lbl, key, default in step_labels:
+            prefix = "✔ " if cur_progress >= step_idx else "○ "
+            lbl.setText(f"{prefix}{t.get(key, default)}")
+            if cur_progress >= step_idx:
+                lbl.setStyleSheet("color: #0E7490; font-weight: bold;")
+            else:
+                lbl.setStyleSheet("color: #666666;")
 
         self.lbl_err_title.setText(t.get("dwh_err_fk_title", "외래키 무결성 위반 (미등록 마스터 코드 발견)"))
         self.btn_open_masters.setText(t.get("dwh_btn_open_masters", "📝 마스터 폴더 열기 (코드 추가)"))
@@ -786,5 +1080,10 @@ class DwhPipelineTab(QWidget):
 
         self.lbl_guide_title.setText(t.get("dwh_excel_guide_title", "📌 Microsoft Excel 연결 방법 (1분 완성):"))
         self.lbl_guide_text.setText(t.get("dwh_excel_guide_text", ""))
+        self.lbl_empty_title.setText(t.get("dwh_empty_state_title", ""))
+        self.lbl_empty_body.setText(t.get("dwh_empty_state_body", ""))
+        self.lbl_empty_safe.setText(t.get("dwh_empty_state_safe", ""))
+        self._apply_error_log_gate()
+        self._set_running(self._is_running)
 
         self._check_source_files()

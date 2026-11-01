@@ -14,7 +14,7 @@ from src.dimension_builder import DimensionBuilder
 from src.extractor import DataExtractor
 from src.fact_builder import FactBuilder
 from src.loader import DwhLoader
-from scripts.generate_sample_data import generate_sample_data
+from src.sample_data import generate_sample_data
 
 
 class TestDwhCorePipeline(unittest.TestCase):
