@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +23,14 @@ def atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        for delay in (0.05, 0.15, 0.35, None):
+            try:
+                os.replace(temporary, path)
+                break
+            except OSError as exc:
+                if os.name != 'nt' or getattr(exc, 'winerror', None) not in (5, 32, 33) or delay is None:
+                    raise
+                time.sleep(delay)
     finally:
         if temporary is not None:
             try:

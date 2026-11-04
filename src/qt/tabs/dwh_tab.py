@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +40,7 @@ from src.qt.dialogs import (
     save_file_dialog,
 )
 from src.qt.widgets.card import CardWidget
+from src.qt.widgets.mart_workspace import MartWorkspace
 from src.qt.widgets.dwh_guide_dialog import DwhGuideDialog
 from src.qt.widgets.dwh_preview_dialog import DwhPreviewDialog
 from src.qt.ui_state import set_button_enabled_with_nudge
@@ -320,6 +322,29 @@ class DwhPipelineTab(QWidget):
 
         scroll.setWidget(content_widget)
         outer_layout.addWidget(scroll, stretch=1)
+
+        # Keep every legacy widget and callback intact inside the same top-level tab.
+        legacy = QWidget()
+        legacy_layout = QVBoxLayout(legacy)
+        while outer_layout.count():
+            item = outer_layout.takeAt(0)
+            if item.widget():
+                legacy_layout.addWidget(item.widget())
+            elif item.layout():
+                legacy_layout.addLayout(item.layout())
+        self.workspace_stack = QStackedWidget()
+        self.mart_workspace = MartWorkspace(self.language_code, self.job_runner)
+        self.workspace_stack.addWidget(self.mart_workspace)
+        self.workspace_stack.addWidget(legacy)
+        self.btn_workspace = QPushButton()
+        self.btn_legacy = QPushButton()
+        self.btn_workspace.clicked.connect(lambda: self.workspace_stack.setCurrentIndex(0))
+        self.btn_legacy.clicked.connect(lambda: self.workspace_stack.setCurrentIndex(1))
+        switch = QHBoxLayout()
+        switch.addWidget(self.btn_workspace)
+        switch.addWidget(self.btn_legacy)
+        outer_layout.addLayout(switch)
+        outer_layout.addWidget(self.workspace_stack, stretch=1)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -1034,6 +1059,14 @@ class DwhPipelineTab(QWidget):
     # -----------------------------------------------------------------
     def apply_language(self, lang_code: str) -> None:
         self.language_code = lang_code
+        self.mart_workspace.apply_language(lang_code)
+        titles = {
+            "ko": ("범용 작업 공간", "기존 손익 마트"),
+            "en": ("Flexible workspace", "Existing P&L mart"),
+            "pl": ("Elastyczny obszar pracy", "Dotychczasowy model wyników"),
+        }
+        self.btn_workspace.setText(titles.get(lang_code, titles["en"])[0])
+        self.btn_legacy.setText(titles.get(lang_code, titles["en"])[1])
         t = _UI_TEXT.get(lang_code, _UI_TEXT["ko"])
 
         self.banner_guide.setText(t.get("dwh_guide_step1", "💡 진행 순서: [1단계] 마스터 및 P&L 원천 확인 ➔ [2단계] DWH 빌드 ➔ [3단계] Excel Power Query 연동"))

@@ -5,7 +5,7 @@
 ## 1. 앱 실행과 버전
 
 - 기본 UI: PySide6(Qt), `src/qt/`의 네 가지 업무 탭.
-- 화면 순서: 집계·슬라이서 → 데이터셋 배포 → 프로모션 → CSV 복구. Qt의 번역은 화면 위치가 아닌 실제 위젯과 업무 ID에 연결하며 Tkinter 호환 UI도 같은 순서입니다.
+- Qt 화면 순서: DWH → 데이터셋 배포(Publisher) → 집계(Slicer) → 데이터 정제 도구(Data Prep). 마지막 탭 안에 CSV 복구와 프로모션이 있으며 기존 위젯 별칭과 레거시 Tkinter 경로를 보존합니다.
 - 정제 탭 등 후속 제품 제안은 `docs/DATA_PREPARATION_ROADMAP.md`에서 관리합니다. 제안 기능과 현재 구현을 구분합니다.
 - A단계 첫 구현은 `data_aggregator.py`의 원본 경로 보호·엄격 수치 검사, Qt 숫자 표기 선택과 `preset_manager.py`의 표기 저장입니다. 동작·검증 경계는 `docs/PHASE_A_SAFETY_REVIEW.md`를 따릅니다.
 - 개발 실행: `python -m src.data_refinery` 또는 `run_app.bat`.
@@ -35,8 +35,12 @@
 flowchart TD
     Entry[src/data_refinery.py main] --> QtApp[src/qt/app.py]
     QtApp --> Window[src/qt/main_window.py MainWindow]
-    Window --> Csv[src/qt/tabs/csv_tab.py]
-    Window --> Promo[src/qt/tabs/promotion_tab.py]
+    Window --> DWH[src/qt/tabs/dwh_tab.py]
+    DWH --> Mart[src/qt/widgets/mart_workspace.py]
+    Mart --> MartEngine[src/mart/engine.py]
+    Window --> Tools[src/qt/tabs/data_tools_tab.py]
+    Tools --> Csv[src/qt/tabs/csv_tab.py]
+    Tools --> Promo[src/qt/tabs/promotion_tab.py]
     Window --> Agg[src/qt/tabs/aggregator/tab.py]
     Window --> Publisher[src/qt/tabs/dataset/tab.py]
     Csv --> CsvEngine[src/csv_processing.py]
@@ -52,6 +56,14 @@ flowchart TD
 ```
 
 ## 4. 주요 모듈 책임과 변경 계약
+
+범용 마트는 `src/mart/model.py` 모델, `storage.py` 공간 표식·잠금, `engine.py` 범위 적재·실제 카탈로그·대사·후보 승인, `capacity.py` 자원 사전 점검, `publication.py` 조건부 SharePoint 게시, `excel.py` SharePoint M 안내로 구성됩니다. UI는 `src/qt/widgets/mart_workspace.py`이며 DWH의 기존 화면을 보존합니다. 작업 DB·원본 보관·후보·토큰이 없는 로컬 배포 설정은 `UserSetting/datasets/mart_workspaces/<작업>/`에 둡니다. Excel M 안내는 연결된 XLSX를 생성하지 않습니다. 회사 권한과 다른 사용자 Excel 새로고침은 별도 검증 대상입니다.
+
+기간은 유효한 ISO 월 또는 날짜로 작업 공간 내 입도를 고정하고 출력 경계도 일치시킵니다. 범위·입력·모델 변경과 적재 시도 후 UI 완성/빈 범위 선언을 지웁니다. Excel 안내 생성은 작업 공간 잠금 아래 승인·후보 무결성·리비전·모델·세대를 검증한 매니페스트 열과 저장된 대상에 결속됩니다. 모델 및 UI 설정은 공통 원자 저장을 사용하며 적재 완료 후 편의 설정 저장 실패는 별도 경고합니다.
+
+표본·출력에서는 팩트의 기간·분할·행 기준이 동명 Type1 차원 속성보다 우선합니다. 후보 매니페스트의 출력 의미 버전과 현재 모델 해시·기간 경계는 승인·안내·로컬/원격 게시 전에 검증합니다. 의미 버전이 없거나 이전인 후보는 보존하고 새 후보 생성과 재승인을 요구합니다.
+
+공유 열의 표본·출력 우선순위는 팩트 → 모든 차원의 자연키 → 차원 속성입니다. 같은 역할의 중복은 선언 순서상 첫 차원이 담당합니다. 출력 의미 버전 2 미만은 재생성해야 하며, Excel M 안내는 가로형 후보로 제한합니다. `ui.json`의 인식된 필드가 잘못된 구조나 값이면 원본을 보존하고 편의 설정만 기본값으로 열어 별도 경고합니다.
 
 | 모듈 | 책임 | 변경 시 주의 |
 | --- | --- | --- |

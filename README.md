@@ -14,7 +14,19 @@
 
 In everyday operations, finance and sales administrative teams frequently receive messy CSV files, broken encodings, and complex promotion tables. The primary purpose of Data Refinery is to automate the repair of malformed rows, correctly parse regional number formats (such as European comma decimals), and produce consistent daily time-series or summary tables that feed directly into management reports.
 
-## Current capabilities (v2.0.1)
+## Development source (v2.7.0, unreleased)
+
+The current source adds a flexible single-fact mart workspace inside the DWH tab. Select UTF-8 CSV files, assign period, row grain, dimensions and additive measures, declare a complete scope, then load new or corrected periods. Inspect actual keys and relationships, samples and exact reconciliation before creating, reviewing and approving a purpose-specific CSV. An approved candidate can be published locally or to an approved SharePoint destination; remote readback, unverified uploads and consumer refresh are separate states.
+
+Periods must use valid ISO months or dates consistently within a workspace; output bounds must use the same granularity. Completeness and intentionally empty-scope declarations apply to the current inputs and scope only and must be renewed after changes or an attempt. Excel connection guidance uses the selected, still-current approved candidate and its saved destination.
+
+Fact period, partition and row-grain values remain tied to their original rows even when a dimension attribute changes. Earlier CSV candidates created before this output-semantics correction must be recreated and approved again; they are retained but cannot be republished under the current contract.
+
+When source columns are shared by dimensions, fact values take precedence, followed by dimension natural keys and then attributes. If multiple attributes use the same source column, the first declared dimension supplies it. This contract is recorded in output semantics version 2; older candidates require recreation and approval. Excel connection guidance currently supports wide CSV candidates only.
+
+The tested resource profile and free-space checks limit operations; they are estimates, not maximum DuckDB capacity or space guarantees. Only additive SUM measures are supported. Inventory balances and ratios need a separate period/measure design; multi-period inventory analysis is not claimed. SharePoint requires an approved tenant/client and a signed-in user. The author can copy the generated SharePoint Power Query guide, create and save a connected Excel workbook, then share it for recipients to refresh with their own accounts. The guide itself is not a connected workbook. Company authorization and recipient-PC refresh remain field verification. No release, signature or installed-app update is implied by these development changes.
+
+## Existing capabilities
 
 - **Modern PySide6 (Qt) Desktop UI** — Completely transitioned from legacy Tkinter to a
   modern, DPI-aware design system (Primary Blue theme, dark header, modern cards, badges, steppers)

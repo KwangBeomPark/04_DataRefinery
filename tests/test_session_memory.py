@@ -5,7 +5,9 @@ the user's real AppData store is never read or written.
 """
 
 import json
+import io
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +34,22 @@ class TestSessionMemory(unittest.TestCase):
         self.addCleanup(patcher.stop)
         self.addCleanup(self.temp_dir.cleanup)
 
+        self.write_errors = []
+        original_write = session_memory._atomic_write_text
+
+        def observed_write(*args, **kwargs):
+            try:
+                return original_write(*args, **kwargs)
+            except OSError as exc:
+                diagnostic = (self.id(), type(exc).__name__, exc.errno, getattr(exc, "winerror", None))
+                self.write_errors.append(diagnostic)
+                print(f"session-memory write error: {diagnostic!r}", file=sys.stderr)
+                raise
+
+        write_patcher = patch.object(session_memory, "_atomic_write_text", observed_write)
+        write_patcher.start()
+        self.addCleanup(write_patcher.stop)
+
         self.source = str(self.root / "월별실적원장.csv")
         self.configuration = {
             "group_by_keys": ["디비전", "모델"],
@@ -42,6 +60,18 @@ class TestSessionMemory(unittest.TestCase):
 
     def _raw_entries(self):
         return json.loads(self.store_file.read_text(encoding="utf-8"))["entries"]
+
+    def test_write_error_diagnostic_preserves_exception_without_path(self):
+        blocker = self.root / "private-path"
+        blocker.write_text("x", encoding="utf-8")
+        output = io.StringIO()
+        with patch("sys.stderr", output):
+            with self.assertRaises(OSError):
+                session_memory._atomic_write_text(blocker / "file", "private-content")
+        self.assertEqual(len(self.write_errors), 1)
+        self.assertIn(self.id(), output.getvalue())
+        self.assertNotIn(str(self.root), output.getvalue())
+        self.assertNotIn("private-content", output.getvalue())
 
     def test_remember_then_recall_round_trip(self):
         remember(self.source, self.configuration)

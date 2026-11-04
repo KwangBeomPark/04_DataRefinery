@@ -37,6 +37,14 @@ from src.version import __version__
 class MainWindow(QMainWindow):
     """Main desktop application window for Data Refinery."""
 
+    def closeEvent(self, event):
+        # The worker owns the connection and may be at the commit boundary.
+        if self.tab_dwh.mart_workspace._busy:
+            event.ignore()
+            self.tab_dwh.mart_workspace.status.setText(self.tab_dwh.mart_workspace.t(68))
+            return
+        super().closeEvent(event)
+
     @staticmethod
     def _resource_path(relative_path: str) -> str:
         bundle_root = getattr(sys, "_MEIPASS", None)

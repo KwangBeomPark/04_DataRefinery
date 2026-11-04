@@ -9,6 +9,7 @@
 | **앱 설치: 실행 파일·번들 라이브러리·제거 프로그램** | **`%LOCALAPPDATA%\Programs\Data Refinery`** |
 | 업데이트 설정·최근 작업·진단 로그 | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting` |
 | 데이터셋 설정·DuckDB 작업 DB | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting\datasets` |
+| 범용 마트 작업 공간 | `%LOCALAPPDATA%\Programs\Data Refinery\UserSetting\datasets\mart_workspaces\<작업>` |
 | 분석용 공개 CSV·Excel 템플릿 | 사용자가 지정한 공유 배포 폴더 |
 
 설치 설정의 기준은 `installer/setup.iss`의
@@ -20,6 +21,8 @@
 덮어쓰지 않습니다. DB 사용 중·WAL 존재·복사 실패·자료 변경은 이관을 차단합니다.
 완료 표식으로 반복 이관을 방지합니다. 설치 AppId와 공유 CSV 경로도 유지합니다.
 `UserSetting`은 설치 번들에서 제외하고 앱 제거 시 보존합니다.
+
+범용 마트 폴더의 `workspace.json`은 소유권, `model.json`은 모델, `mart.duckdb`와 WAL은 활성 DB를 나타냅니다. `inputs/`에는 해시로 식별되는 원본 사본, `exports/<후보>/`에는 후보 CSV·매니페스트·승인 기록, `ui.json`에는 예산과 로컬 배포 프로필·후보별 대상이 저장됩니다. 인증 토큰은 저장하지 않습니다. 이 자료는 사용자 소유이며 Git·공개 배포물에 포함하지 않습니다. 감사 사본은 복원 시험을 거친 전체 백업과 다릅니다.
 
 ## 파일 이름
 
