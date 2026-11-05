@@ -478,6 +478,125 @@ class TestMartModelWizard(unittest.TestCase):
             self.assertIsNotNone(widget.model)
             self.assertEqual(widget.model.source_delimiter, "\t")
 
+
+    def test_step3_row_key_modes_auto_composite_and_single(self):
+        """Verify Auto Surrogate Key, Composite Key, and Single Key modes in Step 3."""
+        dlg = MartModelWizardDialog(None, self.csv_path, language_code="ko")
+        dlg.stack.setCurrentIndex(2)  # Step 3: Fact & Measures
+
+        # 1. CSV with dedicated slip key initializes in 'single' mode
+        self.assertEqual(dlg.row_key_mode, "single")
+        self.assertEqual(dlg.selected_row_keys, ["전표번호"])
+
+        # 2. Switch to 'auto' (Surrogate Key combination from period + dim keys)
+        dlg.cmb_row_key_mode.setCurrentIndex(dlg.cmb_row_key_mode.findData("auto"))
+        self.assertEqual(dlg.row_key_mode, "auto")
+        # Clear any old single assignments to test pure auto derivation
+        for a in dlg.assignments:
+            if a.role == "row_key":
+                a.role = ROLE_EXCLUDED
+        auto_keys = dlg._get_effective_row_keys()
+        self.assertTrue(len(auto_keys) >= 1)
+        self.assertIn("기준년월", auto_keys)
+        # Verify Step 4 passes validation automatically
+        dlg._refresh_step4_view()
+        self.assertIsNotNone(dlg.final_model)
+        self.assertIn(dlg.t["validation_passed"], dlg.lbl_validation_status.text())
+
+        # 3. Mode: Composite (User chooses multiple specific columns)
+        dlg.cmb_row_key_mode.setCurrentIndex(dlg.cmb_row_key_mode.findData("composite"))
+        self.assertEqual(dlg.row_key_mode, "composite")
+        dlg.selected_row_keys = ["기준년월", "상품코드"]
+        eff_keys = dlg._get_effective_row_keys()
+        self.assertEqual(eff_keys, ["기준년월", "상품코드"])
+        dlg._refresh_step4_view()
+        self.assertIsNotNone(dlg.final_model)
+        self.assertEqual(dlg.final_model.row_key_columns, ("기준년월", "상품코드"))
+
+        # 4. Mode: Single Column
+        dlg.cmb_row_key_mode.setCurrentIndex(dlg.cmb_row_key_mode.findData("single"))
+        self.assertEqual(dlg.row_key_mode, "single")
+        idx = dlg.cmb_single_row_key.findData("전표번호")
+        if idx >= 0:
+            dlg.cmb_single_row_key.setCurrentIndex(idx)
+            single_keys = dlg._get_effective_row_keys()
+            self.assertEqual(single_keys, ["전표번호"])
+            dlg._refresh_step4_view()
+            self.assertIsNotNone(dlg.final_model)
+            self.assertEqual(dlg.final_model.row_key_columns, ("전표번호",))
+
+        dlg.close()
+
+
+    def test_model_to_assignments_preserves_shared_dimension_keys(self):
+        """Regression test for Codex P1: model_to_assignments must preserve dimension keys when shared with row keys."""
+        from src.mart.auto_guess import model_to_assignments
+        from src.mart.model import Dimension, MartModel, Measure
+
+        dim = Dimension("Customer", ("CustCode",), ("CustName",))
+        meas = Measure("Amt", "Revenue", "value", 18, 2, "KRW", "sum")
+        model = MartModel(
+            name="test_mart",
+            fact_table="fact_sales",
+            dimensions=(dim,),
+            measures=(meas,),
+            period_column="Period",
+            partition_columns=(),
+            row_key_columns=("Period", "CustCode"),
+            excluded_columns=(),
+            version="1",
+        )
+        all_cols = ["Period", "CustCode", "CustName", "Revenue"]
+        asgns = model_to_assignments(model, all_cols)
+
+        # CustCode must be assigned as ROLE_DIM_KEY, NOT hijacked as standalone row_key
+        cust_asgn = next(a for a in asgns if a.column_name == "CustCode")
+        self.assertEqual(cust_asgn.role, ROLE_DIM_KEY)
+        self.assertEqual(cust_asgn.dimension_name, "Customer")
+
+        # Period must remain ROLE_PERIOD
+        period_asgn = next(a for a in asgns if a.column_name == "Period")
+        self.assertEqual(period_asgn.role, ROLE_PERIOD)
+
+    def test_capacity_max_8_row_keys_enforced(self):
+        """Regression test for Opus High 2 & Codex P1: capacity constraint 1 <= len(row_keys) <= 8."""
+        from src.mart.auto_guess import ColumnAssignment, assignments_to_model
+
+        # 9 row keys should be rejected
+        nine_keys = [f"k{i}" for i in range(9)]
+        asgns = [
+            ColumnAssignment(column_name="dt", role=ROLE_PERIOD),
+            ColumnAssignment(column_name="k0", role=ROLE_DIM_KEY, dimension_name="d0"),
+            ColumnAssignment(column_name="m1", role=ROLE_MEASURE, measure_kind="value"),
+        ]
+        for k in nine_keys:
+            if k != "k0":
+                asgns.append(ColumnAssignment(column_name=k, role=ROLE_EXCLUDED))
+
+        with self.assertRaises(ValueError) as ctx:
+            assignments_to_model(
+                asgns,
+                model_name="test",
+                fact_table="fact",
+                period_column="dt",
+                row_key_columns=nine_keys,
+            )
+        self.assertIn("cannot exceed 8", str(ctx.exception))
+
+    def test_sample_duplicate_preflight_warning(self):
+        """Regression test for Opus High 1 & Codex P1: preflight sample duplicate detection in Step 4."""
+        dlg = MartModelWizardDialog(None, self.csv_path, language_code="ko")
+        dlg.stack.setCurrentIndex(2)
+
+        # Set composite key to just '기준년월' which repeats across multiple transactions in sample_rows
+        dlg.cmb_row_key_mode.setCurrentIndex(dlg.cmb_row_key_mode.findData("composite"))
+        dlg.composite_keys = ["기준년월"]
+        dlg._refresh_step4_view()
+
+        # Step 4 should display the duplicate warning advisory badge
+        self.assertIn("표본 데이터 중복 주의", dlg.lbl_validation_status.text())
+        dlg.close()
+
 if __name__ == "__main__":
     unittest.main()
 

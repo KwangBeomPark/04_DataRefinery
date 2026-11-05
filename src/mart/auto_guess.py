@@ -475,9 +475,42 @@ def assignments_to_model(
     period_column: str,
     source_delimiter: str = ",",
     source_encoding: str = "utf-8-sig",
+    row_key_columns: Optional[Sequence[str]] = None,
 ) -> MartModel:
-    """Construct and validate a MartModel from a finalized assignment list."""
-    dimensions, measures, partitions, row_keys, excluded = _build_components_from_assignments(assignments)
+    """Construct and validate a MartModel from a finalized assignment list.
+
+    If explicit row_key_columns are provided, they take precedence.
+    Otherwise, assigned row keys are used. If still empty, automatically
+    derives a surrogate composite grain from the period column and all dimension keys.
+    """
+    dimensions, measures, partitions, assigned_row_keys, excluded = _build_components_from_assignments(assignments)
+
+    if row_key_columns is not None and len(row_key_columns) > 0:
+        effective_row_keys = tuple(row_key_columns)
+    elif assigned_row_keys:
+        effective_row_keys = tuple(assigned_row_keys)
+    else:
+        # Auto-derive surrogate grain from period + dimension keys
+        auto_keys = []
+        if period_column and period_column not in auto_keys:
+            auto_keys.append(period_column)
+        for d in dimensions:
+            for k in d.key_columns:
+                if k not in auto_keys:
+                    auto_keys.append(k)
+        effective_row_keys = tuple(auto_keys)
+
+    if len(effective_row_keys) > 8:
+        raise ValueError(f"Row key columns cannot exceed 8 (configured: {len(effective_row_keys)})")
+    if not effective_row_keys:
+        raise ValueError("Row key columns cannot be empty")
+
+    active_cols = {period_column, *partitions, *effective_row_keys, *(m.column for m in measures)}
+    for d in dimensions:
+        active_cols.update(d.key_columns)
+        active_cols.update(d.attributes)
+    clean_excluded = [a.column_name for a in assignments if a.column_name not in active_cols]
+
     model = MartModel(
         name=model_name,
         fact_table=fact_table,
@@ -485,8 +518,8 @@ def assignments_to_model(
         measures=tuple(measures),
         period_column=period_column,
         partition_columns=tuple(partitions),
-        row_key_columns=tuple(row_keys),
-        excluded_columns=tuple(excluded),
+        row_key_columns=effective_row_keys,
+        excluded_columns=tuple(clean_excluded),
         version="1",
         source_delimiter=source_delimiter,
         source_encoding=source_encoding,
@@ -528,38 +561,7 @@ def model_to_assignments(
             )
             claimed.add(c)
 
-    # Row keys
-    for c in model.row_key_columns:
-        if c in all_columns and c not in claimed:
-            result.append(
-                ColumnAssignment(
-                    column_name=c,
-                    role=ROLE_ROW_KEY,
-                    confidence=1.0,
-                    reason="저장된 행 고유키",
-                )
-            )
-            claimed.add(c)
-
-    # Measures
-    measure_map = {m.column: m for m in model.measures}
-    for c, m in measure_map.items():
-        if c in all_columns and c not in claimed:
-            result.append(
-                ColumnAssignment(
-                    column_name=c,
-                    role=ROLE_MEASURE,
-                    measure_kind=m.kind,
-                    measure_scale=m.scale,
-                    measure_precision=m.precision,
-                    measure_unit=m.unit,
-                    confidence=1.0,
-                    reason="저장된 측정값 (Measure)",
-                )
-            )
-            claimed.add(c)
-
-    # Dimensions
+    # Dimensions (Processed before row keys so shared dimension keys retain their dimension role)
     for dim in model.dimensions:
         for k in dim.key_columns:
             if k in all_columns and k not in claimed:
@@ -585,6 +587,37 @@ def model_to_assignments(
                     )
                 )
                 claimed.add(a)
+
+    # Measures
+    measure_map = {m.column: m for m in model.measures}
+    for c, m in measure_map.items():
+        if c in all_columns and c not in claimed:
+            result.append(
+                ColumnAssignment(
+                    column_name=c,
+                    role=ROLE_MEASURE,
+                    measure_kind=m.kind,
+                    measure_scale=m.scale,
+                    measure_precision=m.precision,
+                    measure_unit=m.unit,
+                    confidence=1.0,
+                    reason="저장된 측정값 (Measure)",
+                )
+            )
+            claimed.add(c)
+
+    # Standalone Row keys (only for columns not already claimed by period/partition/dimension)
+    for c in model.row_key_columns:
+        if c in all_columns and c not in claimed:
+            result.append(
+                ColumnAssignment(
+                    column_name=c,
+                    role=ROLE_ROW_KEY,
+                    confidence=1.0,
+                    reason="저장된 행 고유키",
+                )
+            )
+            claimed.add(c)
 
     # Excluded
     for c in model.excluded_columns:

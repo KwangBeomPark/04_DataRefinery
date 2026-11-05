@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPen
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGraphicsScene,
     QGraphicsView,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -82,6 +83,19 @@ WIZARD_TEXT = {
         "fact_table_label": "팩트 테이블명:",
         "period_label": "기준 분석 기간 (Period):",
         "row_key_label": "원천 행 고유키 (Row Grain):",
+        "row_key_group_title": "🔑 원천 행 고유키 / 식별 기준 (Row Grain)",
+        "row_key_mode_label": "식별 방식 선택:",
+        "row_key_mode_auto": "✨ [자동 조합] 차원 식별키 + 기간 조합 (기본 업무 복합키)",
+        "row_key_mode_composite": "🧩 [복합키 조합] 원하는 열 직접 조합 (Composite Key)",
+        "row_key_mode_single": "🏷️ [단일 열 지정] 특정 전표/일련번호 열 선택",
+        "row_key_auto_desc": "💡 기간({period}) 및 정의된 모든 차원의 식별키를 조합하여 유일한 행 식별 복합키(Composite Key)를 자동 구성합니다.<br><b>현재 자동 조합:</b> {keys}",
+        "warn_duplicate_sample_keys": "⚠️ 표본 데이터 중복 주의: 상위 {rows:,}개 행 중 동일한 행 식별키를 가진 행이 {dups:,}건 있습니다. 실제 적재 시 중복 오류가 발생할 수 있으므로 고유성을 보장하는 추가 열(전표/행번호 등)을 조합해 주세요.",
+        "err_too_many_row_keys": "행 식별키는 최대 8개까지 설정 가능합니다 (현재: {count}개).",
+        "row_key_comp_hint": "조합할 열을 체크하세요 (복수 선택 가능):",
+        "row_key_comp_clear": "선택 해제",
+        "row_key_comp_default": "차원키 일괄 선택",
+        "row_key_comp_preview": "선택된 복합키: {keys}",
+        "row_key_single_label": "식별키 열 선택:",
         "partition_label": "파티션/법인 격리 기준:",
         "add_dim": "+ 새 차원 추가",
         "del_dim": "- 선택 차원 삭제",
@@ -145,6 +159,19 @@ WIZARD_TEXT = {
         "fact_table_label": "Fact Table Name:",
         "period_label": "Analysis Period Column:",
         "row_key_label": "Row Grain Key:",
+        "row_key_group_title": "🔑 Row Grain Key / Primary Identity",
+        "row_key_mode_label": "Identity Mode:",
+        "row_key_mode_auto": "✨ [Auto Combination] Dimension Keys + Period Combination (Default Business Key)",
+        "row_key_mode_composite": "🧩 [Composite Key] Select Multiple Columns Combination",
+        "row_key_mode_single": "🏷️ [Single Column] Select Specific Voucher / ID Column",
+        "row_key_auto_desc": "💡 Automatically constructs a composite row key by combining period ({period}) and all dimension natural keys.<br><b>Active combination:</b> {keys}",
+        "warn_duplicate_sample_keys": "⚠️ Duplicate Key Warning: Found {dups:,} duplicate row keys among top {rows:,} sample rows. Load may fail unless additional granular columns are combined.",
+        "err_too_many_row_keys": "Row key columns cannot exceed 8 (currently: {count}).",
+        "row_key_comp_hint": "Check columns to combine (Multiple selection allowed):",
+        "row_key_comp_clear": "Clear All",
+        "row_key_comp_default": "Select Dimension Keys",
+        "row_key_comp_preview": "Selected Composite Key: {keys}",
+        "row_key_single_label": "Select Key Column:",
         "partition_label": "Partition / Entity Column:",
         "add_dim": "+ Add Dimension",
         "del_dim": "- Remove Dimension",
@@ -208,6 +235,19 @@ WIZARD_TEXT = {
         "fact_table_label": "Nazwa Tabeli Faktów:",
         "period_label": "Kolumna Okresu:",
         "row_key_label": "Klucz Wiersza:",
+        "row_key_group_title": "🔑 Klucz ziarna wiersza / Identyfikator podstawowy",
+        "row_key_mode_label": "Wybór trybu identyfikacji:",
+        "row_key_mode_auto": "✨ [Automatyczna kombinacja] Klucze wymiarów + Okres (Domyślny klucz biznesowy)",
+        "row_key_mode_composite": "🧩 [Klucz złożony] Własna kombinacja wielu kolumn",
+        "row_key_mode_single": "🏷️ [Pojedyncza kolumna] Wybierz numer dokumentu / ID",
+        "row_key_auto_desc": "💡 Automatycznie tworzy złożony klucz wiersza, łącząc okres ({period}) i klucze wymiarów.<br><b>Aktywna kombinacja:</b> {keys}",
+        "warn_duplicate_sample_keys": "⚠️ Uwaga na duplikaty: Znaleziono {dups:,} zduplikowanych kluczy wierszy w {rows:,} wierszach próbki.",
+        "err_too_many_row_keys": "Liczba kolumn klucza wiersza nie może przekraczać 8 (obecnie: {count}).",
+        "row_key_comp_hint": "Zaznacz kolumny do połączenia:",
+        "row_key_comp_clear": "Wyczyść",
+        "row_key_comp_default": "Wybierz klucze wymiarów",
+        "row_key_comp_preview": "Wybrany klucz złożony: {keys}",
+        "row_key_single_label": "Wybierz kolumnę klucza:",
         "partition_label": "Kolumna Partycji/Podmiotu:",
         "add_dim": "+ Dodaj Wymiar",
         "del_dim": "- Usuń Wymiar",
@@ -319,6 +359,9 @@ class MartModelWizardDialog(QDialog):
         self.detected_delimiter: str = ","
         self.fact_table_name: str = "fact_pnl"
         self.period_column_name: str = ""
+        self.row_key_mode: str = "auto"
+        self.composite_keys: List[str] = []
+        self.single_key: str = ""
         self.final_model: Optional[MartModel] = None
 
         if self.initial_model:
@@ -721,13 +764,106 @@ class MartModelWizardDialog(QDialog):
         period_box.addWidget(self.cmb_period)
         lay.addLayout(period_box)
 
-        # Row grain key selector (H2)
-        row_key_box = QHBoxLayout()
-        row_key_box.addWidget(QLabel(self.t["row_key_label"]))
-        self.cmb_row_key = QComboBox()
-        self.cmb_row_key.currentTextChanged.connect(self._on_row_key_changed)
-        row_key_box.addWidget(self.cmb_row_key)
-        lay.addLayout(row_key_box)
+        # Row grain key section (자동 대리키 / 복합키 조합 / 단일 열 지원)
+        self.row_grain_group = QGroupBox(self.t["row_key_group_title"])
+        self.row_grain_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                margin-top: 6px;
+                padding-top: 10px;
+                background-color: #f8fafc;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px;
+                color: #0f172a;
+            }
+        """)
+        grain_lay = QVBoxLayout(self.row_grain_group)
+
+        # Mode row: Label + Mode ComboBox
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel(self.t["row_key_mode_label"]))
+        self.cmb_row_key_mode = QComboBox()
+        self.cmb_row_key_mode.addItem(self.t["row_key_mode_auto"], "auto")
+        self.cmb_row_key_mode.addItem(self.t["row_key_mode_composite"], "composite")
+        self.cmb_row_key_mode.addItem(self.t["row_key_mode_single"], "single")
+        self.cmb_row_key_mode.currentIndexChanged.connect(self._on_row_key_mode_changed)
+        mode_row.addWidget(self.cmb_row_key_mode, 1)
+        grain_lay.addLayout(mode_row)
+
+        # Container for Auto Mode
+        self.box_auto_grain = QWidget()
+        auto_lay = QVBoxLayout(self.box_auto_grain)
+        auto_lay.setContentsMargins(0, 2, 0, 2)
+        self.lbl_auto_grain_desc = QLabel()
+        self.lbl_auto_grain_desc.setWordWrap(True)
+        self.lbl_auto_grain_desc.setStyleSheet(
+            "color: #1e40af; background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 4px; padding: 6px;"
+        )
+        auto_lay.addWidget(self.lbl_auto_grain_desc)
+        grain_lay.addWidget(self.box_auto_grain)
+
+        # Container for Composite Mode
+        self.box_composite_grain = QWidget()
+        comp_lay = QVBoxLayout(self.box_composite_grain)
+        comp_lay.setContentsMargins(0, 2, 0, 2)
+        comp_toolbar = QHBoxLayout()
+        comp_toolbar.addWidget(QLabel(self.t["row_key_comp_hint"]))
+        comp_toolbar.addStretch(1)
+        btn_default_comp = QPushButton(self.t["row_key_comp_default"])
+        btn_default_comp.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        btn_default_comp.clicked.connect(self._select_default_composite_keys)
+        comp_toolbar.addWidget(btn_default_comp)
+        btn_clear_comp = QPushButton(self.t["row_key_comp_clear"])
+        btn_clear_comp.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        btn_clear_comp.clicked.connect(self._clear_composite_keys)
+        comp_toolbar.addWidget(btn_clear_comp)
+        comp_lay.addLayout(comp_toolbar)
+
+        self.composite_key_checklist = QListWidget()
+        self.composite_key_checklist.setMaximumHeight(120)
+        self.composite_key_checklist.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+                background-color: #ffffff;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                height: 26px;
+                padding: 1px 6px;
+            }
+            QListWidget::indicator {
+                width: 18px;
+                height: 18px;
+            }
+        """)
+        self.composite_key_checklist.itemChanged.connect(self._on_composite_item_changed)
+        comp_lay.addWidget(self.composite_key_checklist)
+
+        self.lbl_composite_preview = QLabel()
+        self.lbl_composite_preview.setStyleSheet("color: #0f172a; font-weight: bold; padding: 2px;")
+        comp_lay.addWidget(self.lbl_composite_preview)
+        grain_lay.addWidget(self.box_composite_grain)
+
+        # Container for Single Mode
+        self.box_single_grain = QWidget()
+        single_lay = QHBoxLayout(self.box_single_grain)
+        single_lay.setContentsMargins(0, 2, 0, 2)
+        single_lay.addWidget(QLabel(self.t["row_key_single_label"]))
+        self.cmb_single_row_key = QComboBox()
+        self.cmb_single_row_key.currentTextChanged.connect(self._on_single_row_key_changed)
+        single_lay.addWidget(self.cmb_single_row_key, 1)
+        grain_lay.addWidget(self.box_single_grain)
+
+        # Compatibility alias
+        self.cmb_row_key = self.cmb_single_row_key
+
+        lay.addWidget(self.row_grain_group)
 
         # Partition column selector (H2)
         partition_box = QHBoxLayout()
@@ -805,7 +941,20 @@ class MartModelWizardDialog(QDialog):
             self.assignments = model_to_assignments(self.initial_model, self.headers)
             self.fact_table_name = self.initial_model.fact_table
             self.period_column_name = self.initial_model.period_column
+            if len(self.initial_model.row_key_columns) > 1:
+                self.row_key_mode = "composite"
+                self.composite_keys = list(self.initial_model.row_key_columns)
+            elif len(self.initial_model.row_key_columns) == 1:
+                self.row_key_mode = "single"
+                self.single_key = self.initial_model.row_key_columns[0]
+            else:
+                self.row_key_mode = "auto"
+                self.composite_keys = []
+                self.single_key = ""
         else:
+            self.row_key_mode = "auto"
+            self.composite_keys = []
+            self.single_key = ""
             self._apply_pnl_auto_guess()
 
     def _apply_pnl_auto_guess(self) -> None:
@@ -819,6 +968,15 @@ class MartModelWizardDialog(QDialog):
         self.assignments = res.assignments
         self.fact_table_name = res.fact_table
         self.period_column_name = res.period_column
+        rks = [a.column_name for a in res.assignments if a.role == ROLE_ROW_KEY]
+        if rks:
+            self.row_key_mode = "single"
+            self.single_key = rks[0]
+            self.composite_keys = []
+        else:
+            self.row_key_mode = "auto"
+            self.single_key = ""
+            self.composite_keys = []
         self.lbl_guess_summary.setText(f"✔ {res.summary_text}")
         fit_table_columns(self.data_table, lo=130, hi=340)
         self._refresh_all_views()
@@ -834,6 +992,15 @@ class MartModelWizardDialog(QDialog):
         self.assignments = res.assignments
         self.fact_table_name = res.fact_table
         self.period_column_name = res.period_column
+        rks = [a.column_name for a in res.assignments if a.role == ROLE_ROW_KEY]
+        if rks:
+            self.row_key_mode = "single"
+            self.single_key = rks[0]
+            self.composite_keys = []
+        else:
+            self.row_key_mode = "auto"
+            self.single_key = ""
+            self.composite_keys = []
         self.lbl_guess_summary.setText(f"✔ {res.summary_text}")
         fit_table_columns(self.data_table, lo=130, hi=340)
         self._refresh_all_views()
@@ -851,11 +1018,14 @@ class MartModelWizardDialog(QDialog):
         role_map = {a.column_name: a for a in self.assignments}
         badge_labels = []
 
+        effective_row_keys = set(self._get_effective_row_keys())
         for col in self.headers:
             asgn = role_map.get(col)
             role = asgn.role if asgn else ROLE_UNASSIGNED
             if role == ROLE_PERIOD:
                 badge = f"🔵{self.t['badge_period']}\n{col}"
+            elif col in effective_row_keys:
+                badge = f"🟢{self.t['badge_key']}\n{col}"
             elif role in (ROLE_ROW_KEY, ROLE_PARTITION):
                 badge = f"🟢{self.t['badge_key']}\n{col}"
             elif role in (ROLE_DIM_KEY, ROLE_DIM_ATTR):
@@ -959,19 +1129,8 @@ class MartModelWizardDialog(QDialog):
             self.cmb_period.setCurrentText(self.period_column_name)
         self.cmb_period.blockSignals(False)
 
-        # Row Key Selector
-        curr_row_key = next((a.column_name for a in self.assignments if a.role == ROLE_ROW_KEY), "")
-        self.cmb_row_key.blockSignals(True)
-        self.cmb_row_key.clear()
-        self.cmb_row_key.addItem("-- 원천 행 식별키 선택 --", "")
-        for col in self.headers:
-            if col != self.period_column_name:
-                self.cmb_row_key.addItem(col, col)
-        if curr_row_key:
-            idx = self.cmb_row_key.findData(curr_row_key)
-            if idx >= 0:
-                self.cmb_row_key.setCurrentIndex(idx)
-        self.cmb_row_key.blockSignals(False)
+        # Row Grain UI refresh
+        self._refresh_step3_grain_ui()
 
         # Partition Selector
         curr_partition = next((a.column_name for a in self.assignments if a.role == ROLE_PARTITION), "")
@@ -979,7 +1138,7 @@ class MartModelWizardDialog(QDialog):
         self.cmb_partition.clear()
         self.cmb_partition.addItem("(선택 안 함 - 단일 법인/파티션 없음)", "")
         for col in self.headers:
-            if col != self.period_column_name and col != curr_row_key:
+            if col != self.period_column_name and col not in self._get_effective_row_keys():
                 self.cmb_partition.addItem(col, col)
         if curr_partition:
             idx = self.cmb_partition.findData(curr_partition)
@@ -1032,15 +1191,29 @@ class MartModelWizardDialog(QDialog):
             self.t["col_header_reason"],
         ])
         self.mapping_table.setRowCount(len(self.assignments))
+        effective_row_keys = self._get_effective_row_keys()
         for r_idx, a in enumerate(self.assignments):
             self.mapping_table.setItem(r_idx, 0, QTableWidgetItem(a.column_name))
-            self.mapping_table.setItem(r_idx, 1, QTableWidgetItem(a.role))
-            target = a.dimension_name if a.dimension_name else (self.fact_table_name if a.role == ROLE_MEASURE else "-")
+            role_str = a.role
+            reason_str = a.reason
+            if a.column_name in effective_row_keys:
+                if a.role in (ROLE_DIM_KEY, ROLE_PERIOD, ROLE_PARTITION):
+                    reason_str = f"{a.reason} + 팩트 행 식별키(복합키)"
+                elif a.role in (ROLE_UNASSIGNED, ROLE_EXCLUDED):
+                    role_str = ROLE_ROW_KEY
+                    reason_str = "팩트 원천 행 고유 식별키"
+            self.mapping_table.setItem(r_idx, 1, QTableWidgetItem(role_str))
+            target = a.dimension_name if a.dimension_name else (self.fact_table_name if role_str in (ROLE_MEASURE, ROLE_ROW_KEY) else "-")
             self.mapping_table.setItem(r_idx, 2, QTableWidgetItem(target))
-            self.mapping_table.setItem(r_idx, 3, QTableWidgetItem(a.reason))
+            self.mapping_table.setItem(r_idx, 3, QTableWidgetItem(reason_str))
 
         # 3. Model validation (strictly using MartEngine._validate_model)
         try:
+            if not effective_row_keys:
+                raise ValueError("행 식별키(Row Grain)가 지정되지 않았습니다.")
+            if len(effective_row_keys) > 8:
+                raise ValueError(self.t["err_too_many_row_keys"].format(count=len(effective_row_keys)))
+
             temp_model = assignments_to_model(
                 self.assignments,
                 model_name=self.fact_table_name,
@@ -1048,14 +1221,38 @@ class MartModelWizardDialog(QDialog):
                 period_column=self.period_column_name,
                 source_delimiter=self.detected_delimiter,
                 source_encoding=self.detected_encoding,
+                row_key_columns=effective_row_keys,
             )
             from src.mart.engine import validate_mart_model
             validate_mart_model(temp_model)
-            self.lbl_validation_status.setText(f"<font color='#16a34a'><b>{self.t['validation_passed']}</b></font>")
+
+            # Preflight sample row key uniqueness check
+            sample_dups = self._check_sample_row_key_duplicates(effective_row_keys)
+            status_text = f"<font color='#16a34a'><b>{self.t['validation_passed']}</b></font>"
+            if sample_dups > 0:
+                status_text += f"<br><font color='#d97706'><b>{self.t['warn_duplicate_sample_keys'].format(rows=len(self.sample_rows), dups=sample_dups)}</b></font>"
+            self.lbl_validation_status.setText(status_text)
             self.final_model = temp_model
         except Exception as e:
             self.lbl_validation_status.setText(f"<font color='#dc2626'><b>{self.t['validation_warn']}: {e}</b></font>")
             self.final_model = None
+
+    def _check_sample_row_key_duplicates(self, row_keys: Sequence[str]) -> int:
+        """Count duplicate row keys in loaded sample rows."""
+        if not self.sample_rows or not row_keys:
+            return 0
+        indices = [self.headers.index(k) for k in row_keys if k in self.headers]
+        if len(indices) != len(row_keys):
+            return 0
+        seen = set()
+        dups = 0
+        for r in self.sample_rows:
+            key = tuple(r[i] if i < len(r) else "" for i in indices)
+            if key in seen:
+                dups += 1
+            else:
+                seen.add(key)
+        return dups
 
     def _on_expand_data_viewer(self) -> None:
         """Launch the full-screen standalone data viewer popup."""
@@ -1076,17 +1273,170 @@ class MartModelWizardDialog(QDialog):
                 a.role = ROLE_EXCLUDED
         self._update_header_badges()
 
-    def _on_row_key_changed(self, text: str) -> None:
-        col = self.cmb_row_key.currentData() or ""
+    @property
+    def selected_row_keys(self) -> List[str]:
+        if self.row_key_mode == "single":
+            return [self.single_key] if self.single_key else []
+        elif self.row_key_mode == "composite":
+            return list(self.composite_keys)
+        return self._get_auto_derived_row_keys()
+
+    @selected_row_keys.setter
+    def selected_row_keys(self, keys: List[str]) -> None:
+        if self.row_key_mode == "single":
+            self.single_key = keys[0] if keys else ""
+        else:
+            self.composite_keys = list(keys)
+    def _get_auto_derived_row_keys(self) -> List[str]:
+        """Derive pure composite row keys from period column and all dimension natural keys."""
+        keys: List[str] = []
+        if self.period_column_name and self.period_column_name in self.headers:
+            keys.append(self.period_column_name)
         for a in self.assignments:
-            if a.column_name == col and col:
-                a.role = ROLE_ROW_KEY
-                a.dimension_name = ""
-                a.reason = "원천 행 고유 식별키"
-            elif a.role == ROLE_ROW_KEY and a.column_name != col:
-                a.role = ROLE_UNASSIGNED
-                a.reason = "역할 미할당"
+            if a.role == ROLE_DIM_KEY and a.column_name in self.headers and a.column_name not in keys:
+                keys.append(a.column_name)
+        if not keys and self.headers:
+            meas_cols = {a.column_name for a in self.assignments if a.role == ROLE_MEASURE}
+            for h in self.headers:
+                if h not in meas_cols:
+                    keys.append(h)
+                    break
+            if not keys and self.headers:
+                keys.append(self.headers[0])
+        return keys
+
+    def _get_effective_row_keys(self) -> List[str]:
+        """Return the active row keys according to the current mode."""
+        mode = self.cmb_row_key_mode.currentData() if hasattr(self, "cmb_row_key_mode") else self.row_key_mode
+        if mode == "auto":
+            return self._get_auto_derived_row_keys()
+        elif mode == "composite":
+            # Filter out any columns that were turned into measures
+            meas_cols = {a.column_name for a in self.assignments if a.role == ROLE_MEASURE}
+            valid = [k for k in self.composite_keys if k in self.headers and k not in meas_cols]
+            return valid
+        elif mode == "single":
+            single = self.cmb_single_row_key.currentData() if hasattr(self, "cmb_single_row_key") else self.single_key
+            meas_cols = {a.column_name for a in self.assignments if a.role == ROLE_MEASURE}
+            if single and single in self.headers and single not in meas_cols:
+                return [single]
+            return []
+        return self._get_auto_derived_row_keys()
+
+    def _on_row_key_mode_changed(self, idx: int) -> None:
+        mode = self.cmb_row_key_mode.currentData() or "auto"
+        self.row_key_mode = mode
+        self.box_auto_grain.setVisible(mode == "auto")
+        self.box_composite_grain.setVisible(mode == "composite")
+        self.box_single_grain.setVisible(mode == "single")
+        if mode == "composite" and not self.composite_keys:
+            self.composite_keys = self._get_auto_derived_row_keys()
+        self._refresh_step3_grain_ui()
         self._update_header_badges()
+
+    def _on_composite_item_changed(self, item: QListWidgetItem) -> None:
+        col = item.data(Qt.ItemDataRole.UserRole)
+        if not col:
+            return
+        is_checked = (item.checkState() == Qt.CheckState.Checked)
+        if is_checked and col not in self.composite_keys:
+            self.composite_keys.append(col)
+        elif not is_checked and col in self.composite_keys:
+            self.composite_keys.remove(col)
+        self._update_composite_preview()
+        self._update_header_badges()
+
+    def _clear_composite_keys(self) -> None:
+        self.composite_keys.clear()
+        self._refresh_composite_checklist()
+        self._update_composite_preview()
+        self._update_header_badges()
+
+    def _select_default_composite_keys(self) -> None:
+        self.composite_keys = self._get_auto_derived_row_keys()
+        self._refresh_composite_checklist()
+        self._update_composite_preview()
+        self._update_header_badges()
+
+    def _on_single_row_key_changed(self, text: str) -> None:
+        col = self.cmb_single_row_key.currentData() or ""
+        self.single_key = col
+        self._update_header_badges()
+
+    def _on_row_key_changed(self, text: str) -> None:
+        """Backward compatibility alias for _on_single_row_key_changed."""
+        self._on_single_row_key_changed(text)
+
+    def _refresh_step3_grain_ui(self) -> None:
+        """Refresh Auto, Composite, and Single row key controls."""
+        idx = self.cmb_row_key_mode.findData(self.row_key_mode)
+        if idx >= 0 and self.cmb_row_key_mode.currentIndex() != idx:
+            self.cmb_row_key_mode.blockSignals(True)
+            self.cmb_row_key_mode.setCurrentIndex(idx)
+            self.cmb_row_key_mode.blockSignals(False)
+
+        self.box_auto_grain.setVisible(self.row_key_mode == "auto")
+        self.box_composite_grain.setVisible(self.row_key_mode == "composite")
+        self.box_single_grain.setVisible(self.row_key_mode == "single")
+
+        auto_keys = self._get_auto_derived_row_keys()
+        keys_fmt = " + ".join(f"<font color='#1d4ed8'><b>[{k}]</b></font>" for k in auto_keys) if auto_keys else "<i>(설정된 차원 키 없음)</i>"
+        period_fmt = self.period_column_name or "미지정"
+        self.lbl_auto_grain_desc.setText(self.t["row_key_auto_desc"].format(period=period_fmt, keys=keys_fmt))
+
+        self._refresh_composite_checklist()
+        self._update_composite_preview()
+
+        self.cmb_single_row_key.blockSignals(True)
+        self.cmb_single_row_key.clear()
+        self.cmb_single_row_key.addItem(f"-- {self.t['row_key_mode_auto']} --", "")
+        meas_cols = {a.column_name for a in self.assignments if a.role == ROLE_MEASURE}
+        for col in self.headers:
+            if col not in meas_cols:
+                self.cmb_single_row_key.addItem(col, col)
+        if self.single_key:
+            s_idx = self.cmb_single_row_key.findData(self.single_key)
+            if s_idx >= 0:
+                self.cmb_single_row_key.setCurrentIndex(s_idx)
+        self.cmb_single_row_key.blockSignals(False)
+
+    def _refresh_composite_checklist(self) -> None:
+        """Populate candidate columns in composite key checklist."""
+        self.composite_key_checklist.blockSignals(True)
+        self.composite_key_checklist.clear()
+        meas_cols = {a.column_name for a in self.assignments if a.role == ROLE_MEASURE}
+        dim_key_cols = {a.column_name for a in self.assignments if a.role == ROLE_DIM_KEY}
+
+        for col in self.headers:
+            if col in meas_cols:
+                continue
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, col)
+            prefix = "🔑 " if col in dim_key_cols else ("📅 " if col == self.period_column_name else "")
+            item.setText(f"{prefix}{col}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            if col in self.composite_keys:
+                item.setCheckState(Qt.CheckState.Checked)
+                item.setForeground(QColor("#1e40af"))
+                item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
+                item.setForeground(QColor("#334155"))
+                item.setFont(QFont("Segoe UI", 9, QFont.Weight.Normal))
+            self.composite_key_checklist.addItem(item)
+        self.composite_key_checklist.blockSignals(False)
+
+    def _update_composite_preview(self) -> None:
+        meas_cols = {a.column_name for a in self.assignments if a.role == ROLE_MEASURE}
+        valid_comp = [k for k in self.composite_keys if k in self.headers and k not in meas_cols]
+        if valid_comp:
+            text = " + ".join(f"[{k}]" for k in valid_comp)
+            count_str = f" ({len(valid_comp)}개 열)"
+            if len(valid_comp) > 8:
+                count_str += f" <font color='#dc2626'><b>- {self.t['err_too_many_row_keys'].format(count=len(valid_comp))}</b></font>"
+            self.lbl_composite_preview.setText(self.t["row_key_comp_preview"].format(keys=text) + count_str)
+        else:
+            self.lbl_composite_preview.setText("<font color='#dc2626'>선택된 복합키 없음 (최소 1개 이상 열을 체크하세요)</font>")
 
     def _on_partition_changed(self, text: str) -> None:
         col = self.cmb_partition.currentData() or ""
@@ -1417,6 +1767,7 @@ class MartModelWizardDialog(QDialog):
                 return
 
         try:
+            effective_row_keys = self._get_effective_row_keys()
             candidate_model = assignments_to_model(
                 self.assignments,
                 model_name=self.txt_fact_name.text().strip() or "fact_pnl",
@@ -1424,6 +1775,7 @@ class MartModelWizardDialog(QDialog):
                 period_column=self.period_column_name,
                 source_delimiter=self.detected_delimiter,
                 source_encoding=self.detected_encoding,
+                row_key_columns=effective_row_keys,
             )
             from src.mart.engine import validate_mart_model
             validate_mart_model(candidate_model)
