@@ -627,8 +627,55 @@ class MartModelWizardDialog(QDialog):
         key_row.addWidget(self.cmb_dim_key)
         dim_form.addLayout(key_row)
 
-        dim_form.addWidget(QLabel(f"<b>{self.t['dim_attrs_label']}</b>"))
+        from PySide6.QtWidgets import QCheckBox
+
+        attr_header_box = QHBoxLayout()
+        attr_header_box.addWidget(QLabel(f"<b>{self.t['dim_attrs_label']}</b>"))
+        attr_header_box.addStretch(1)
+        self.chk_show_assigned_only = QCheckBox("포함된 속성만 모아보기")
+        self.chk_show_assigned_only.toggled.connect(self._apply_attr_filter)
+        attr_header_box.addWidget(self.chk_show_assigned_only)
+        dim_form.addLayout(attr_header_box)
+
+        # Quick Search Box for columns
+        self.txt_search_attrs = QLineEdit()
+        self.txt_search_attrs.setPlaceholderText("🔍 열 이름 빠른 검색... (예: suffix, name, cust, code)")
+        self.txt_search_attrs.setClearButtonEnabled(True)
+        self.txt_search_attrs.textChanged.connect(self._apply_attr_filter)
+        dim_form.addWidget(self.txt_search_attrs)
+
         self.dim_attrs_checklist = QListWidget()
+        self.dim_attrs_checklist.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                background-color: #ffffff;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                height: 32px;
+                padding: 2px 8px;
+                border-bottom: 1px solid #f1f5f9;
+            }
+            QListWidget::item:hover {
+                background-color: #f8fafc;
+            }
+            QListWidget::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #475569;
+                border-radius: 4px;
+                background-color: #ffffff;
+            }
+            QListWidget::indicator:hover {
+                border-color: #2563eb;
+                background-color: #eff6ff;
+            }
+            QListWidget::indicator:checked {
+                border-color: #1d4ed8;
+                background-color: #2563eb;
+            }
+        """)
         self.dim_attrs_checklist.itemChanged.connect(self._on_dim_attr_item_changed)
         dim_form.addWidget(self.dim_attrs_checklist)
 
@@ -1086,23 +1133,47 @@ class MartModelWizardDialog(QDialog):
             asgn = next((a for a in self.assignments if a.column_name == col), None)
 
             if col == curr_key:
-                item.setText(f"{col} (식별키)")
+                item.setText(f"🔑 {col} [이 차원의 식별키]")
+                item.setForeground(QColor("#15803d"))
+                item.setBackground(QColor("#f0fdf4"))
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
             elif asgn and asgn.dimension_name == dname and asgn.role == ROLE_DIM_ATTR:
-                item.setText(f"{col} (속성)")
+                item.setText(f"☑️ {col} (포함된 속성)")
+                item.setForeground(QColor("#1e40af"))
+                item.setBackground(QColor("#eff6ff"))
+                item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
                 item.setCheckState(Qt.CheckState.Checked)
             elif asgn and asgn.dimension_name and asgn.dimension_name != dname:
-                item.setText(f"{col} [소속: {asgn.dimension_name}]")
+                item.setText(f"🔒 {col} [다른 차원 소속: {asgn.dimension_name}]")
+                item.setForeground(QColor("#94a3b8"))
                 item.setFlags((item.flags() | Qt.ItemFlag.ItemIsUserCheckable) & ~Qt.ItemFlag.ItemIsEnabled)
                 item.setCheckState(Qt.CheckState.Unchecked)
             else:
-                item.setText(col)
+                item.setText(f"⬜ {col}")
+                item.setForeground(QColor("#334155"))
+                item.setBackground(QColor("#ffffff"))
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
                 item.setCheckState(Qt.CheckState.Unchecked)
 
             self.dim_attrs_checklist.addItem(item)
         self.dim_attrs_checklist.blockSignals(False)
+        self._apply_attr_filter()
+
+    def _apply_attr_filter(self) -> None:
+        """Filter attributes checklist by quick search string and show-assigned-only toggle."""
+        search_text = self.txt_search_attrs.text().strip().lower()
+        show_assigned = self.chk_show_assigned_only.isChecked()
+
+        for i in range(self.dim_attrs_checklist.count()):
+            item = self.dim_attrs_checklist.item(i)
+            col = item.data(Qt.ItemDataRole.UserRole)
+            if not col:
+                continue
+            is_checked = (item.checkState() == Qt.CheckState.Checked)
+            matches_search = (not search_text or search_text in col.lower())
+            matches_assigned = (not show_assigned or is_checked)
+            item.setHidden(not (matches_search and matches_assigned))
 
     def _on_dim_attr_item_changed(self, item: QListWidgetItem) -> None:
         """Handle user checking or unchecking an attribute column for the current dimension."""
@@ -1121,11 +1192,19 @@ class MartModelWizardDialog(QDialog):
                     a.role = ROLE_DIM_ATTR
                     a.dimension_name = dname
                     a.reason = f"{dname} 차원 속성"
+                    item.setText(f"☑️ {col} (포함된 속성)")
+                    item.setForeground(QColor("#1e40af"))
+                    item.setBackground(QColor("#eff6ff"))
+                    item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
                 else:
                     if a.dimension_name == dname and a.role == ROLE_DIM_ATTR:
                         a.role = ROLE_UNASSIGNED
                         a.dimension_name = ""
                         a.reason = "미할당"
+                    item.setText(f"⬜ {col}")
+                    item.setForeground(QColor("#334155"))
+                    item.setBackground(QColor("#ffffff"))
+                    item.setFont(QFont("Segoe UI", 9, QFont.Weight.Normal))
                 break
 
         self._update_header_badges()

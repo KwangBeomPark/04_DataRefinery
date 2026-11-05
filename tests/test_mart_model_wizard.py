@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.mart.auto_guess import (
@@ -367,6 +368,35 @@ class TestMartModelWizard(unittest.TestCase):
         rev2 = engine.load_snapshot(model, [csv_path], scope, [csv_path.name], complete=True)
         self.assertGreaterEqual(rev2["revision"], 1)
 
+
+    def test_step2_attribute_quick_search_and_filter(self):
+        """Verify Step 2 attribute quick search box and show-assigned-only filter toggle."""
+        dlg = MartModelWizardDialog(None, self.csv_path, language_code="ko")
+        dlg.stack.setCurrentIndex(1)  # Step 2: Dimensions
+        dlg.dim_list_widget.setCurrentRow(0)
+
+        # 1. Type search query matching one specific column
+        dlg.txt_search_attrs.setText("상품명")
+        visible_items = [
+            dlg.dim_attrs_checklist.item(i)
+            for i in range(dlg.dim_attrs_checklist.count())
+            if not dlg.dim_attrs_checklist.item(i).isHidden()
+        ]
+        self.assertEqual(len(visible_items), 1)
+        self.assertEqual(visible_items[0].data(Qt.ItemDataRole.UserRole), "상품명")
+
+        # 2. Clear search and toggle show_assigned_only
+        dlg.txt_search_attrs.clear()
+        dlg.chk_show_assigned_only.setChecked(True)
+        assigned_visible = [
+            dlg.dim_attrs_checklist.item(i)
+            for i in range(dlg.dim_attrs_checklist.count())
+            if not dlg.dim_attrs_checklist.item(i).isHidden()
+        ]
+        for it in assigned_visible:
+            self.assertEqual(it.checkState(), Qt.CheckState.Checked)
+
+        dlg.close()
 
     def test_step3_measure_editing_reflected_in_model(self):
         """Verify editing kind, unit, and scale in measure_table updates assignment & model (Codex P1)."""
