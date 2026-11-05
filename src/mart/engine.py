@@ -32,7 +32,63 @@ def _ident(value):
 
 
 def _model(model):
-    return _json(asdict(model))
+    d = asdict(model) if hasattr(model, '__dataclass_fields__') else dict(model)
+    # Normalize defaults for backward compatibility with existing saved databases
+    if d.get('source_delimiter') == ',':
+        d.pop('source_delimiter', None)
+    if d.get('source_encoding') == 'utf-8-sig':
+        d.pop('source_encoding', None)
+    return _json(d)
+
+
+def _normalize_model_dict(d: dict) -> dict:
+    """Normalize model dictionary for semantic schema comparison across versions."""
+    res = dict(d)
+    for k in ('source_delimiter', 'source_encoding'):
+        res.pop(k, None)
+    return res
+
+
+def validate_mart_model(model):
+    """Public validator for mart model integrity, returning the set of required column names."""
+    from .model import validate_column_roles
+    validate_column_roles(model)
+    _ident(model.fact_table)
+    if not model.row_key_columns or not model.dimensions or not model.measures:
+        raise ValueError('Dimension, measure and business row key are required')
+    names = [d.name for d in model.dimensions]
+    measures = [m.name for m in model.measures]
+    if len({n.casefold() for n in names}) != len(names) or len({n.casefold() for n in measures}) != len(measures):
+        raise ValueError('Duplicate model name')
+    required = {model.period_column, *model.partition_columns, *model.row_key_columns, *model.excluded_columns}
+    for dim in model.dimensions:
+        _ident(dim.name)
+        if not dim.key_columns:
+            raise ValueError('Dimensions require keys')
+        if len(set(dim.key_columns + dim.attributes)) != len(dim.key_columns + dim.attributes) or 'sk' in dim.key_columns + dim.attributes:
+            raise ValueError('Duplicate or reserved dimension column')
+        required.update(dim.key_columns)
+        required.update(dim.attributes)
+        if dim.authority_column:
+            required.add(dim.authority_column)
+        for column in (*dim.key_columns, *dim.attributes):
+            _ident(column)
+    for measure in model.measures:
+        _ident(measure.name)
+        if measure.aggregation != 'sum' or measure.kind not in ('value', 'cost', 'quantity') or not 1 <= measure.precision <= 38 or not 0 <= measure.scale <= measure.precision:
+            raise ValueError('Unsupported measure definition')
+        required.add(measure.column)
+    for column in required:
+        _ident(column)
+    if len({c.casefold() for c in required}) != len(required):
+        raise ValueError('Column names differ only by case')
+    stage_reserved = {'row_key', 'payload'} | {('_nk_' + d.name).casefold() for d in model.dimensions} | {('_attr_' + d.name).casefold() for d in model.dimensions}
+    if any(c.casefold() in stage_reserved for c in required):
+        raise ValueError('Source column conflicts with an internal staging column')
+    reserved = {'scope', 'row_key', 'payload'} | {('dim_' + d.name + '_sk').casefold() for d in model.dimensions}
+    if any(m.name.casefold() in reserved for m in model.measures):
+        raise ValueError('Reserved fact column name')
+    return required
 
 
 def _period_kind(value):
@@ -130,44 +186,7 @@ class MartEngine:
         return db
 
     def _validate_model(self, model):
-        from .model import validate_column_roles
-        validate_column_roles(model)
-        _ident(model.fact_table)
-        if not model.row_key_columns or not model.dimensions or not model.measures:
-            raise ValueError('Dimension, measure and business row key are required')
-        names = [d.name for d in model.dimensions]
-        measures = [m.name for m in model.measures]
-        if len({n.casefold() for n in names}) != len(names) or len({n.casefold() for n in measures}) != len(measures):
-            raise ValueError('Duplicate model name')
-        required = {model.period_column, *model.partition_columns, *model.row_key_columns, *model.excluded_columns}
-        for dim in model.dimensions:
-            _ident(dim.name)
-            if not dim.key_columns:
-                raise ValueError('Dimensions require keys')
-            if len(set(dim.key_columns + dim.attributes)) != len(dim.key_columns + dim.attributes) or 'sk' in dim.key_columns + dim.attributes:
-                raise ValueError('Duplicate or reserved dimension column')
-            required.update(dim.key_columns)
-            required.update(dim.attributes)
-            if dim.authority_column:
-                required.add(dim.authority_column)
-            for column in (*dim.key_columns, *dim.attributes):
-                _ident(column)
-        for measure in model.measures:
-            _ident(measure.name)
-            if measure.aggregation != 'sum' or measure.kind not in ('value', 'cost', 'quantity') or not 1 <= measure.precision <= 38 or not 0 <= measure.scale <= measure.precision:
-                raise ValueError('Unsupported measure definition')
-            required.add(measure.column)
-        for column in required:
-            _ident(column)
-        if len({c.casefold() for c in required}) != len(required):
-            raise ValueError('Column names differ only by case')
-        stage_reserved = {'row_key', 'payload'} | {('_nk_' + d.name).casefold() for d in model.dimensions} | {('_attr_' + d.name).casefold() for d in model.dimensions}
-        if any(c.casefold() in stage_reserved for c in required):
-            raise ValueError('Source column conflicts with an internal staging column')
-        reserved = {'scope', 'row_key', 'payload'} | {('dim_' + d.name + '_sk').casefold() for d in model.dimensions}
-        if any(m.name.casefold() in reserved for m in model.measures):
-            raise ValueError('Reserved fact column name')
-        return required
+        return validate_mart_model(model)
 
     def load_snapshot(self, model, files, scope, expected_files, complete=False, allow_empty=False):
         """Load a complete declared scope from verified, immutable local copies."""
@@ -225,8 +244,11 @@ class MartEngine:
                 try:
                     db.execute('BEGIN')
                     saved = db.execute("SELECT value FROM mart_meta WHERE key='model'").fetchone()
-                    if saved and saved[0] != model_text:
-                        raise ValueError('Model changes require a new workspace')
+                    if saved:
+                        saved_dict = _normalize_model_dict(json.loads(saved[0]))
+                        curr_dict = _normalize_model_dict(json.loads(model_text))
+                        if saved_dict != curr_dict:
+                            raise ValueError('Model changes require a new workspace')
                     existing_kind = _period_granularity(db, model.period_column)
                     if existing_kind is not None and period_kind != existing_kind:
                         raise ValueError('Period granularity must remain consistent')
@@ -254,8 +276,8 @@ class MartEngine:
                     batch = []
                     count = 0
                     for copy in copies:
-                        with copy.open(encoding='utf-8-sig', newline='') as source:
-                            reader = csv.DictReader(source, strict=True)
+                        with copy.open(encoding=getattr(model, 'source_encoding', 'utf-8-sig') or 'utf-8-sig', newline='') as source:
+                            reader = csv.DictReader(source, delimiter=getattr(model, 'source_delimiter', ',') or ',', strict=True)
                             if reader.fieldnames is None or len(set(reader.fieldnames)) != len(reader.fieldnames) or set(reader.fieldnames) != required:
                                 raise ValueError('Input schema differs from declared roles')
                             for row in reader:

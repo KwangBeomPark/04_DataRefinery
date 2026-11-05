@@ -37,6 +37,9 @@ flowchart TD
     QtApp --> Window[src/qt/main_window.py MainWindow]
     Window --> DWH[src/qt/tabs/dwh_tab.py]
     DWH --> Mart[src/qt/widgets/mart_workspace.py]
+    Mart --> MartWizard[src/qt/widgets/mart_model_wizard.py]
+    MartWizard --> MartAutoGuess[src/mart/auto_guess.py]
+    MartAutoGuess --> Profiler[src/dataset_profiler.py]
     Mart --> MartEngine[src/mart/engine.py]
     Window --> Tools[src/qt/tabs/data_tools_tab.py]
     Tools --> Csv[src/qt/tabs/csv_tab.py]
@@ -80,6 +83,8 @@ flowchart TD
 | `src/preset_manager.py`, `src/session_memory.py` | 프리셋·파일별 최근 집계 설정 | 손상된 편의 설정은 주 작업을 막지 않음 |
 | `src/qt/tabs/dataset/tab.py` | 배포 탭·누적·검수 승인·공개·Excel 생성 | 긴 작업의 중복 실행·설정 변경 차단 |
 | `src/qt/tabs/dataset/wizard.py` | 파일 선별·역할 추천·복합키 진단 | 단계 이동 전 필수값 검증, 표본 진단을 전체 검증과 구분 |
+| `src/mart/auto_guess.py` | 표본 기반 스타 스키마 자동 추정 및 역할(기간, 키, 지표, 차원) 매핑 | 프로파일러와 Kimball 계약 연동, 순수 도메인 로직 유지 |
+| `src/qt/widgets/mart_model_wizard.py` | 대형 좌우 분할 스타 스키마 모델링 마법사(1200x820) 및 데이터 뷰어 팝업 | 1,000행 고속 페이징 그리드, 헤더 배지 실시간 동기화, 관계 다이어그램 |
 | `src/dataset_profiler.py` | 표본 기반 타입·역할 추천 | 대용량 전체 로드 없이 분석 |
 | `src/dataset_config.py` | DatasetDefinition·DatasetRegistry·배포 경로 | 같은 배포 폴더 중복 등록 차단, 스키마 변경 시 승인 무효화 |
 | `src/dataset_engine.py` | 기간 누적·교체·검수·승인·CSV 공개 | 아카이브된 이전 기간 보존, 반쪽 기간 교체 차단 |

@@ -15,6 +15,7 @@ scratch/
 # Reproducible local caches and developer-only tools
 .pytest_cache/
 .ruff_cache/
+.vscode/
 tools/
 
 # Private runtime settings, databases and credentials

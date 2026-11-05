@@ -54,7 +54,7 @@ _TEXT = {
         "작업 공간",
         "새 작업",
         "이름",
-        "원본과 모델",
+        "1. 📋 원본 확인 및 모델 설계",
         "원본 CSV 선택",
         "원본 열 확인",
         "팩트 이름",
@@ -77,16 +77,16 @@ _TEXT = {
         "종류",
         "지표 추가",
         "모델 저장",
-        "범위 적재",
+        "2. ⚡ 데이터베이스 생성 및 적재",
         "범위 값",
         "선택한 파일이 이 범위의 완전한 구성임을 선언합니다",
         "누적 실행",
-        "실제 구조·검수",
+        "3. 🔍 DB 생성 결과 및 구조 검수",
         "새로 확인",
         "구조 / PK / FK",
         "표본 (최대 100행)",
         "원본과 DB 대사",
-        "용량",
+        "4. 📤 배포 및 활용 (목적 CSV · SharePoint · 용량)",
         "예산 B (GiB, 선택)",
         "예산 저장",
         "활성 DB + WAL",
@@ -186,7 +186,7 @@ _TEXT = {
         "Structure / PK / FK",
         "Sample (up to 100 rows)",
         "Source and database reconciliation",
-        "Capacity",
+        "4. 📤 Deploy & Publish (CSV · SharePoint · Capacity)",
         "Budget B (GiB, optional)",
         "Save budget",
         "Active DB + WAL",
@@ -286,7 +286,7 @@ _TEXT = {
         "Struktura / PK / FK",
         "Próbka (do 100 wierszy)",
         "Uzgodnienie źródła i bazy",
-        "Pojemność",
+        "4. 📤 Publikacja i Wdrożenie (CSV · SharePoint · Pamięć)",
         "Budżet B (GiB, opcjonalnie)",
         "Zapisz budżet",
         "Aktywna baza + WAL",
@@ -364,6 +364,7 @@ _TEXT["ko"].extend(
         "배포 설정 저장",
         "실제 관계도",
         "가산 지표의 합계만 지원합니다. 재고 잔액과 비율은 별도 기준기간 또는 측정값 설계가 필요합니다.",
+        "저장소 용량 모니터링",
     ]
 )
 _TEXT["en"].extend(
@@ -371,6 +372,7 @@ _TEXT["en"].extend(
         "Save publication settings",
         "Actual relationships",
         "Only additive sums are supported. Inventory balances and ratios require a separate period or measure design.",
+        "Storage Capacity",
     ]
 )
 _TEXT["pl"].extend(
@@ -378,6 +380,7 @@ _TEXT["pl"].extend(
         "Zapisz ustawienia publikacji",
         "Rzeczywiste relacje",
         "Obsługiwane są tylko sumy addytywne. Salda zapasów i wskaźniki wymagają osobnego projektu okresu lub miary.",
+        "Pojemność Pamięci",
     ]
 )
 
@@ -488,6 +491,12 @@ class MartWorkspace(QWidget):
         self.tab_labels.append((parent, parent.count() - 1, index))
         return lay
 
+    def group_detached(self, index):
+        page = QWidget(self)
+        page.setVisible(False)
+        lay = QVBoxLayout(page)
+        return lay
+
     def formrow(self, form, index, widget):
         form.addRow(self.label(index), widget)
 
@@ -522,8 +531,14 @@ class MartWorkspace(QWidget):
         source_row = QHBoxLayout()
         self.source_button = self.button(4, self.choose_source)
         self.sample_button = self.button(5, self.inspect_source)
+        self.wizard_button = QPushButton("✨ 스타 스키마 설계 마법사 (Wizard)")
+        self.wizard_button.setStyleSheet(
+            "font-weight: bold; background-color: #2563eb; color: white; padding: 4px 14px; border-radius: 4px;"
+        )
+        self.wizard_button.clicked.connect(self.open_model_wizard)
         source_row.addWidget(self.source_button)
         source_row.addWidget(self.sample_button)
+        source_row.addWidget(self.wizard_button)
         model_lay.addLayout(source_row)
         self.source = QLineEdit()
         self.source.setReadOnly(True)
@@ -651,26 +666,13 @@ class MartWorkspace(QWidget):
         inspect.addWidget(self.label(34))
         self.reconciliation = QTableWidget()
         inspect.addWidget(self.reconciliation)
-        cap = self.group(self.tabs, 35)
-        form = QFormLayout()
-        cap.addLayout(form)
-        self.budget = QLineEdit()
-        self.formrow(form, 36, self.budget)
-        cap.addWidget(self.button(37, self.save_budget))
-        self.cap_labels = []
-        for idx in (38, 39, 40, 41):
-            row = QHBoxLayout()
-            row.addWidget(self.label(idx))
-            value = QLabel()
-            row.addWidget(value)
-            cap.addLayout(row)
-            self.cap_labels.append(value)
-        cap.addWidget(self.label(77))
-        self.profile_detail = QLabel()
-        self.profile_detail.setWordWrap(True)
-        cap.addWidget(self.profile_detail)
-        cap.addStretch()
-        ex = self.group(self.tabs, 42)
+
+        # 4. Deploy & Publish tab (Grouping Purpose CSV, SharePoint, and Capacity)
+        deploy = self.group(self.tabs, 35)
+        self.deploy_tabs = QTabWidget()
+        deploy.addWidget(self.deploy_tabs)
+
+        ex = self.group(self.deploy_tabs, 42)
         self.candidates = QComboBox()
         self.candidates.currentIndexChanged.connect(self.select_candidate)
         ex.addWidget(self.candidates)
@@ -708,7 +710,8 @@ class MartWorkspace(QWidget):
         row.addWidget(self.button(54, self.publish_local))
         ex.addLayout(row)
         ex.addWidget(self.label(81))
-        sp = self.group(self.tabs, 55)
+
+        sp = self.group(self.deploy_tabs, 55)
         form = QFormLayout()
         sp.addLayout(form)
         self.site = QLineEdit()
@@ -747,6 +750,26 @@ class MartWorkspace(QWidget):
         self.login_info = QLabel()
         self.login_info.setWordWrap(True)
         sp.addWidget(self.login_info)
+
+        cap = self.group(self.deploy_tabs, 101)
+        form = QFormLayout()
+        cap.addLayout(form)
+        self.budget = QLineEdit()
+        self.formrow(form, 36, self.budget)
+        cap.addWidget(self.button(37, self.save_budget))
+        self.cap_labels = []
+        for idx in (38, 39, 40, 41):
+            row = QHBoxLayout()
+            row.addWidget(self.label(idx))
+            value = QLabel()
+            row.addWidget(value)
+            cap.addLayout(row)
+            self.cap_labels.append(value)
+        cap.addWidget(self.label(77))
+        self.profile_detail = QLabel()
+        self.profile_detail.setWordWrap(True)
+        cap.addWidget(self.profile_detail)
+        cap.addStretch()
         self.cancel = self.button(63, self.cancel_event.set)
         outer.addWidget(self.cancel)
         self.cancel.setEnabled(False)
@@ -780,6 +803,14 @@ class MartWorkspace(QWidget):
             obj.setText(self.t(index))
         for tabs, index, key in self.tab_labels:
             tabs.setTabText(index, self.t(key))
+        if hasattr(self, "wizard_button"):
+            self.wizard_button.setText(
+                {
+                    "ko": "✨ 스타 스키마 설계 마법사 (Wizard)",
+                    "en": "✨ Star Schema Modeling Wizard",
+                    "pl": "✨ Kreator Modelowania Gwiazdy",
+                }.get(self.language_code, "✨ Star Schema Modeling Wizard")
+            )
         self.profile_detail.setText(
             {
                 "ko": "범위당 10만 행, 차원당 고유 키 1만 개(소형 단일 차원 10만 개), 정밀도 18 이하, 기존 DB 512 MiB 이하. 그룹 열 8개와 등가 필터 2개까지 지원합니다.",
@@ -1006,6 +1037,56 @@ class MartWorkspace(QWidget):
         self.files_label.setText("\n".join(p.name for p in self.files))
         self.inspect_source()
 
+    def open_model_wizard(self):
+        target_path = None
+        if self.files:
+            target_path = self.files[0]
+        elif self.source.text():
+            parts = [p.strip() for p in self.source.text().split(";") if p.strip()]
+            if parts and Path(parts[0]).exists():
+                target_path = Path(parts[0])
+
+        if not target_path or not target_path.exists():
+            self.choose_source()
+            if self.files:
+                target_path = self.files[0]
+            elif self.source.text():
+                parts = [p.strip() for p in self.source.text().split(";") if p.strip()]
+                if parts and Path(parts[0]).exists():
+                    target_path = Path(parts[0])
+
+        if not target_path or not target_path.exists():
+            return
+
+        from PySide6.QtWidgets import QDialog
+        from src.qt.widgets.mart_model_wizard import MartModelWizardDialog
+
+        from PySide6.QtCore import Qt
+        dlg = MartModelWizardDialog(
+            parent=self,
+            csv_path=target_path,
+            initial_model=self.model,
+            language_code=self.language_code,
+        )
+        dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_model = dlg.get_model()
+            if new_model:
+                from dataclasses import replace
+                aligned_model = replace(
+                    new_model,
+                    name=self.current.name if self.current else new_model.name,
+                    version="1",
+                )
+                prev_model = self.model
+                self._wizard_source_delim = getattr(aligned_model, "source_delimiter", ",")
+                self._wizard_source_enc = getattr(aligned_model, "source_encoding", "utf-8-sig")
+                self.restore_model(aligned_model)
+                self.save_model()
+                # Rollback UI forms if save failed (e.g. locked DB or validation error)
+                if self.model != aligned_model and prev_model is not None:
+                    self.restore_model(prev_model)
+
     def _run(self, work, done, progress=None, *, cancelable=False, on_finished=None):
         if self._busy:
             return
@@ -1050,9 +1131,18 @@ class MartWorkspace(QWidget):
         def read(_):
             result = []
             headers = None
+            delim = getattr(self.model, "source_delimiter", None) if self.model else None
+            enc = getattr(self.model, "source_encoding", None) if self.model else None
+            if not delim or not enc:
+                from src.csv_processing import sniff_source
+                auto_enc, auto_delim = sniff_source(files[0])
+                enc = enc or auto_enc
+                delim = delim or auto_delim
+            self._detected_source_delim = delim
+            self._detected_source_enc = enc
             for path in files:
-                with path.open(encoding="utf-8-sig", newline="") as f:
-                    reader = csv.reader(f, strict=True)
+                with path.open(encoding=enc, errors="replace", newline="") as f:
+                    reader = csv.reader(f, delimiter=delim)
                     h = next(reader)
                     if len(h) != len(set(h)) or not all(h):
                         raise ValueError("Invalid CSV header")
@@ -1160,6 +1250,11 @@ class MartWorkspace(QWidget):
         if not self.current:
             self.status.setText(self.t(83))
             return
+        source_delim = getattr(self, "_wizard_source_delim", None) or getattr(self, "_detected_source_delim", None) or (getattr(self.model, "source_delimiter", ",") if self.model else ",")
+        source_enc = getattr(self, "_wizard_source_enc", None) or getattr(self, "_detected_source_enc", None) or (getattr(self.model, "source_encoding", "utf-8-sig") if self.model else "utf-8-sig")
+        self._wizard_source_delim = None
+        self._wizard_source_enc = None
+        model_ver = getattr(self.model, "version", "1") if self.model else "1"
         try:
             model = MartModel(
                 self.current.name,
@@ -1170,6 +1265,9 @@ class MartWorkspace(QWidget):
                 tuple(self.partitions.values),
                 tuple(self.row_keys.values),
                 tuple(self.excluded.values),
+                version=model_ver,
+                source_delimiter=source_delim,
+                source_encoding=source_enc,
             )
             required = MartEngine(WorkspaceStore(self.current))._validate_model(model)
             if set(self.columns) != required:
@@ -1186,13 +1284,16 @@ class MartWorkspace(QWidget):
                 )
             _atomic_json(self.current / "model.json", asdict(model))
             self.model = model
-            self._scope_fields()
+            self._scope_fields(model)
             self.status.setText(self.t(69))
         except (ValueError, OSError) as exc:
             self.status.setText(self.t(70) + ": " + str(exc))
 
-    def restore_model(self):
-        m = self.model
+    def restore_model(self, m=None):
+        if m is None:
+            m = self.model
+        if m is None:
+            return
         cols = list(
             dict.fromkeys(
                 [
@@ -1223,15 +1324,19 @@ class MartWorkspace(QWidget):
         self.dims = list(m.dimensions)
         self.metrics = list(m.measures)
         self._update_lists()
-        self._scope_fields()
+        self._scope_fields(m)
 
-    def _scope_fields(self):
+    def _scope_fields(self, model=None):
+        if model is None:
+            model = self.model
+        if model is None:
+            return
         while self.scope_form.count():
             item = self.scope_form.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         self.scope_inputs = {}
-        for col in (self.model.period_column, *self.model.partition_columns):
+        for col in (model.period_column, *model.partition_columns):
             edit = QLineEdit()
             edit.textChanged.connect(self._reset_declarations)
             self.scope_inputs[col] = edit

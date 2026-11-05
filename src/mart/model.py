@@ -32,6 +32,8 @@ class MartModel:
     row_key_columns: tuple[str, ...] = ()
     excluded_columns: tuple[str, ...] = ()
     version: str = "1"
+    source_delimiter: str = ","
+    source_encoding: str = "utf-8-sig"
 
 
 @dataclass(frozen=True)
@@ -73,7 +75,9 @@ def model_from_dict(data):
         measures=tuple(Measure(**m) for m in data['measures']),
         period_column=data['period_column'], partition_columns=tuple(data.get('partition_columns', ())),
         row_key_columns=tuple(data.get('row_key_columns', ())), excluded_columns=tuple(data.get('excluded_columns', ())),
-        version=data.get('version', '1'))
+        version=data.get('version', '1'),
+        source_delimiter=data.get('source_delimiter', ','),
+        source_encoding=data.get('source_encoding', 'utf-8-sig'))
 
 
 

@@ -265,8 +265,8 @@ class ResourcePreflight:
             before = p.stat()
             digest = _hash_file(p)
             size += before.st_size
-            with p.open(encoding='utf-8-sig', newline='') as source:
-                reader = csv.reader(source, strict=True)
+            with p.open(encoding=model.get('source_encoding', 'utf-8-sig'), newline='') as source:
+                reader = csv.reader(source, delimiter=model.get('source_delimiter', ','), strict=True)
                 header = next(reader, None)
                 if not header or len(header) != len(set(header)) or set(header) != fields:
                     raise ValueError('원본 헤더가 모델과 다릅니다')
@@ -326,7 +326,10 @@ class ResourcePreflight:
                         saved = db.execute("SELECT value FROM mart_meta WHERE key='model'").fetchone()
                         if saved:
                             import json
-                            if json.loads(saved[0]) != json.loads(json.dumps(model)):
+                            from .engine import _normalize_model_dict
+                            saved_dict = _normalize_model_dict(json.loads(saved[0]))
+                            curr_dict = _normalize_model_dict(json.loads(json.dumps(model)))
+                            if saved_dict != curr_dict:
                                 raise ValueError('기존 모델이 다릅니다')
                             from .engine import _ident
                             current = db.execute('SELECT COUNT(*) FROM ' + _ident('fact_' + model['fact_table'])).fetchone()[0]

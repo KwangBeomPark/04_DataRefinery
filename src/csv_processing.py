@@ -13,6 +13,7 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import islice
+from pathlib import Path
 from typing import Callable, Iterable, Iterator
 
 
@@ -220,7 +221,15 @@ def detect_delimiter(file_path: str, sample_rows: int = 50) -> str | None:
         return None
 
 
-def read_file_rows(file_path: str, delimiter: str, max_rows: int | None = None) -> tuple[list[list], str]:
+def sniff_source(file_path: str | Path) -> tuple[str, str]:
+    """Detect text encoding and delimiter safely, handling UTF-16, UTF-8, and common separators."""
+    path_str = str(file_path)
+    enc = detect_encoding(path_str) or "utf-8"
+    delim = detect_delimiter(path_str) or ","
+    return enc, delim
+
+
+def read_file_rows(file_path: str, delimiter: str = ",", max_rows: int | None = None) -> tuple[list[list], str]:
     if is_excel(file_path):
         return read_excel_rows(file_path, max_rows), "Excel"
     delimiter = normalize_delimiter(delimiter)

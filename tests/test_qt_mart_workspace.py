@@ -10,7 +10,7 @@ from unittest.mock import patch
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from src.qt.app import create_or_get_app
 from src.qt.widgets.mart_workspace import MartWorkspace
-from src.mart import Dimension, Measure
+from src.mart import Dimension, MartModel, Measure
 from src.mart.capacity import ResourcePreflight
 from tests.test_mart_resources import free
 
@@ -363,6 +363,144 @@ class MartWorkspaceTest(unittest.TestCase):
                 widget.candidate = None
                 widget.approve()
                 self.assertEqual(widget.status.text(), widget.t(83))
+
+
+    def test_save_model_failure_does_not_mutate_memory_model(self):
+        """Regression test for Critical: Failed model save must not corrupt in-memory self.model."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            widget = MartWorkspace("en", ImmediateRunner(), root=root / "spaces")
+            widget.name.setText("sales_locked")
+            widget.create_workspace()
+
+            source = root / "input.csv"
+            source.write_text("period,id,cust,amt\n2026-01,1,A,100\n", encoding="utf-8")
+            widget.set_files([source])
+            widget.fact.setText("fact_sales")
+            widget.period.setCurrentText("period")
+            widget.row_keys.set_values(["id"])
+            widget.dims = [Dimension("Customer", ("cust",), ())]
+            widget.metrics = [Measure("amt", "amt", kind="value")]
+            widget.save_model()
+
+            initial_model = widget.model
+            self.assertIsNotNone(initial_model)
+
+            # Create dummy mart.duckdb to simulate existing database
+            (widget.current / "mart.duckdb").write_text("dummy", encoding="utf-8")
+
+            # Attempt to save a modified model which should fail
+            widget.dims = [Dimension("NewDim", ("cust",), ())]
+            widget.save_model()
+
+            # Save should fail and self.model must remain initial_model
+            self.assertIn("An existing database requires its original model", widget.status.text())
+            self.assertEqual(widget.model, initial_model)
+
+
+    def test_open_model_wizard_success_on_new_workspace(self):
+        """Verify open_model_wizard successfully configures a brand-new workspace without AttributeError."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            widget = MartWorkspace("en", ImmediateRunner(), root=root / "spaces")
+            widget.name.setText("brand_new_space")
+            widget.create_workspace()
+            self.assertIsNone(widget.model)
+
+            source = root / "input.csv"
+            source.write_text("period,id,cust,amt\n2026-01,1,A,100\n", encoding="utf-8")
+            widget.set_files([source])
+
+            mock_model = MartModel(
+                name="brand_new_space",
+                fact_table="fact_sales",
+                dimensions=(Dimension("Customer", ("cust",), ()),),
+                measures=(Measure("amt", "amt", kind="value"),),
+                period_column="period",
+                row_key_columns=("id",),
+                version="1",
+            )
+
+            from unittest.mock import patch
+            from PySide6.QtWidgets import QDialog
+            with patch("src.qt.widgets.mart_model_wizard.MartModelWizardDialog.exec", return_value=QDialog.DialogCode.Accepted), \
+                 patch("src.qt.widgets.mart_model_wizard.MartModelWizardDialog.get_model", return_value=mock_model):
+                widget.open_model_wizard()
+
+            self.assertIsNotNone(widget.model)
+            self.assertEqual(widget.model.period_column, "period")
+            self.assertTrue((widget.current / "model.json").exists())
+            self.assertIn("period", widget.scope_inputs)
+
+    def test_open_model_wizard_rollback_on_locked_database_error(self):
+        """Verify open_model_wizard rolls back UI and preserves original self.model if locked DB forbids change."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            widget = MartWorkspace("en", ImmediateRunner(), root=root / "spaces")
+            widget.name.setText("locked_wizard_space")
+            widget.create_workspace()
+
+            source = root / "input.csv"
+            source.write_text("period,id,cust,amt\n2026-01,1,A,100\n", encoding="utf-8")
+            widget.set_files([source])
+            widget.fact.setText("fact_sales")
+            widget.period.setCurrentText("period")
+            widget.row_keys.set_values(["id"])
+            widget.dims = [Dimension("Customer", ("cust",), ())]
+            widget.metrics = [Measure("amt", "amt", kind="value")]
+            widget.save_model()
+
+            initial_model = widget.model
+            # Create dummy mart.duckdb to simulate locked DB
+            (widget.current / "mart.duckdb").write_text("locked", encoding="utf-8")
+
+            conflicting_model = MartModel(
+                name="locked_wizard_space",
+                fact_table="fact_sales",
+                dimensions=(Dimension("ConflictingDim", ("cust",), ()),),
+                measures=(Measure("amt", "amt", kind="value"),),
+                period_column="period",
+                row_key_columns=("id",),
+                version="1",
+            )
+
+            from unittest.mock import patch
+            from PySide6.QtWidgets import QDialog
+            with patch("src.qt.widgets.mart_model_wizard.MartModelWizardDialog.exec", return_value=QDialog.DialogCode.Accepted), \
+                 patch("src.qt.widgets.mart_model_wizard.MartModelWizardDialog.get_model", return_value=conflicting_model):
+                widget.open_model_wizard()
+
+            # Error status and self.model preserved
+            self.assertIn("An existing database requires its original model", widget.status.text())
+            self.assertEqual(widget.model, initial_model)
+            # UI forms must be rolled back to initial_model dimensions
+            self.assertEqual([d.name for d in widget.dims], ["Customer"])
+
+    def test_workspace_tabs_and_deployment_subtabs(self):
+        """Verify the 4-step main workflow tabs and deploy sub-tabs structure."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            widget = MartWorkspace("ko", ImmediateRunner(), root=root / "spaces")
+
+            # 1. Main tabs count and titles
+            self.assertEqual(widget.tabs.count(), 4)
+            self.assertIn("1. 📋", widget.tabs.tabText(0))
+            self.assertIn("2. ⚡", widget.tabs.tabText(1))
+            self.assertIn("3. 🔍", widget.tabs.tabText(2))
+            self.assertIn("4. 📤", widget.tabs.tabText(3))
+
+            # 2. Deploy sub-tabs count and titles
+            self.assertTrue(hasattr(widget, "deploy_tabs"))
+            self.assertEqual(widget.deploy_tabs.count(), 3)
+            self.assertEqual(widget.deploy_tabs.tabText(0), "목적 CSV")
+            self.assertEqual(widget.deploy_tabs.tabText(1), "SharePoint")
+            self.assertEqual(widget.deploy_tabs.tabText(2), "저장소 용량 모니터링")
+
+            # 3. Widgets integrity
+            self.assertIsNotNone(widget.candidates)
+            self.assertIsNotNone(widget.budget)
+            self.assertIsNotNone(widget.site)
+            self.assertIsNotNone(widget.export_name)
 
 
 if __name__ == "__main__":

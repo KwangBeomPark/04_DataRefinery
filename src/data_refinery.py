@@ -1,10 +1,16 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+# ruff: noqa: E402
 import os
+from pathlib import Path
 import shutil
 import sys
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
 import webbrowser
-from pathlib import Path
+
+# Ensure project root is in sys.path when invoked directly as a script (e.g. VS Code Play button)
+_project_root = str(Path(__file__).resolve().parents[1])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 from src.background_jobs import BackgroundJobRunner, JobCallbacks
 from src.diagnostics import record_error
