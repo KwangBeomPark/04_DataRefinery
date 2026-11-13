@@ -38,7 +38,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.csv_processing import read_file_rows
+from src.dataset_profiler import EU_NUMBER_RE, US_NUMBER_RE
 from src.mart.auto_guess import (
+    MEASURE_NAME_RE,
     ROLE_DIM_ATTR,
     ROLE_DIM_KEY,
     ROLE_EXCLUDED,
@@ -51,6 +53,7 @@ from src.mart.auto_guess import (
     ModelGuessResult,
     assignments_to_model,
     guess_model_assignments,
+    infer_decimal_precision_scale,
     model_to_assignments,
 )
 from src.mart.model import MartModel
@@ -133,6 +136,13 @@ WIZARD_TEXT = {
         "col_header_scale": "소수점 (Scale)",
         "col_header_target": "배치 대상 테이블",
         "validation_warn": "검증 경고",
+        "duplicate_policy_label": "동일 식별키 중복 처리:",
+        "duplicate_policy_reject": "🚫 중복 행 발견 시 차단 (기본)",
+        "duplicate_policy_sum": "➕ 동일 기준 수치 자동 합산 (Group & Sum 적재)",
+        "info_duplicate_resolved_sum": "ℹ️ 동일 기준 중복 행을 합산하여 적재합니다 (표본 {rows:,}개 행 중 중복 {dups:,}건 Group & Sum 자동 합산).",
+        "btn_apply_sum_policy": "➕ 동일 기준 수치 자동 합산 (Group & Sum) 적용",
+        "btn_exclude_all_unassigned": "🚫 미할당 열 일괄 제외",
+        "btn_add_unassigned_numeric": "➕ 미할당 숫자열 일괄 지표 추가",
     },
     "en": {
         "title": "Star Schema Dataset Modeling Wizard",
@@ -209,6 +219,13 @@ WIZARD_TEXT = {
         "col_header_scale": "Scale",
         "col_header_target": "Target Table",
         "validation_warn": "Validation Warning",
+        "duplicate_policy_label": "Duplicate Grain Policy:",
+        "duplicate_policy_reject": "🚫 Reject duplicate rows (Default)",
+        "duplicate_policy_sum": "➕ Auto-sum duplicate rows (Group & Sum load)",
+        "info_duplicate_resolved_sum": "ℹ️ 동일 기준 중복 행을 합산하여 적재합니다 / Duplicate rows with identical grain will be grouped and summed ({dups:,} duplicates in {rows:,} sample rows).",
+        "btn_apply_sum_policy": "➕ Enable Auto-Sum (Group & Sum)",
+        "btn_exclude_all_unassigned": "🚫 Exclude All Unassigned",
+        "btn_add_unassigned_numeric": "➕ Add Unassigned Numeric as Measures",
     },
     "pl": {
         "title": "Kreator Modelowania Hurtowni Gwiazdy",
@@ -285,6 +302,13 @@ WIZARD_TEXT = {
         "col_header_scale": "Miejsca po przecinku",
         "col_header_target": "Tabela Docelowa",
         "validation_warn": "Ostrzeżenie Walidacji",
+        "duplicate_policy_label": "Polityka duplikatów klucza:",
+        "duplicate_policy_reject": "🚫 Odrzuć zduplikowane wiersze (Domyślnie)",
+        "duplicate_policy_sum": "➕ Sumuj zduplikowane wiersze (Group & Sum)",
+        "info_duplicate_resolved_sum": "ℹ️ Zduplikowane wiersze o tym samym kluczu zostaną zsumowane ({dups:,} duplikatów w {rows:,} wierszach próbki).",
+        "btn_apply_sum_policy": "➕ Włącz automatyczne sumowanie (Group & Sum)",
+        "btn_exclude_all_unassigned": "🚫 Wyklucz wszystkie nieprzypisane",
+        "btn_add_unassigned_numeric": "➕ Dodaj nieprzypisane liczbowe jako miary",
     },
 }
 
@@ -362,11 +386,13 @@ class MartModelWizardDialog(QDialog):
         self.row_key_mode: str = "auto"
         self.composite_keys: List[str] = []
         self.single_key: str = ""
+        self.duplicate_grain_policy: str = "reject"
         self.final_model: Optional[MartModel] = None
 
         if self.initial_model:
             self.detected_delimiter = getattr(self.initial_model, "source_delimiter", ",") or ","
             self.detected_encoding = getattr(self.initial_model, "source_encoding", "utf-8-sig") or "utf-8-sig"
+            self.duplicate_grain_policy = getattr(self.initial_model, "duplicate_grain_policy", "reject") or "reject"
             self._load_csv_data(encoding=self.detected_encoding, delimiter=self.detected_delimiter)
         else:
             self._load_csv_data()
@@ -729,6 +755,23 @@ class MartModelWizardDialog(QDialog):
         self.lbl_unassigned_warn.setStyleSheet("color: #b91c1c; font-weight: bold;")
         lay.addWidget(self.lbl_unassigned_warn)
 
+        step2_bulk_row = QHBoxLayout()
+        self.btn_step2_add_numeric = QPushButton(self.t["btn_add_unassigned_numeric"])
+        self.btn_step2_add_numeric.setStyleSheet(
+            "font-weight: bold; background-color: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 4px 10px;"
+        )
+        self.btn_step2_add_numeric.clicked.connect(self._on_add_unassigned_numeric_measures)
+        step2_bulk_row.addWidget(self.btn_step2_add_numeric)
+
+        self.btn_step2_exclude_unassigned = QPushButton(self.t["btn_exclude_all_unassigned"])
+        self.btn_step2_exclude_unassigned.setStyleSheet(
+            "background-color: #f1f5f9; border: 1px solid #cbd5e1; color: #334155; padding: 4px 10px;"
+        )
+        self.btn_step2_exclude_unassigned.clicked.connect(self._on_exclude_all_unassigned)
+        step2_bulk_row.addWidget(self.btn_step2_exclude_unassigned)
+        step2_bulk_row.addStretch(1)
+        lay.addLayout(step2_bulk_row)
+
         self.stack.addWidget(card)
 
     def _init_step3_card(self) -> None:
@@ -863,6 +906,32 @@ class MartModelWizardDialog(QDialog):
         # Compatibility alias
         self.cmb_row_key = self.cmb_single_row_key
 
+        # Duplicate grain policy row ("reject" vs "sum")
+        dup_policy_row = QHBoxLayout()
+        dup_policy_row.addWidget(QLabel(self.t["duplicate_policy_label"]))
+        self.cmb_duplicate_policy = QComboBox()
+        self.cmb_duplicate_policy.addItem(self.t["duplicate_policy_reject"], "reject")
+        self.cmb_duplicate_policy.addItem(self.t["duplicate_policy_sum"], "sum")
+        self.cmb_duplicate_policy.currentIndexChanged.connect(self._on_duplicate_policy_changed)
+        dup_policy_row.addWidget(self.cmb_duplicate_policy, 1)
+        grain_lay.addLayout(dup_policy_row)
+
+        # Sample duplicate preflight notice & one-click Group & Sum toggle
+        self.box_dup_notice = QFrame()
+        dup_notice_lay = QHBoxLayout(self.box_dup_notice)
+        dup_notice_lay.setContentsMargins(0, 2, 0, 2)
+        self.lbl_step3_dup_status = QLabel()
+        self.lbl_step3_dup_status.setWordWrap(True)
+        dup_notice_lay.addWidget(self.lbl_step3_dup_status, 1)
+        self.btn_apply_sum_policy = QPushButton(self.t["btn_apply_sum_policy"])
+        self.btn_apply_sum_policy.setStyleSheet(
+            "font-weight: bold; background-color: #eff6ff; border: 1px solid #93c5fd; color: #1d4ed8; padding: 4px 10px;"
+        )
+        self.btn_apply_sum_policy.clicked.connect(lambda: self._set_duplicate_policy("sum"))
+        dup_notice_lay.addWidget(self.btn_apply_sum_policy)
+        self.box_dup_notice.setVisible(False)
+        grain_lay.addWidget(self.box_dup_notice)
+
         lay.addWidget(self.row_grain_group)
 
         # Partition column selector (H2)
@@ -881,6 +950,16 @@ class MartModelWizardDialog(QDialog):
         self.btn_add_measure.setStyleSheet("font-weight: bold; background-color: #f0fdf4; border: 1px solid #86efac; color: #166534; padding: 4px 10px;")
         self.btn_add_measure.clicked.connect(self._on_add_measure)
         meas_toolbar.addWidget(self.btn_add_measure)
+
+        self.btn_add_unassigned_measures = QPushButton(self.t["btn_add_unassigned_numeric"])
+        self.btn_add_unassigned_measures.setStyleSheet("font-weight: bold; background-color: #eff6ff; border: 1px solid #93c5fd; color: #1d4ed8; padding: 4px 10px;")
+        self.btn_add_unassigned_measures.clicked.connect(self._on_add_unassigned_numeric_measures)
+        meas_toolbar.addWidget(self.btn_add_unassigned_measures)
+
+        self.btn_exclude_unassigned = QPushButton(self.t["btn_exclude_all_unassigned"])
+        self.btn_exclude_unassigned.setStyleSheet("background-color: #f1f5f9; border: 1px solid #cbd5e1; color: #334155; padding: 4px 10px;")
+        self.btn_exclude_unassigned.clicked.connect(self._on_exclude_all_unassigned)
+        meas_toolbar.addWidget(self.btn_exclude_unassigned)
 
         self.btn_del_measure = QPushButton(self.t["btn_del_measure"])
         self.btn_del_measure.setStyleSheet("color: #b91c1c; padding: 4px 10px;")
@@ -941,6 +1020,7 @@ class MartModelWizardDialog(QDialog):
             self.assignments = model_to_assignments(self.initial_model, self.headers)
             self.fact_table_name = self.initial_model.fact_table
             self.period_column_name = self.initial_model.period_column
+            self.duplicate_grain_policy = getattr(self.initial_model, "duplicate_grain_policy", "reject") or "reject"
             if len(self.initial_model.row_key_columns) > 1:
                 self.row_key_mode = "composite"
                 self.composite_keys = list(self.initial_model.row_key_columns)
@@ -955,6 +1035,7 @@ class MartModelWizardDialog(QDialog):
             self.row_key_mode = "auto"
             self.composite_keys = []
             self.single_key = ""
+            self.duplicate_grain_policy = "reject"
             self._apply_pnl_auto_guess()
 
     def _apply_pnl_auto_guess(self) -> None:
@@ -1117,6 +1198,10 @@ class MartModelWizardDialog(QDialog):
             )
         else:
             self.lbl_unassigned_warn.setText("✔ 모든 열에 역할이 할당되었습니다.")
+        if hasattr(self, "btn_step2_add_numeric"):
+            self.btn_step2_add_numeric.setEnabled(bool(unassigned))
+        if hasattr(self, "btn_step2_exclude_unassigned"):
+            self.btn_step2_exclude_unassigned.setEnabled(bool(unassigned))
 
     def _refresh_step3_view(self) -> None:
         """Step 3 View: Fact Table & Measures Configuration."""
@@ -1157,6 +1242,12 @@ class MartModelWizardDialog(QDialog):
             self.measure_table.setItem(r_idx, 2, QTableWidgetItem(m.measure_unit or "-"))
             self.measure_table.setItem(r_idx, 3, QTableWidgetItem(str(m.measure_scale)))
         self.measure_table.blockSignals(False)
+
+        unassigned = [a.column_name for a in self.assignments if a.role == ROLE_UNASSIGNED]
+        if hasattr(self, "btn_add_unassigned_measures"):
+            self.btn_add_unassigned_measures.setEnabled(bool(unassigned))
+        if hasattr(self, "btn_exclude_unassigned"):
+            self.btn_exclude_unassigned.setEnabled(bool(unassigned))
 
     def _refresh_step4_view(self) -> None:
         """Render star schema diagram and mapping review table."""
@@ -1222,6 +1313,7 @@ class MartModelWizardDialog(QDialog):
                 source_delimiter=self.detected_delimiter,
                 source_encoding=self.detected_encoding,
                 row_key_columns=effective_row_keys,
+                duplicate_grain_policy=self.duplicate_grain_policy,
             )
             from src.mart.engine import validate_mart_model
             validate_mart_model(temp_model)
@@ -1230,7 +1322,18 @@ class MartModelWizardDialog(QDialog):
             sample_dups = self._check_sample_row_key_duplicates(effective_row_keys)
             status_text = f"<font color='#16a34a'><b>{self.t['validation_passed']}</b></font>"
             if sample_dups > 0:
-                status_text += f"<br><font color='#d97706'><b>{self.t['warn_duplicate_sample_keys'].format(rows=len(self.sample_rows), dups=sample_dups)}</b></font>"
+                if self.duplicate_grain_policy == "sum":
+                    status_text += (
+                        f"<br><font color='#1d4ed8'><b>"
+                        f"{self.t['info_duplicate_resolved_sum'].format(rows=len(self.sample_rows), dups=sample_dups)}"
+                        f"</b></font>"
+                    )
+                else:
+                    status_text += (
+                        f"<br><font color='#d97706'><b>"
+                        f"{self.t['warn_duplicate_sample_keys'].format(rows=len(self.sample_rows), dups=sample_dups)}"
+                        f"</b></font>"
+                    )
             self.lbl_validation_status.setText(status_text)
             self.final_model = temp_model
         except Exception as e:
@@ -1287,6 +1390,7 @@ class MartModelWizardDialog(QDialog):
             self.single_key = keys[0] if keys else ""
         else:
             self.composite_keys = list(keys)
+
     def _get_auto_derived_row_keys(self) -> List[str]:
         """Derive pure composite row keys from period column and all dimension natural keys."""
         keys: List[str] = []
@@ -1303,7 +1407,7 @@ class MartModelWizardDialog(QDialog):
                     break
             if not keys and self.headers:
                 keys.append(self.headers[0])
-        return keys
+        return keys[:8]
 
     def _get_effective_row_keys(self) -> List[str]:
         """Return the active row keys according to the current mode."""
@@ -1344,28 +1448,75 @@ class MartModelWizardDialog(QDialog):
         elif not is_checked and col in self.composite_keys:
             self.composite_keys.remove(col)
         self._update_composite_preview()
+        self._refresh_step3_duplicate_notice()
         self._update_header_badges()
 
     def _clear_composite_keys(self) -> None:
         self.composite_keys.clear()
         self._refresh_composite_checklist()
         self._update_composite_preview()
+        self._refresh_step3_duplicate_notice()
         self._update_header_badges()
 
     def _select_default_composite_keys(self) -> None:
         self.composite_keys = self._get_auto_derived_row_keys()
         self._refresh_composite_checklist()
         self._update_composite_preview()
+        self._refresh_step3_duplicate_notice()
         self._update_header_badges()
 
     def _on_single_row_key_changed(self, text: str) -> None:
         col = self.cmb_single_row_key.currentData() or ""
         self.single_key = col
+        self._refresh_step3_duplicate_notice()
         self._update_header_badges()
 
     def _on_row_key_changed(self, text: str) -> None:
         """Backward compatibility alias for _on_single_row_key_changed."""
         self._on_single_row_key_changed(text)
+
+    def _on_duplicate_policy_changed(self, idx: int) -> None:
+        policy = self.cmb_duplicate_policy.currentData() or "reject"
+        self.duplicate_grain_policy = policy if policy in ("reject", "sum") else "reject"
+        self._refresh_step3_duplicate_notice()
+        self._refresh_step4_view()
+
+    def _set_duplicate_policy(self, policy: str) -> None:
+        self.duplicate_grain_policy = policy if policy in ("reject", "sum") else "reject"
+        if hasattr(self, "cmb_duplicate_policy"):
+            idx = self.cmb_duplicate_policy.findData(self.duplicate_grain_policy)
+            if idx >= 0:
+                self.cmb_duplicate_policy.blockSignals(True)
+                self.cmb_duplicate_policy.setCurrentIndex(idx)
+                self.cmb_duplicate_policy.blockSignals(False)
+        self._refresh_step3_duplicate_notice()
+        self._refresh_step4_view()
+
+    def _refresh_step3_duplicate_notice(self) -> None:
+        if not hasattr(self, "box_dup_notice"):
+            return
+        effective_keys = self._get_effective_row_keys()
+        sample_dups = self._check_sample_row_key_duplicates(effective_keys)
+        if sample_dups > 0:
+            self.box_dup_notice.setVisible(True)
+            if self.duplicate_grain_policy == "sum":
+                self.box_dup_notice.setStyleSheet(
+                    "QFrame { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px; }"
+                )
+                self.lbl_step3_dup_status.setText(
+                    f"<font color='#1d4ed8'><b>{self.t['info_duplicate_resolved_sum'].format(rows=len(self.sample_rows), dups=sample_dups)}</b></font>"
+                )
+                self.btn_apply_sum_policy.setVisible(False)
+            else:
+                self.box_dup_notice.setStyleSheet(
+                    "QFrame { background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; padding: 6px; }"
+                )
+                self.lbl_step3_dup_status.setText(
+                    f"<font color='#d97706'><b>{self.t['warn_duplicate_sample_keys'].format(rows=len(self.sample_rows), dups=sample_dups)}</b></font>"
+                )
+                self.btn_apply_sum_policy.setVisible(True)
+        else:
+            self.box_dup_notice.setVisible(False)
 
     def _refresh_step3_grain_ui(self) -> None:
         """Refresh Auto, Composite, and Single row key controls."""
@@ -1374,6 +1525,13 @@ class MartModelWizardDialog(QDialog):
             self.cmb_row_key_mode.blockSignals(True)
             self.cmb_row_key_mode.setCurrentIndex(idx)
             self.cmb_row_key_mode.blockSignals(False)
+
+        if hasattr(self, "cmb_duplicate_policy"):
+            p_idx = self.cmb_duplicate_policy.findData(self.duplicate_grain_policy)
+            if p_idx >= 0 and self.cmb_duplicate_policy.currentIndex() != p_idx:
+                self.cmb_duplicate_policy.blockSignals(True)
+                self.cmb_duplicate_policy.setCurrentIndex(p_idx)
+                self.cmb_duplicate_policy.blockSignals(False)
 
         self.box_auto_grain.setVisible(self.row_key_mode == "auto")
         self.box_composite_grain.setVisible(self.row_key_mode == "composite")
@@ -1399,6 +1557,7 @@ class MartModelWizardDialog(QDialog):
             if s_idx >= 0:
                 self.cmb_single_row_key.setCurrentIndex(s_idx)
         self.cmb_single_row_key.blockSignals(False)
+        self._refresh_step3_duplicate_notice()
 
     def _refresh_composite_checklist(self) -> None:
         """Populate candidate columns in composite key checklist."""
@@ -1565,6 +1724,55 @@ class MartModelWizardDialog(QDialog):
             )
         else:
             self.lbl_unassigned_warn.setText("✔ 모든 열에 역할이 할당되었습니다.")
+        if hasattr(self, "btn_step2_add_numeric"):
+            self.btn_step2_add_numeric.setEnabled(bool(unassigned))
+        if hasattr(self, "btn_step2_exclude_unassigned"):
+            self.btn_step2_exclude_unassigned.setEnabled(bool(unassigned))
+
+    def _on_exclude_all_unassigned(self) -> int:
+        """Bulk-assign all ROLE_UNASSIGNED columns to ROLE_EXCLUDED."""
+        changed = 0
+        for a in self.assignments:
+            if a.role == ROLE_UNASSIGNED:
+                a.role = ROLE_EXCLUDED
+                a.dimension_name = ""
+                a.reason = "미할당 열 일괄 제외"
+                changed += 1
+        if changed > 0:
+            self._refresh_all_views()
+            self._update_header_badges()
+        return changed
+
+    def _on_add_unassigned_numeric_measures(self) -> int:
+        """Bulk-assign unassigned numeric (or empty numeric-like) columns to ROLE_MEASURE."""
+        changed = 0
+        for a in self.assignments:
+            if a.role != ROLE_UNASSIGNED or a.column_name == self.period_column_name:
+                continue
+            col_idx = self.headers.index(a.column_name) if a.column_name in self.headers else -1
+            sample_vals = [
+                r[col_idx].strip()
+                for r in self.sample_rows
+                if 0 <= col_idx < len(r) and r[col_idx].strip()
+            ]
+            is_num_col = (
+                all(bool(US_NUMBER_RE.match(v) or EU_NUMBER_RE.match(v)) for v in sample_vals)
+                if sample_vals
+                else bool(MEASURE_NAME_RE.search(a.column_name))
+            )
+            if is_num_col:
+                prec, scale = infer_decimal_precision_scale(sample_vals)
+                a.role = ROLE_MEASURE
+                a.dimension_name = ""
+                a.measure_kind = "value"
+                a.measure_precision = prec
+                a.measure_scale = scale
+                a.reason = "미할당 숫자열 일괄 지표 추가"
+                changed += 1
+        if changed > 0:
+            self._refresh_all_views()
+            self._update_header_badges()
+        return changed
 
     def _on_measure_item_edited(self, item: QTableWidgetItem) -> None:
         row = item.row()
@@ -1586,8 +1794,10 @@ class MartModelWizardDialog(QDialog):
         elif col_idx == 3:
             try:
                 scale = int(item.text().strip())
-                if 0 <= scale <= 18:
+                if 0 <= scale <= 38:
                     asgn.measure_scale = scale
+                    if scale > 16 and asgn.measure_precision < 38:
+                        asgn.measure_precision = 38
             except ValueError:
                 pass
 
@@ -1620,9 +1830,18 @@ class MartModelWizardDialog(QDialog):
 
         target = next((a for a in candidates if a.column_name == chosen_col), None)
         if target:
+            col_idx = self.headers.index(target.column_name) if target.column_name in self.headers else -1
+            sample_vals = [
+                r[col_idx].strip()
+                for r in self.sample_rows
+                if 0 <= col_idx < len(r) and r[col_idx].strip()
+            ]
+            prec, scale = infer_decimal_precision_scale(sample_vals) if sample_vals else (target.measure_precision, target.measure_scale)
             target.role = ROLE_MEASURE
             target.dimension_name = ""
             target.measure_kind = "value"
+            target.measure_precision = prec
+            target.measure_scale = scale
             target.reason = "사용자 추가 지표"
             self._refresh_step3_view()
             self._update_header_badges()
@@ -1776,6 +1995,7 @@ class MartModelWizardDialog(QDialog):
                 source_delimiter=self.detected_delimiter,
                 source_encoding=self.detected_encoding,
                 row_key_columns=effective_row_keys,
+                duplicate_grain_policy=self.duplicate_grain_policy,
             )
             from src.mart.engine import validate_mart_model
             validate_mart_model(candidate_model)

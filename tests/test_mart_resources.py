@@ -57,9 +57,9 @@ class ResourcesTests(unittest.TestCase):
         def check(guard):
             return guard('load', self.store, self.source.stat().st_size, files=[self.source], model=self.model)
         self.assertTrue(check(self.guard)['allowed'])
-        self.write('a' * 125)
+        self.write('a' * 1000)
         self.assertTrue(check(self.guard)['allowed'])
-        self.write('a' * 126)
+        self.write('a' * 1001)
         self.assertFalse(check(self.guard)['allowed'])
         self.write('a')
         unknown = ResourcePreflight(reserve_bytes=0, space_probe=lambda _: free(None))
@@ -130,13 +130,18 @@ class ResourcesTests(unittest.TestCase):
         self.assertEqual(engine.create_export(definition)['rows'], 1)
 
     def test_three_dimensions_shape_and_unsupported_boundaries(self):
-        dimensions = tuple(Dimension('d' + str(i), ('k' + str(i),)) for i in range(3))
-        model = MartModel('M', 'sales', dimensions, (Measure('m', 'm', 18, 2),), 'period', (), ('id',))
+        dimensions = tuple(Dimension('d' + str(i), ('k' + str(i),)) for i in range(16))
+        model = MartModel('M', 'sales', dimensions, (Measure('m', 'm', 38, 10),), 'period', (), ('id',))
         self.guard._shape(model)
-        too_many = MartModel('M', 'sales', dimensions + (Dimension('d3', ('k3',)), Dimension('d4', ('k4',))),
+        too_many = MartModel('M', 'sales', dimensions + (Dimension('d16', ('k16',)),),
                              model.measures, 'period', (), ('id',))
         with self.assertRaises(ValueError):
             self.guard._shape(too_many)
+        too_wide = MartModel('M', 'sales', (Dimension('d0', ('k0',)),),
+                             tuple(Measure('m' + str(i), 'm' + str(i), 18, 2) for i in range(512)),
+                             'period', (), ('id',))
+        with self.assertRaises(ValueError):
+            self.guard._shape(too_wide)
 
     def test_representative_profile_load_group_publish_backup(self):
         dimensions = (
@@ -170,19 +175,15 @@ class ResourcesTests(unittest.TestCase):
         self.assertEqual(engine.create_export(multi)['rows'], 1)
         detail = ExportDefinition('detail', ('period', 'customer', 'shipto', 'm0'), filters=(('division', 'TV'),))
         self.assertEqual(engine.create_export(detail)['rows'], 20)
-        with self.source.open(encoding='utf-8', newline='') as inp:
-            reader = csv.reader(inp)
-            header, row = next(reader), next(reader)
-        with self.source.open('w', encoding='utf-8', newline='') as out:
-            writer = csv.writer(out)
-            writer.writerow(header)
-            for i in range(10000):
-                row[header.index('customer')] = str(i)
-                row[header.index('id')] = str(i)
-                writer.writerow(row)
+        import duckdb
+        db = duckdb.connect(str(self.store.database))
+        try:
+            db.execute("INSERT INTO mart_dimensions SELECT 'customer', json_array(CAST(i AS VARCHAR), 's'), i + 2, '{}', '' FROM range(100000) t(i)")
+        finally:
+            db.close()
         blocked = self.guard('load', self.store, self.source.stat().st_size, files=[self.source], model=model, scope={'period': '2026-01'})
         self.assertFalse(blocked['allowed'])
-        self.assertIn('10,000', blocked['reason'])
+        self.assertIn('100,000', blocked['reason'])
 
 
 if __name__ == '__main__':

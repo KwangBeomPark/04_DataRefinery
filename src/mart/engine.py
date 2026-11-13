@@ -38,6 +38,8 @@ def _model(model):
         d.pop('source_delimiter', None)
     if d.get('source_encoding') == 'utf-8-sig':
         d.pop('source_encoding', None)
+    if d.get('duplicate_grain_policy') == 'reject':
+        d.pop('duplicate_grain_policy', None)
     return _json(d)
 
 
@@ -46,6 +48,7 @@ def _normalize_model_dict(d: dict) -> dict:
     res = dict(d)
     for k in ('source_delimiter', 'source_encoding'):
         res.pop(k, None)
+    res.setdefault('duplicate_grain_policy', 'reject')
     return res
 
 
@@ -92,8 +95,14 @@ def validate_mart_model(model):
 
 
 def _period_kind(value):
-    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}(?:-\d{2})?', value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{6}|\d{4}-\d{2}(?:-\d{2})?', value):
         raise ValueError('Period must be an ISO month or date')
+    if len(value) == 6:
+        year = int(value[:4])
+        month = int(value[4:6])
+        if not (1900 <= year <= 2999 and 1 <= month <= 12):
+            raise ValueError('Invalid period date')
+        return 6
     try:
         date.fromisoformat(value + '-01' if len(value) == 7 else value)
     except ValueError as exc:
@@ -120,7 +129,57 @@ def _validate_period_bounds(db, period_column, start, end):
         raise ValueError('Invalid period range')
 
 
+def inspect_source_scopes(model, paths):
+    """Inspect source CSV files and return sorted unique scope dictionaries for (period_column, *partition_columns)."""
+    if isinstance(paths, (str, Path)):
+        file_list = [Path(paths)]
+    else:
+        file_list = [Path(p) for p in paths]
+    if isinstance(model, dict):
+        period_col = model['period_column']
+        partition_cols = tuple(model.get('partition_columns', ()))
+        encoding = model.get('source_encoding', 'utf-8-sig') or 'utf-8-sig'
+        delimiter = model.get('source_delimiter', ',') or ','
+    else:
+        period_col = model.period_column
+        partition_cols = tuple(model.partition_columns)
+        encoding = getattr(model, 'source_encoding', 'utf-8-sig') or 'utf-8-sig'
+        delimiter = getattr(model, 'source_delimiter', ',') or ','
+    scope_columns = (period_col,) + partition_cols
+    seen = set()
+    for p in file_list:
+        enc_to_use = encoding
+        delim_to_use = delimiter
+        try:
+            with p.open(encoding=enc_to_use, newline='') as src:
+                reader = csv.DictReader(src, delimiter=delim_to_use)
+                if not reader.fieldnames or not set(scope_columns).issubset(set(reader.fieldnames)):
+                    raise ValueError('Fallback needed')
+                for row in reader:
+                    vals = tuple((row.get(c) or '').strip() for c in scope_columns)
+                    if all(vals):
+                        _period_kind(vals[0])
+                        seen.add(vals)
+        except (UnicodeDecodeError, ValueError, csv.Error):
+            from src.dataset_profiler import profile_dataset_sample
+            prof = profile_dataset_sample(p, sample_rows=5)
+            enc_to_use = prof.encoding
+            delim_to_use = prof.delimiter
+            with p.open(encoding=enc_to_use, newline='') as src:
+                reader = csv.DictReader(src, delimiter=delim_to_use)
+                if not reader.fieldnames or not set(scope_columns).issubset(set(reader.fieldnames)):
+                    raise ValueError('Input schema differs from declared roles')
+                for row in reader:
+                    vals = tuple((row.get(c) or '').strip() for c in scope_columns)
+                    if all(vals):
+                        _period_kind(vals[0])
+                        seen.add(vals)
+    return [dict(zip(scope_columns, tup)) for tup in sorted(seen)]
+
+
 class MartEngine:
+    inspect_source_scopes = staticmethod(inspect_source_scopes)
+
     def __init__(self, workspace, preflight=None):
         self.workspace = workspace
         self.preflight = preflight
@@ -188,7 +247,26 @@ class MartEngine:
     def _validate_model(self, model):
         return validate_mart_model(model)
 
-    def load_snapshot(self, model, files, scope, expected_files, complete=False, allow_empty=False):
+    def load_all_scopes(self, model, files, expected_files, complete=False, allow_empty=False):
+        """Auto-detect all scopes in source files and load them sequentially."""
+        scopes = inspect_source_scopes(model, files)
+        if not scopes:
+            raise ValueError('Empty snapshot requires explicit declaration')
+        if len(scopes) == 1:
+            return self.load_snapshot(model, files, scopes[0], expected_files, complete=complete, allow_empty=allow_empty)
+        results = []
+        for s in scopes:
+            res = self.load_snapshot(model, files, s, expected_files, complete=complete, allow_empty=allow_empty, filter_scope=True)
+            results.append(res)
+        return {
+            'revision': results[-1]['revision'],
+            'changed': any(r.get('changed') for r in results),
+            'rows': sum(r.get('rows', 0) for r in results),
+            'scopes_loaded': len(results),
+            'results': results,
+        }
+
+    def load_snapshot(self, model, files, scope, expected_files, complete=False, allow_empty=False, filter_scope=False):
         """Load a complete declared scope from verified, immutable local copies."""
         if self.preflight is None:
             raise ValueError('Verified capacity preflight is required')
@@ -272,7 +350,12 @@ class MartEngine:
                     columns = sorted(required)
                     fields = ','.join(_ident(c) + ' VARCHAR' for c in columns)
                     extra = ','.join(_ident('_nk_' + d.name) + ' VARCHAR,' + _ident('_attr_' + d.name) + ' VARCHAR' for d in model.dimensions)
-                    db.execute('CREATE TEMP TABLE stage(row_key VARCHAR PRIMARY KEY,payload VARCHAR,' + fields + ',' + extra + ')')
+                    sum_policy = getattr(model, 'duplicate_grain_policy', 'reject') == 'sum'
+                    target_stage = 'raw_stage' if sum_policy else 'stage'
+                    if sum_policy:
+                        db.execute('CREATE TEMP TABLE raw_stage(row_key VARCHAR,payload VARCHAR,' + fields + ',' + extra + ')')
+                    else:
+                        db.execute('CREATE TEMP TABLE stage(row_key VARCHAR PRIMARY KEY,payload VARCHAR,' + fields + ',' + extra + ')')
                     batch = []
                     count = 0
                     for copy in copies:
@@ -281,6 +364,11 @@ class MartEngine:
                             if reader.fieldnames is None or len(set(reader.fieldnames)) != len(reader.fieldnames) or set(reader.fieldnames) != required:
                                 raise ValueError('Input schema differs from declared roles')
                             for row in reader:
+                                if filter_scope:
+                                    if None in row or any(v is None for v in row.values()):
+                                        raise ValueError('Malformed CSV row')
+                                    if any(row[k] != str(scope[k]) for k in scope_columns):
+                                        continue
                                 self._validate_row(row, model, scope, scope_columns)
                                 key = _json([row[k] for k in model.row_key_columns])
                                 extras = []
@@ -291,12 +379,14 @@ class MartEngine:
                                 count += 1
                                 if len(batch) >= 1000:
                                     self._remaining(self.workspace.root)
-                                    self._insert_stage(db, batch)
+                                    self._insert_stage(db, batch, table_name=target_stage)
                                     batch.clear()
                     if batch:
-                        self._insert_stage(db, batch)
+                        self._insert_stage(db, batch, table_name=target_stage)
                     if count == 0 and not allow_empty:
                         raise ValueError('Empty snapshot requires explicit declaration')
+                    if sum_policy:
+                        count = self._aggregate_raw_stage(db, model, columns, fields, extra)
                     revision = int(db.execute("SELECT value FROM mart_meta WHERE key='revision'").fetchone()[0]) + 1
                     self._remaining(self.workspace.root)
                     fact = _ident('fact_' + model.fact_table)
@@ -331,7 +421,7 @@ class MartEngine:
                     db.close()
 
     @staticmethod
-    def _insert_stage(db, batch):
+    def _insert_stage(db, batch, table_name='stage'):
         import duckdb
         try:
             import pyarrow as pa
@@ -339,11 +429,36 @@ class MartEngine:
             table = pa.Table.from_arrays(columns, names=['c' + str(i) for i in range(len(columns))])
             db.register('_mart_stage_batch', table)
             try:
-                db.execute('INSERT INTO stage SELECT * FROM _mart_stage_batch')
+                db.execute('INSERT INTO ' + table_name + ' SELECT * FROM _mart_stage_batch')
             finally:
                 db.unregister('_mart_stage_batch')
         except duckdb.ConstraintException as exc:
             raise ValueError('Duplicate business row key or invalid staged row') from exc
+
+    @staticmethod
+    def _aggregate_raw_stage(db, model, columns, fields, extra):
+        """Collapse duplicate row_key rows in raw_stage by summing measures into stage."""
+        import duckdb
+        measure_by_col = {m.column: m for m in model.measures}
+        select_exprs = ['row_key', 'FIRST(payload ORDER BY rowid)']
+        for c in columns:
+            col_id = _ident(c)
+            if c in measure_by_col:
+                m = measure_by_col[c]
+                select_exprs.append(
+                    f"COALESCE(CAST(CAST(SUM(CAST(NULLIF({col_id}, '') AS DECIMAL({m.precision},{m.scale}))) AS DECIMAL({m.precision},{m.scale})) AS VARCHAR), '')"
+                )
+            else:
+                select_exprs.append(f'FIRST({col_id} ORDER BY rowid)')
+        for dim in model.dimensions:
+            select_exprs.append(f"FIRST({_ident('_nk_' + dim.name)} ORDER BY rowid)")
+            select_exprs.append(f"FIRST({_ident('_attr_' + dim.name)} ORDER BY rowid)")
+        db.execute('CREATE TEMP TABLE stage(row_key VARCHAR PRIMARY KEY,payload VARCHAR,' + fields + ',' + extra + ')')
+        try:
+            db.execute('INSERT INTO stage SELECT ' + ','.join(select_exprs) + ' FROM raw_stage GROUP BY row_key')
+        except duckdb.Error as exc:
+            raise ValueError('Decimal exceeds declared precision or scale') from exc
+        return db.execute('SELECT COUNT(*) FROM stage').fetchone()[0]
 
     @staticmethod
     def _validate_row(row, model, scope, scope_columns):
@@ -357,22 +472,32 @@ class MartEngine:
         for dim in model.dimensions:
             if dim.authority_column:
                 value = row[dim.authority_column]
-                if not re.fullmatch(r'\d{4}-\d{2}(?:-\d{2})?', value):
-                    raise ValueError('Attribute authority must use ISO month or date')
                 try:
-                    date.fromisoformat(value + '-01' if len(value) == 7 else value)
+                    _period_kind(value)
                 except ValueError as exc:
+                    if 'ISO month or date' in str(exc):
+                        raise ValueError('Attribute authority must use ISO month or date') from exc
                     raise ValueError('Invalid authority date') from exc
-        for measure in model.measures:
-            value = row[measure.column]
-            if value == '':
-                continue
-            try:
-                number = Decimal(value)
-                if not number.is_finite() or number.as_tuple().exponent < -measure.scale or number.copy_abs() >= Decimal(10) ** (measure.precision - measure.scale):
-                    raise ValueError('Decimal exceeds declared precision or scale')
-            except InvalidOperation as exc:
-                raise ValueError('Invalid decimal') from exc
+        with localcontext() as ctx:
+            ctx.prec = 50
+            for measure in model.measures:
+                value = row[measure.column]
+                if value == '':
+                    continue
+                try:
+                    number = Decimal(value)
+                    if not number.is_finite():
+                        raise ValueError('Decimal exceeds declared precision or scale')
+                    if number.as_tuple().exponent < -measure.scale:
+                        norm = number.normalize()
+                        if norm.as_tuple().exponent < -measure.scale:
+                            raise ValueError('Decimal exceeds declared precision or scale')
+                        number = norm
+                    if number.copy_abs() >= Decimal(10) ** (measure.precision - measure.scale):
+                        raise ValueError('Decimal exceeds declared precision or scale')
+                    row[measure.column] = format(number, 'f')
+                except InvalidOperation as exc:
+                    raise ValueError('Invalid decimal') from exc
 
     @staticmethod
     def _create_model(db, model, model_text):
@@ -386,6 +511,7 @@ class MartEngine:
 
     @staticmethod
     def _merge_dimensions(db, model, revision):
+        sum_policy = getattr(model, 'duplicate_grain_policy', 'reject') == 'sum'
         for dim in model.dimensions:
             nk = _ident('_nk_' + dim.name)
             attr = _ident('_attr_' + dim.name)
@@ -395,13 +521,15 @@ class MartEngine:
                 old_lengths = db.execute('SELECT DISTINCT LENGTH(authority) FROM mart_dimensions WHERE dimension=?', [dim.name]).fetchall()
                 if len({v[0] for v in lengths + old_lengths}) > 1:
                     raise ValueError('Authority granularity must remain consistent')
-            conflict = db.execute('SELECT 1 FROM stage GROUP BY ' + nk + ',' + authority + ' HAVING COUNT(DISTINCT ' + attr + ')>1 LIMIT 1').fetchone()
-            if conflict:
-                raise ValueError('Conflicting attributes at same authority')
+            if not sum_policy:
+                conflict = db.execute('SELECT 1 FROM stage GROUP BY ' + nk + ',' + authority + ' HAVING COUNT(DISTINCT ' + attr + ')>1 LIMIT 1').fetchone()
+                if conflict:
+                    raise ValueError('Conflicting attributes at same authority')
             db.execute('CREATE OR REPLACE TEMP TABLE dim_candidates AS SELECT DISTINCT ' + nk + ' AS nk,' + attr + ' AS attrs,' + authority + ' AS authority FROM stage QUALIFY ROW_NUMBER() OVER (PARTITION BY ' + nk + ' ORDER BY ' + authority + ' DESC)=1')
-            conflict = db.execute('SELECT 1 FROM dim_candidates c JOIN mart_dimensions d ON d.dimension=? AND d.natural_key=c.nk WHERE d.authority=c.authority AND d.attributes<>c.attrs LIMIT 1', [dim.name]).fetchone()
-            if conflict:
-                raise ValueError('Conflicting attributes at same authority')
+            if not sum_policy:
+                conflict = db.execute('SELECT 1 FROM dim_candidates c JOIN mart_dimensions d ON d.dimension=? AND d.natural_key=c.nk WHERE d.authority=c.authority AND d.attributes<>c.attrs LIMIT 1', [dim.name]).fetchone()
+                if conflict:
+                    raise ValueError('Conflicting attributes at same authority')
             db.execute('INSERT INTO mart_audit_dimensions SELECT ?,d.* FROM mart_dimensions d JOIN dim_candidates c ON d.dimension=? AND d.natural_key=c.nk WHERE c.authority>d.authority', [revision, dim.name])
             db.execute('UPDATE mart_dimensions SET attributes=c.attrs,authority=c.authority FROM dim_candidates c WHERE dimension=? AND natural_key=c.nk AND c.authority>mart_dimensions.authority', [dim.name])
             max_sk = db.execute('SELECT COALESCE(MAX(sk),0) FROM mart_dimensions WHERE dimension=?', [dim.name]).fetchone()[0]
@@ -535,7 +663,7 @@ class MartEngine:
         fact_columns = set(row)
         for column, value in zip(columns, record[1:]):
             if column not in fact_columns:
-                row[column] = str(value) if isinstance(value, Decimal) else value
+                row[column] = format(value, 'f') if isinstance(value, Decimal) else value
         return row
 
     def sample(self, limit=100, offset=0):
@@ -613,8 +741,7 @@ class MartEngine:
             args.append(value)
         for value, operator in ((definition.period_start, '>='), (definition.period_end, '<=')):
             if value is not None:
-                if not re.fullmatch(r'\d{4}-\d{2}(?:-\d{2})?', value):
-                    raise ValueError('Period bounds must be ISO month or date')
+                _period_kind(value)
                 conditions.append(_ident(model['period_column']) + operator + '?')
                 args.append(value)
         if definition.period_start and definition.period_end and (len(definition.period_start) != len(definition.period_end) or definition.period_start > definition.period_end):

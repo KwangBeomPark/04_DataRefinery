@@ -242,6 +242,7 @@ class MartOperationsTests(unittest.TestCase):
 class PublicationBoundaryTests(unittest.TestCase):
     def test_approved_remote_requires_current_revision_and_unchanged_bytes(self):
         import csv
+
         from src.mart import (
             Dimension,
             ExportDefinition,

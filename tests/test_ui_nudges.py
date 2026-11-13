@@ -17,7 +17,12 @@ from PySide6.QtWidgets import QPushButton
 from src.i18n import _UI_TEXT
 from src.qt.app import create_or_get_app
 from src.qt.tabs.dwh_tab import DwhPipelineTab, _make_unique_backup_path
-from src.qt.ui_state import NudgeState, format_nudge, nudge_reason, set_button_enabled_with_nudge
+from src.qt.ui_state import (
+    NudgeState,
+    format_nudge,
+    nudge_reason,
+    set_button_enabled_with_nudge,
+)
 
 HANGUL_RE = re.compile(r"[가-힣]")
 
@@ -491,6 +496,19 @@ class TestDwhTabNudges(unittest.TestCase):
 
         p3 = _make_unique_backup_path(target, ts)
         self.assertEqual(p3.name, "master_customers.csv.bak_20261101_120000_2")
+
+    def test_lazy_legacy_source_check_only_runs_when_legacy_view_active(self):
+        """Verify legacy load_settings is not called on default MartWorkspace until legacy view is opened."""
+        self.assertEqual(self.tab.workspace_stack.currentIndex(), 0)
+        self.load_settings.assert_not_called()
+
+        self.tab.apply_language("en")
+        self.load_settings.assert_not_called()
+
+        self.tab.btn_legacy.click()
+        self.assertEqual(self.tab.workspace_stack.currentIndex(), 1)
+        self.load_settings.assert_called()
+
 
 
 if __name__ == "__main__":

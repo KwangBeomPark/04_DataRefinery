@@ -1,13 +1,13 @@
 """PySide6 implementation for 'DWH & 손익 마트' (Kimball Star Schema DWH & AI Mart Pipeline)."""
+# ruff: noqa: BLE001, C414, S110, SIM102, TRY201
 
 from __future__ import annotations
 
 import csv
 import os
-from pathlib import Path
 import shutil
 import time
-from typing import Optional
+from pathlib import Path
 
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 )
 
 from src.background_jobs import BackgroundJobRunner, JobCallbacks, ProgressCallback
-from src.qt.jobs import create_qt_job_runner
 from src.config_loader import load_account_mapping, load_settings
 from src.dimension_builder import DimensionBuilder
 from src.dwh_template import create_dwh_excel_template
@@ -39,11 +38,12 @@ from src.qt.dialogs import (
     info_dialog,
     save_file_dialog,
 )
+from src.qt.jobs import create_qt_job_runner
+from src.qt.ui_state import set_button_enabled_with_nudge
 from src.qt.widgets.card import CardWidget
-from src.qt.widgets.mart_workspace import MartWorkspace
 from src.qt.widgets.dwh_guide_dialog import DwhGuideDialog
 from src.qt.widgets.dwh_preview_dialog import DwhPreviewDialog
-from src.qt.ui_state import set_button_enabled_with_nudge
+from src.qt.widgets.mart_workspace import MartWorkspace
 from src.ui_components import PALETTE
 
 
@@ -66,20 +66,20 @@ class DwhPipelineTab(QWidget):
     def __init__(
         self,
         language_code: str = "ko",
-        job_runner: Optional[BackgroundJobRunner] = None,
-        parent: Optional[QWidget] = None,
+        job_runner: BackgroundJobRunner | None = None,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.language_code = language_code
         self.job_runner = job_runner or create_qt_job_runner()
-        self._last_error_log: Optional[Path] = None
-        self._last_parquet_path: Optional[Path] = None
+        self._last_error_log: Path | None = None
+        self._last_parquet_path: Path | None = None
         self._source_state: tuple[bool, bool, bool] = (False, False, False)
         self._is_running = False
 
         self._init_ui()
         self.apply_language(self.language_code)
-        self._check_source_files()
+        self._check_source_files_if_legacy()
 
     def _init_ui(self) -> None:
         outer_layout = QVBoxLayout(self)
@@ -339,16 +339,24 @@ class DwhPipelineTab(QWidget):
         self.btn_workspace = QPushButton()
         self.btn_legacy = QPushButton()
         self.btn_workspace.clicked.connect(lambda: self.workspace_stack.setCurrentIndex(0))
-        self.btn_legacy.clicked.connect(lambda: self.workspace_stack.setCurrentIndex(1))
+        self.btn_legacy.clicked.connect(self._on_show_legacy)
         switch = QHBoxLayout()
         switch.addWidget(self.btn_workspace)
         switch.addWidget(self.btn_legacy)
         outer_layout.addLayout(switch)
         outer_layout.addWidget(self.workspace_stack, stretch=1)
 
+    def _on_show_legacy(self) -> None:
+        self.workspace_stack.setCurrentIndex(1)
+        self._check_source_files_if_legacy()
+
+    def _check_source_files_if_legacy(self) -> None:
+        if self.workspace_stack.currentIndex() == 1:
+            self._check_source_files()
+
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self._check_source_files()
+        self._check_source_files_if_legacy()
 
     # -----------------------------------------------------------------
     # Source Detection & Step-Gating
@@ -1116,7 +1124,14 @@ class DwhPipelineTab(QWidget):
         self.lbl_empty_title.setText(t.get("dwh_empty_state_title", ""))
         self.lbl_empty_body.setText(t.get("dwh_empty_state_body", ""))
         self.lbl_empty_safe.setText(t.get("dwh_empty_state_safe", ""))
+        missing_cust = t.get("dwh_cust_missing", "master_customers.csv missing")
+        self.lbl_cust_status.setText(f"⚠ {t.get('dwh_card1_cust', '고객 마스터:')} {missing_cust}")
+        missing_prod = t.get("dwh_prod_missing", "master_products.csv missing")
+        self.lbl_prod_status.setText(f"⚠ {t.get('dwh_card1_prod', '제품 마스터:')} {missing_prod}")
+        missing_pnl = t.get("dwh_pnl_missing", "No CSV files found in data/01_raw/pnl/")
+        self.lbl_pnl_status.setText(f"⚠ {t.get('dwh_card1_pnl', 'P&L 실적 원천:')} {missing_pnl}")
+        self.lbl_config_summary.setText("")
         self._apply_error_log_gate()
         self._set_running(self._is_running)
 
-        self._check_source_files()
+        self._check_source_files_if_legacy()

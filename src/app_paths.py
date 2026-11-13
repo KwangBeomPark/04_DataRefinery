@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 from contextlib import ExitStack
 from pathlib import Path
@@ -176,3 +177,19 @@ def dataset_storage_directory() -> Path:
     directory = ensure_user_settings_directory() / "datasets"
     directory.mkdir(parents=True, exist_ok=True)
     return directory
+
+
+def bundle_or_source_root() -> Path:
+    """Return the PyInstaller bundle root (_MEIPASS) when present, or the project root."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass).resolve()
+    return Path(__file__).resolve().parents[1]
+
+
+def dwh_legacy_directory() -> Path:
+    """Return the writable user workspace directory for the legacy DWH pipeline."""
+    directory = dataset_storage_directory() / "dwh_legacy"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+

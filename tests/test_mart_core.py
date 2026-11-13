@@ -1,9 +1,9 @@
 import csv
-from dataclasses import replace
 import hashlib
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -15,6 +15,7 @@ from src.mart import (
     Measure,
     WorkspaceStore,
 )
+from src.mart.engine import _normalize_model_dict, inspect_source_scopes
 
 
 class MartCoreTests(unittest.TestCase):
@@ -150,7 +151,7 @@ class MartCoreTests(unittest.TestCase):
         self.assertEqual(self.engine.catalog()["revision"], 1)
 
     def test_period_validation_and_export_granularity(self):
-        for value in ("202601", "2026-1", "2026-02-30"):
+        for value in ("202613", "2026-1", "2026-02-30"):
             source = self.source("invalid.csv", [self.row(value, "1", "name")])
             with self.assertRaises(ValueError):
                 self.load(source, value)
@@ -160,6 +161,9 @@ class MartCoreTests(unittest.TestCase):
         month = self.source("month.csv", [self.row("2026-02", "2", "name")])
         with self.assertRaisesRegex(ValueError, "granularity"):
             self.load(month, "2026-02")
+        yyyymm = self.source("yyyymm.csv", [self.row("202602", "2", "name")])
+        with self.assertRaisesRegex(ValueError, "granularity"):
+            self.load(yyyymm, "202602")
         with self.assertRaisesRegex(ValueError, "granularity"):
             self.engine.create_export(
                 ExportDefinition(
@@ -242,7 +246,7 @@ class MartCoreTests(unittest.TestCase):
         try:
             db.execute(
                 "UPDATE mart_scopes SET scope=?",
-                [json.dumps({"period": "202601", "entity": "A"})],
+                [json.dumps({"period": "2026/01", "entity": "A"})],
             )
         finally:
             db.close()
@@ -363,7 +367,7 @@ class MartCoreTests(unittest.TestCase):
             with (store.root / "exports" / result["candidate"] / "data.csv").open(
                 encoding="utf-8-sig", newline=""
             ) as handle:
-                self.assertEqual(list(csv.DictReader(handle))[0]["region"], expected)
+                self.assertEqual(next(iter(csv.DictReader(handle)))["region"], expected)
 
     def test_fact_period_partition_and_grain_survive_type1_changes(self):
         model = replace(
@@ -480,11 +484,11 @@ class MartCoreTests(unittest.TestCase):
                 destination = self.root / "never-created.csv"
                 for action in (
                     lambda: self.engine.approve_export(candidate, "reviewer"),
-                    lambda: self.engine.with_approved_export(candidate, callback),
-                    lambda: self.engine.publish_sharepoint(
-                        candidate, publisher, "data.csv"
+                    lambda cb=callback: self.engine.with_approved_export(candidate, cb),
+                    lambda pub=publisher: self.engine.publish_sharepoint(
+                        candidate, pub, "data.csv"
                     ),
-                    lambda: self.engine.publish_local(candidate, destination),
+                    lambda dest=destination: self.engine.publish_local(candidate, dest),
                 ):
                     with self.assertRaises(ValueError):
                         action()
@@ -571,9 +575,11 @@ class MartCoreTests(unittest.TestCase):
             value = controls(db, model, scope)
             return {"rows": value["rows"], "sums": {"amount": "999.00"}}
 
-        with mock.patch.object(self.engine, "_scope_controls", side_effect=wrong):
-            with self.assertRaisesRegex(ValueError, "Audit copy controls differ"):
-                self.load(path, "2026-01")
+        with (
+            mock.patch.object(self.engine, "_scope_controls", side_effect=wrong),
+            self.assertRaisesRegex(ValueError, "Audit copy controls differ"),
+        ):
+            self.load(path, "2026-01")
         self.assertEqual(self.engine.catalog()["revision"], 1)
         self.assertEqual(self.engine.sample()["rows"][0]["amount"], "1.25")
 
@@ -819,6 +825,71 @@ class MartCoreTests(unittest.TestCase):
                 complete=True,
             )
         self.assertFalse(self.store.database.exists())
+
+    def test_yyyymm_period_and_scientific_notation_lossless(self):
+        model = MartModel(
+            "PnL",
+            "pnl",
+            (Dimension("customer", ("customer", "ship_to"), ("name",), "period"),),
+            (Measure("amount", "amount", 18, 15, "KRW", kind="value"),),
+            "period",
+            ("entity",),
+            ("invoice",),
+        )
+        p1 = self.source("m1.csv", [self.row("201401", "1", "Alpha", "5.95E-11")])
+        p2 = self.source("m2.csv", [self.row("201402", "2", "Beta", "5.46E-10")])
+        self.engine.load_snapshot(
+            model, [p1], {"period": "201401", "entity": "A"}, [p1.name], complete=True
+        )
+        self.engine.load_snapshot(
+            model, [p2], {"period": "201402", "entity": "A"}, [p2.name], complete=True
+        )
+        self.assertTrue(self.engine.reconcile()["matches"])
+        rows = self.engine.sample()["rows"]
+        self.assertEqual(rows[0]["amount"], "0.000000000059500")
+        self.assertEqual(rows[1]["amount"], "0.000000000546000")
+        exp = self.engine.create_export(
+            ExportDefinition(
+                "jan",
+                ("period", "customer", "amount"),
+                period_start="201401",
+                period_end="201401",
+            )
+        )
+        self.assertEqual(exp["rows"], 1)
+
+    def test_duplicate_grain_policy_sum_and_inspect_source_scopes(self):
+        model = replace(self.model, duplicate_grain_policy="sum")
+        multi = self.source(
+            "multi.csv",
+            [
+                self.row("201401", "inv1", "CustA", "1.25"),
+                self.row("201401", "inv1", "CustA", "2.75"),
+                self.row("201402", "inv2", "CustA", ""),
+                self.row("201402", "inv2", "CustA", ""),
+            ],
+        )
+        scopes = inspect_source_scopes(model, [multi])
+        self.assertEqual(
+            scopes,
+            [
+                {"period": "201401", "entity": "A"},
+                {"period": "201402", "entity": "A"},
+            ],
+        )
+        res = self.engine.load_all_scopes(
+            model, [multi], [multi.name], complete=True
+        )
+        self.assertEqual(res["scopes_loaded"], 2)
+        self.assertEqual(res["rows"], 2)
+        self.assertTrue(self.engine.reconcile()["matches"])
+        sampled = self.engine.sample()["rows"]
+        self.assertEqual(len(sampled), 2)
+        self.assertEqual(sampled[0]["amount"], "4.00")
+        self.assertIsNone(sampled[1]["amount"])
+        # Verify _normalize_model_dict backward compatibility
+        normalized = _normalize_model_dict({"name": "legacy", "fact_table": "f"})
+        self.assertEqual(normalized["duplicate_grain_policy"], "reject")
 
 
 if __name__ == "__main__":

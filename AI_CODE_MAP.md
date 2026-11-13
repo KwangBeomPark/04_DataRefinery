@@ -60,9 +60,9 @@ flowchart TD
 
 ## 4. 주요 모듈 책임과 변경 계약
 
-범용 마트는 `src/mart/model.py` 모델, `storage.py` 공간 표식·잠금, `engine.py` 범위 적재·실제 카탈로그·대사·후보 승인, `capacity.py` 자원 사전 점검, `publication.py` 조건부 SharePoint 게시, `excel.py` SharePoint M 안내로 구성됩니다. UI는 `src/qt/widgets/mart_workspace.py`이며 DWH의 기존 화면을 보존합니다. 작업 DB·원본 보관·후보·토큰이 없는 로컬 배포 설정은 `UserSetting/datasets/mart_workspaces/<작업>/`에 둡니다. Excel M 안내는 연결된 XLSX를 생성하지 않습니다. 회사 권한과 다른 사용자 Excel 새로고침은 별도 검증 대상입니다.
+범용 마트는 `src/mart/model.py` 모델, `storage.py` 공간 표식·잠금, `engine.py` 범위 적재·실제 카탈로그·대사·후보 승인, `capacity.py` 자원 사전 점검(최대 512열·512지표·16차원·100만 행·정밀도 38), `publication.py` 조건부 SharePoint 게시, `excel.py` SharePoint M 안내로 구성됩니다. UI는 `src/qt/widgets/mart_workspace.py`이며 DWH의 기존 화면(`dwh_legacy`)은 전환 시에만 지연 검사해 보존합니다. 작업 DB·원본 보관·후보·토큰이 없는 로컬 배포 설정은 `UserSetting/datasets/mart_workspaces/<작업>/`에 두며, 레거시 DWH 설정(`settings.yaml`, `account_mapping.yaml`)은 `src/config_loader.py`가 번들/소스에서 `UserSetting/datasets/dwh_legacy/config/`로 원자 시딩해 임의 실행 경로에서도 설정 누락 없이 동작합니다. Excel M 안내는 연결된 XLSX를 생성하지 않습니다. 회사 권한과 다른 사용자 Excel 새로고침은 별도 검증 대상입니다.
 
-기간은 유효한 ISO 월 또는 날짜로 작업 공간 내 입도를 고정하고 출력 경계도 일치시킵니다. 범위·입력·모델 변경과 적재 시도 후 UI 완성/빈 범위 선언을 지웁니다. Excel 안내 생성은 작업 공간 잠금 아래 승인·후보 무결성·리비전·모델·세대를 검증한 매니페스트 열과 저장된 대상에 결속됩니다. 모델 및 UI 설정은 공통 원자 저장을 사용하며 적재 완료 후 편의 설정 저장 실패는 별도 경고합니다.
+기간은 유효한 ISO 월(`YYYY-MM`), 일(`YYYY-MM-DD`) 또는 6자리 월(`YYYYMM`)로 작업 공간 내 입도를 고정하고 출력 경계도 일치시킵니다. 수치 열은 지수 표기(`5.95E-11`)를 포함한 표본에서 열별 무손실 `(precision, scale)`을 자동 산정하고 Python `Decimal` 정규화 후 고정소수점 문자열로 스테이징합니다. `duplicate_grain_policy="sum"`일 때는 적재 전 동일 행 기준을 DuckDB `Group & Sum`으로 압축·대사하며, 다기간/다중 분할 파일은 `inspect_source_scopes()`·`load_all_scopes()`로 순차 적재합니다. 범위·입력·모델 변경과 적재 시도 후 UI 완성/빈 범위 선언을 지웁니다. Excel 안내 생성은 작업 공간 잠금 아래 승인·후보 무결성·리비전·모델·세대를 검증한 매니페스트 열과 저장된 대상에 결속됩니다. 모델 및 UI 설정은 공통 원자 저장을 사용하며 적재 완료 후 편의 설정 저장 실패는 별도 경고합니다.
 
 표본·출력에서는 팩트의 기간·분할·행 기준이 동명 Type1 차원 속성보다 우선합니다. 후보 매니페스트의 출력 의미 버전과 현재 모델 해시·기간 경계는 승인·안내·로컬/원격 게시 전에 검증합니다. 의미 버전이 없거나 이전인 후보는 보존하고 새 후보 생성과 재승인을 요구합니다.
 
@@ -83,14 +83,14 @@ flowchart TD
 | `src/preset_manager.py`, `src/session_memory.py` | 프리셋·파일별 최근 집계 설정 | 손상된 편의 설정은 주 작업을 막지 않음 |
 | `src/qt/tabs/dataset/tab.py` | 배포 탭·누적·검수 승인·공개·Excel 생성 | 긴 작업의 중복 실행·설정 변경 차단 |
 | `src/qt/tabs/dataset/wizard.py` | 파일 선별·역할 추천·복합키 진단 | 단계 이동 전 필수값 검증, 표본 진단을 전체 검증과 구분 |
-| `src/mart/auto_guess.py` | 표본 기반 스타 스키마 자동 추정 및 역할(기간, 키, 지표, 차원) 매핑 | 프로파일러와 Kimball 계약 연동, 순수 도메인 로직 유지 |
-| `src/qt/widgets/mart_model_wizard.py` | 대형 좌우 분할 스타 스키마 모델링 마법사(1200x820) 및 데이터 뷰어 팝업 | 1,000행 고속 페이징 그리드, 헤더 배지 실시간 동기화, 관계 다이어그램 |
-| `src/dataset_profiler.py` | 표본 기반 타입·역할 추천 | 대용량 전체 로드 없이 분석 |
+| `src/mart/auto_guess.py` | 표본 기반 스타 스키마 자동 추정 및 역할(기간, 키, 지표, 차원) 매핑, `infer_decimal_precision_scale` 무손실 정밀도 산정 | 프로파일러와 Kimball 계약 연동, 코드·명칭 쌍 키 우선, Wide 수치 구간 빈 열 포섭 |
+| `src/qt/widgets/mart_model_wizard.py` | 대형 좌우 분할 스타 스키마 모델링 마법사(1200x820) 및 데이터 뷰어 팝업 | 1,000행 페이징 그리드, 미할당 숫자열·제외 일괄 배정, 중복 행 Group & Sum 원클릭 전환, 관계 다이어그램 |
+| `src/dataset_profiler.py` | 표본 기반 타입·역할 추천(과학적 지수 표기·엄격 기간 매칭 포함) | 대용량 전체 로드 없이 분석 |
 | `src/dataset_config.py` | DatasetDefinition·DatasetRegistry·배포 경로 | 같은 배포 폴더 중복 등록 차단, 스키마 변경 시 승인 무효화 |
 | `src/dataset_engine.py` | 기간 누적·교체·검수·승인·CSV 공개 | 아카이브된 이전 기간 보존, 반쪽 기간 교체 차단 |
 | `src/dataset_excel.py` | Excel COM으로 연결·데이터 모델·피벗 XLSX 생성 | 제작자 Excel 필요, 소비자는 추가 설치 불필요 |
 | `src/data_mapper.py`, `src/mapper_ui.py` | 규칙 매핑 엔진·별도 Tkinter 화면 | 기능 소스 보존, 현재 기본 네 탭에는 매핑 화면이 연결되지 않음 |
-| `src/app_paths.py` | 설치·UserSetting 경로·기존 자료 이관 | 원본 보존·사본 해시 검증·DB 사용 중 차단·반복 이관 방지 |
+| `src/app_paths.py`, `src/config_loader.py` | 설치·UserSetting 경로·기존 자료 이관·레거시 DWH 설정(`dwh_legacy`) 원자 시딩 | 원본 보존·사본 해시 검증·DB 사용 중 차단·반복 이관 방지·임의 CWD/번들 실행 시 자동 시딩 |
 | `src/update_checker.py` | GitHub 릴리스 조회·업데이트 설정 | 네트워크 실패가 자료 처리 실패로 이어지지 않게 함 |
 | `src/data_refinery_launcher.py` | 설치 앱 탐색·공식 설치 파일 다운로드·서명 확인 | 공식 URL·파일명·서명자 검증 유지 |
 | `src/diagnostics.py`, `src/file_reveal.py` | 진단 ID·로그·결과 파일 찾기 | 원본 내용·민감한 경로를 로그에 노출하지 않음 |

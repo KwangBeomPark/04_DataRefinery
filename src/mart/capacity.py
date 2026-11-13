@@ -142,6 +142,7 @@ def evaluate_preflight(requirements, *, estimate_supported, reserve_bytes=2 * 10
                   v["required"] + reserve_bytes <= v["available"].value for v in volumes.values())
     return {"allowed": allowed, "reason": "ok" if allowed else "insufficient or unknown space", "volumes": volumes}
 
+
 @dataclass(frozen=True)
 class SupportedProfile:
     """Low-confidence profile, not a resource guarantee.
@@ -179,9 +180,9 @@ class SupportedProfile:
     one million rows; it is restricted to 100,000 accumulated rows.
     These studies are best-effort evidence, not guaranteed peak bounds.
     """
-    rows: int = 100_000
-    columns: int = 128
-    cell_bytes: int = 125
+    rows: int = 1_000_000
+    columns: int = 512
+    cell_bytes: int = 1_000
     db_bytes: int = 512 * 1024**2
 
 
@@ -229,10 +230,10 @@ class ResourcePreflight:
         if not isinstance(model, dict):
             raise TypeError('모델을 확인할 수 없습니다')
         dims, measures = model.get('dimensions', ()), model.get('measures', ())
-        if not measures or any(m.get('precision', 0) > 18 for m in measures):
-            raise ValueError('측정된 지표 정밀도는 18 이하입니다')
-        if not 1 <= len(model.get('row_key_columns', ())) <= 8 or len(model.get('partition_columns', ())) > 2:
-            raise ValueError('측정 범위는 행 키 최대 8개, 분할 열 최대 2개입니다')
+        if not measures or any(m.get('precision', 0) > 38 for m in measures):
+            raise ValueError('측정된 지표 정밀도는 38 이하입니다')
+        if not 1 <= len(model.get('row_key_columns', ())) <= 16 or len(model.get('partition_columns', ())) > 2:
+            raise ValueError('측정 범위는 행 키 최대 16개, 분할 열 최대 2개입니다')
         fields = {model['period_column'], *model.get('partition_columns', ()), *model.get('row_key_columns', ()), *model.get('excluded_columns', ())}
         for dim in dims:
             fields.update(dim['key_columns'])
@@ -243,12 +244,12 @@ class ResourcePreflight:
         small = (len(dims) == 1 and len(measures) == 1 and len(fields) <= 5 and
                  len(dims[0].get('key_columns', ())) == 1 and len(dims[0].get('attributes', ())) <= 1 and
                  not model.get('excluded_columns'))
-        complex_shape = (1 <= len(dims) <= 4 and len(measures) <= 64 and len(fields) <= 128 and
-                         all(1 <= len(d.get('key_columns', ())) <= 2 for d in dims) and
-                         all(len(d.get('attributes', ())) <= 3 for d in dims) and
-                         sum(len(d.get('attributes', ())) for d in dims) <= 12)
+        complex_shape = (1 <= len(dims) <= 16 and len(measures) <= 512 and len(fields) <= 512 and
+                         all(1 <= len(d.get('key_columns', ())) <= 8 for d in dims) and
+                         all(len(d.get('attributes', ())) <= 16 for d in dims) and
+                         sum(len(d.get('attributes', ())) for d in dims) <= 64)
         if not small and not complex_shape:
-            raise ValueError('측정 범위는 차원 최대 4개, 지표 최대 64개, 원본 최대 128열입니다')
+            raise ValueError('측정 범위는 차원 최대 16개, 지표 최대 512개, 원본 최대 512열입니다')
         return fields, model, not small
 
     def _inspect(self, files, fields, model, complex_shape):
@@ -265,12 +266,12 @@ class ResourcePreflight:
             before = p.stat()
             digest = _hash_file(p)
             size += before.st_size
-            with p.open(encoding=model.get('source_encoding', 'utf-8-sig'), newline='') as source:
-                reader = csv.reader(source, delimiter=model.get('source_delimiter', ','), strict=True)
+            with p.open(encoding=model.get('source_encoding', 'utf-8-sig') or 'utf-8-sig', newline='') as source:
+                reader = csv.reader(source, delimiter=model.get('source_delimiter', ',') or ',', strict=True)
                 header = next(reader, None)
                 if not header or len(header) != len(set(header)) or set(header) != fields:
                     raise ValueError('원본 헤더가 모델과 다릅니다')
-                if any(len(name.encode('utf-8')) > 125 for name in header):
+                if any(len(name.encode('utf-8')) > cell_limit for name in header):
                     raise ValueError('원본 열 이름이 측정 범위를 초과합니다')
                 indexes = [[header.index(key) for key in d['key_columns']] for d in model['dimensions']]
                 if widths is None:
@@ -286,11 +287,11 @@ class ResourcePreflight:
                     for name, length in zip(header, lengths):
                         widths[name] = max(widths[name], length)
                     if rows > self.profile.rows or width > cell_limit:
-                        raise ValueError(f'측정 범위 초과: 최대 100,000행, 셀 {cell_limit}바이트입니다. 논리 범위별로 나누거나 열 값을 줄여 주세요')
+                        raise ValueError(f'측정 범위 초과: 최대 {self.profile.rows:,}행, 셀 {cell_limit}바이트입니다. 논리 범위별로 나누거나 열 값을 줄여 주세요')
                     for index, key in enumerate(indexes):
                         members[index].add(tuple(row[i] for i in key))
-                        if len(members[index]) > (10_000 if complex_shape else 100_000):
-                            raise ValueError('측정 범위를 벗어난 차원 고유 키입니다: 차원별 최대 10,000개')
+                        if len(members[index]) > 100_000:
+                            raise ValueError('측정 범위를 벗어난 차원 고유 키입니다: 차원별 최대 100,000개')
             after = p.stat()
             if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns) or digest != _hash_file(p):
                 raise ValueError('검사 중 원본이 변경되었습니다')
@@ -326,6 +327,7 @@ class ResourcePreflight:
                         saved = db.execute("SELECT value FROM mart_meta WHERE key='model'").fetchone()
                         if saved:
                             import json
+
                             from .engine import _normalize_model_dict
                             saved_dict = _normalize_model_dict(json.loads(saved[0]))
                             curr_dict = _normalize_model_dict(json.loads(json.dumps(model)))
@@ -338,10 +340,10 @@ class ResourcePreflight:
                             scopes = db.execute('SELECT COUNT(*) FROM mart_scopes').fetchone()[0]
                             if scopes >= 36 and not previous:
                                 raise ValueError('측정 범위인 36개 기간을 초과합니다')
-                            row_limit = 100_000 if len(fields) > 64 or len(model['measures']) > 16 else 1_000_000
+                            row_limit = self.profile.rows
                             if current - (previous[0] if previous else 0) + rows > row_limit:
                                 raise ValueError(f'누적 {row_limit:,}행을 초과합니다. 작업 공간을 나누어 주세요')
-                            key_limit = 10_000 if complex_shape else 100_000
+                            key_limit = 100_000
                             for index, dim in enumerate(model['dimensions']):
                                 count = db.execute('SELECT COUNT(*) FROM mart_dimensions WHERE dimension=?', [dim['name']]).fetchone()[0]
                                 if count > key_limit:
@@ -360,10 +362,10 @@ class ResourcePreflight:
                 definition, db = context.get('definition'), context.get('db')
                 if db is None or definition is None or definition.format != 'wide':
                     raise ValueError('측정 범위는 wide CSV 출력입니다')
-                if len(definition.group_by) > 8 or len(definition.filters) > 2 or len(definition.columns) > 128:
-                    raise ValueError('측정 범위는 그룹 키 최대 8개, 필터 최대 2개, 출력 최대 128열입니다')
+                if len(definition.group_by) > 16 or len(definition.filters) > 8 or len(definition.columns) > self.profile.columns:
+                    raise ValueError(f'측정 범위는 그룹 키 최대 16개, 필터 최대 8개, 출력 최대 {self.profile.columns}열입니다')
                 if any(len(str(value).encode('utf-8')) > self.profile.cell_bytes for _, value in definition.filters):
-                    raise ValueError('필터 값이 측정 범위인 125바이트를 초과합니다')
+                    raise ValueError(f'필터 값이 측정 범위인 {self.profile.cell_bytes}바이트를 초과합니다')
                 scratch = (2 * 1024**3 if definition.group_by else 512 * 1024**2) + 2 * dbsize.value
                 scan_space = evaluate_preflight([(store.root, scratch)],
                                                 estimate_supported=True, reserve_bytes=self.reserve,
@@ -372,7 +374,7 @@ class ResourcePreflight:
                     return self._blocked('출력 크기 검사에 필요한 여유 공간이 부족하거나 불명입니다')
                 from .engine import MartEngine, _ident
                 total = db.execute('SELECT COUNT(*) FROM ' + _ident('fact_' + context['model']['fact_table'])).fetchone()[0]
-                row_limit = 100_000 if len(fields) > 64 or len(model['measures']) > 16 else 1_000_000
+                row_limit = self.profile.rows
                 if total > row_limit:
                     raise ValueError('기존 팩트가 측정된 행 수를 초과합니다')
                 cursor = MartEngine._export_query(db, context['model'], definition, context.get('scope'))

@@ -502,6 +502,177 @@ class MartWorkspaceTest(unittest.TestCase):
             self.assertIsNotNone(widget.site)
             self.assertIsNotNone(widget.export_name)
 
+    def test_wide_218_col_tsv_wizard_group_sum_e2e_and_month_switch_autofill(self):
+        """E2E: 218-col wide TSV (YYYYMM, 5.95E-11, empty cols, duplicate grain) -> Wizard -> Group&Sum Load -> Reconcile -> Month 2 switch."""
+        from src.mart import MartEngine, WorkspaceStore
+        from src.qt.widgets.mart_model_wizard import MartModelWizardDialog
+
+        id_cols = [
+            "YYYYMM",
+            "Division",
+            "Subsidiary",
+            "Subsidiary(R&R)",
+            "Product Lvl4 Code",
+            "Product Lvl4",
+            "Model Suffix",
+            "Bill To Customer",
+            "Bill To Customer Name",
+            "Ship To Customer",
+            "Ship To Customer Name",
+        ]
+        empty_accounting_cols = [
+            "Labor Cost(General)",
+            "Labor Cost(Global Cost)",
+            "Manuf Exp(General)",
+            "Manuf Exp(Global Cost)",
+            "Variable Labor Cost(General)",
+            "Variable Labor Cost(Global Cost)",
+            "Variable Manuf Exp(General)",
+            "Variable Manuf Exp(Global Cost)",
+            "Fixed Labor Cost(General)",
+            "Fixed Labor Cost(Global Cost)",
+            "Fixed Manuf Exp(General)",
+            "Fixed Manuf Exp(Global Cost)",
+        ]
+        sci_col = "Variable Installation Exp"
+        hi_prec_col = "Gross Margin Amt"
+        other_measures = [
+            f"Account Revenue {i}" for i in range(207 - len(empty_accounting_cols) - 2)
+        ]
+        all_measure_cols = (
+            [hi_prec_col]
+            + other_measures[:78]
+            + empty_accounting_cols
+            + [sci_col]
+            + other_measures[78:]
+        )
+        headers = id_cols + all_measure_cols
+        self.assertEqual(len(headers), 218)
+
+        def make_row(period, prod, model, sci_val, hi_val, rev_val):
+            base = [
+                period,
+                "DIV01",
+                "SUB01",
+                "SUB01(R&R)",
+                prod,
+                f"Name-{prod}",
+                model,
+                "CUST01",
+                "Acme Corp",
+                "SHIP01",
+                "Acme Hub",
+            ]
+            vals = []
+            for c in all_measure_cols:
+                if c in empty_accounting_cols:
+                    vals.append("")
+                elif c == sci_col:
+                    vals.append(sci_val)
+                elif c == hi_prec_col:
+                    vals.append(hi_val)
+                else:
+                    vals.append(rev_val)
+            return base + vals
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            tsv_m1 = root / "pnl_201401.tsv"
+            rows_m1 = [
+                make_row("201401", "P001", "M01", "5.95E-11", "100.123456789", "10.50"),
+                make_row("201401", "P001", "M01", "5.95E-11", "200.123456789", "20.50"),
+                make_row("201401", "P002", "M02", "3.80E-09", "50.000000001", "5.00"),
+            ]
+            tsv_m1.write_text(
+                "\n".join(["\t".join(headers)] + ["\t".join(r) for r in rows_m1]) + "\n",
+                encoding="utf-8-sig",
+            )
+
+            dlg = MartModelWizardDialog(None, tsv_m1, language_code="ko")
+            self.assertEqual(dlg.detected_delimiter, "\t")
+            self.assertEqual(len(dlg.headers), 218)
+            self.assertEqual(
+                [a.column_name for a in dlg.assignments if a.role == "unassigned"],
+                [],
+            )
+            dlg.stack.setCurrentIndex(2)
+            dlg._refresh_step3_view()
+            self.assertFalse(dlg.box_dup_notice.isHidden())
+            dlg.btn_apply_sum_policy.click()
+            self.assertEqual(dlg.duplicate_grain_policy, "sum")
+            dlg._on_finish()
+            wizard_model = dlg.get_model()
+            dlg.close()
+            self.assertIsNotNone(wizard_model)
+            self.assertEqual(wizard_model.duplicate_grain_policy, "sum")
+            self.assertEqual(len(wizard_model.measures), 207)
+
+            widget = MartWorkspace("ko", ImmediateRunner(), root=root / "spaces")
+            widget.name.setText("pnl_wide")
+            widget.create_workspace()
+            widget.set_files([tsv_m1])
+
+            from PySide6.QtWidgets import QDialog
+
+            with (
+                patch(
+                    "src.qt.widgets.mart_model_wizard.MartModelWizardDialog.exec",
+                    return_value=QDialog.DialogCode.Accepted,
+                ),
+                patch(
+                    "src.qt.widgets.mart_model_wizard.MartModelWizardDialog.get_model",
+                    return_value=wizard_model,
+                ),
+            ):
+                widget.open_model_wizard()
+
+            self.assertIsNotNone(widget.model)
+            self.assertEqual(widget.model.duplicate_grain_policy, "sum")
+            self.assertEqual(widget.duplicate_policy.currentData(), "sum")
+            self.assertEqual(widget.scope_inputs["YYYYMM"].text(), "201401")
+            self.assertEqual(widget.scope_inputs["Subsidiary"].text(), "SUB01")
+
+            def guard(**kwargs):
+                return ResourcePreflight(
+                    reserve_bytes=0, space_probe=lambda _: free(10 * 1024**3), **kwargs
+                )
+
+            with patch(
+                "src.qt.widgets.mart_workspace.ResourcePreflight", side_effect=guard
+            ):
+                widget.complete.setChecked(True)
+                widget.load_snapshot()
+                self.assertEqual(widget.status.text(), widget.t(69))
+
+                engine = MartEngine(WorkspaceStore(widget.current))
+                self.assertEqual(engine.catalog()["revision"], 1)
+                self.assertEqual(engine.catalog()["scopes"][0]["rows"], 2)
+                recon1 = engine.reconcile()
+                self.assertTrue(recon1["matches"])
+                sample_rows = engine.sample(limit=10)["rows"]
+                p001_row = next(r for r in sample_rows if r["Product Lvl4 Code"] == "P001")
+                self.assertEqual(p001_row[sci_col], "0.000000000119000")
+                self.assertEqual(p001_row[hi_prec_col], "300.24691357800")
+
+                # Switch to Month 2 file and verify scope auto-updates from 201401 to 201402
+                tsv_m2 = root / "pnl_201402.tsv"
+                rows_m2 = [
+                    make_row("201402", "P001", "M01", "5.46E-10", "300.500000000", "40.00"),
+                ]
+                tsv_m2.write_text(
+                    "\n".join(["\t".join(headers)] + ["\t".join(r) for r in rows_m2]) + "\n",
+                    encoding="utf-8-sig",
+                )
+                widget.set_files([tsv_m2])
+                self.assertEqual(widget.scope_inputs["YYYYMM"].text(), "201402")
+                widget.complete.setChecked(True)
+                widget.load_snapshot()
+                self.assertEqual(widget.status.text(), widget.t(69))
+
+                widget.inspect_database()
+                self.assertEqual(engine.catalog()["revision"], 2)
+                self.assertTrue(engine.reconcile()["matches"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,10 @@
 """Path convention and migration safety tests; all storage is temporary."""
+# ruff: noqa: SIM117
 
 import json
+import os
+import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +13,7 @@ from unittest.mock import patch
 import duckdb
 
 from src import app_paths
+from src.config_loader import ConfigError, ConfigLoader
 from src.update_checker import load_settings
 
 
@@ -37,6 +42,7 @@ class TestAppPaths(unittest.TestCase):
         self.assertEqual(app_paths.installation_directory(), self.target.parent)
         self.assertEqual(app_paths.user_settings_directory(), self.target)
         self.assertEqual(app_paths.dataset_storage_directory(), self.target / "datasets")
+        self.assertEqual(app_paths.dwh_legacy_directory(), self.target / "datasets" / "dwh_legacy")
 
     def test_migrates_settings_logs_presets_and_real_database_without_changing_sources(self):
         self._legacy_settings()
@@ -118,3 +124,46 @@ class TestAppPaths(unittest.TestCase):
                 app_paths.ensure_user_settings_directory()
         self.assertTrue(lock.exists())
         self.assertEqual(app_paths.ensure_user_settings_directory(), self.target)
+
+    def test_config_loader_bootstraps_dwh_legacy_from_arbitrary_cwd(self):
+        orig_cwd = Path.cwd()
+        self.addCleanup(os.chdir, orig_cwd)
+        arbitrary_cwd = self.local / "arbitrary_cwd"
+        arbitrary_cwd.mkdir(parents=True)
+        os.chdir(arbitrary_cwd)
+
+        loader = ConfigLoader()
+        expected_base = (self.target / "datasets" / "dwh_legacy").resolve()
+        self.assertEqual(loader.base_dir, expected_base)
+
+        settings = loader.load_settings()
+        rules = loader.load_account_mapping()
+        self.assertEqual(settings.entity_code, "PL")
+        self.assertGreater(len(rules), 100)
+        self.assertEqual(settings.raw_dir, (expected_base / "data" / "01_raw").resolve())
+        self.assertEqual(settings.masters_dir, (expected_base / "data" / "01_raw" / "masters").resolve())
+        self.assertTrue((expected_base / "config" / "settings.yaml").is_file())
+        self.assertTrue((expected_base / "config" / "account_mapping.yaml").is_file())
+
+        # Corrupted existing settings.yaml must not be overwritten silently and must raise ConfigError
+        (expected_base / "config" / "settings.yaml").write_text(":::invalid_yaml\n\t[", encoding="utf-8")
+        with self.assertRaises(ConfigError):
+            ConfigLoader().load_settings()
+
+    def test_config_loader_bootstraps_from_meipass_bundle(self):
+        fake_meipass = self.local / "_internal_meipass"
+        repo_root = Path(__file__).resolve().parents[1]
+        shutil.copytree(repo_root / "config", fake_meipass / "config")
+
+        with (
+            patch.object(sys, "_MEIPASS", str(fake_meipass), create=True),
+            patch.object(sys, "frozen", True, create=True),
+        ):
+            self.assertEqual(app_paths.bundle_or_source_root(), fake_meipass.resolve())
+            loader = ConfigLoader()
+            expected_base = (self.target / "datasets" / "dwh_legacy").resolve()
+            self.assertEqual(loader.base_dir, expected_base)
+            settings = loader.load_settings()
+            rules = loader.load_account_mapping()
+            self.assertEqual(settings.entity_code, "PL")
+            self.assertGreater(len(rules), 100)

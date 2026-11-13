@@ -7,13 +7,13 @@ domain contract (MartModel, Dimension, Measure).
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
 
 from src.dataset_profiler import DatasetProfileResult, profile_dataset_sample
 from src.mart.model import Dimension, MartModel, Measure, validate_column_roles
-
 
 # Role enumeration constants
 ROLE_PERIOD = "period"
@@ -55,8 +55,14 @@ ENTITY_PATTERNS = [
     },
     {
         "dim_name": "조직/부서",
-        "key_re": re.compile(r"(부서코드|팀코드|사업부코드|dept_code|team_code|org_code|division_code)", re.IGNORECASE),
-        "attr_re": re.compile(r"(부서명|팀명|사업부명|지점명|dept_name|team_name|org_name|division_name)", re.IGNORECASE),
+        "key_re": re.compile(
+            r"(부서코드|팀코드|사업부코드|본부코드|조직코드|dept_code|team_code|org_code|division_code|^division$|^dept$|^department$|^사업부$|^부서$)",
+            re.IGNORECASE,
+        ),
+        "attr_re": re.compile(
+            r"(부서명|팀명|사업부명|본부명|조직명|지점명|dept_name|team_name|org_name|division_name|subsidiary\(r&r\))",
+            re.IGNORECASE,
+        ),
     },
     {
         "dim_name": "채널/매장",
@@ -67,7 +73,78 @@ ENTITY_PATTERNS = [
 
 PARTITION_RE = re.compile(r"(법인|회사코드|entity|company_code|subsidiary|spolka)", re.IGNORECASE)
 ROW_KEY_RE = re.compile(r"(전표번호|전표|행번호|라인번호|seq|line_no|slip_no|doc_no|id|uuid)$", re.IGNORECASE)
-MEASURE_NAME_RE = re.compile(r"(금액|단가|매출액|매출|이익|원가|수량|실적|예산|비용|잔액|amt|amount|qty|quantity|sales|profit|revenue|cost|price|balance|total)", re.IGNORECASE)
+PERIOD_RE = re.compile(r"(기준년월|년월|기간|일자|연도|분기|월|period|month|date|yyyymm|year|quarter)", re.IGNORECASE)
+KEY_SUFFIX_RE = re.compile(
+    r"(?:^|[\s_\-])(코드|번호|사번|식별자|code|id|no|key|cd|uuid)$|(코드|번호)$",
+    re.IGNORECASE,
+)
+ATTR_SUFFIX_RE = re.compile(
+    r"(?:^|[\s_\-])(명|이름|성명|상호|내역|설명|비고|유형|구분|분류|규격|단위|지역|국가|통화|"
+    r"name|desc|description|type|class|category|group|unit|currency|curr|suffix|model|lvl\d*|level\d*)$|"
+    r"(명|이름|내역|설명|비고|유형|구분)$",
+    re.IGNORECASE,
+)
+MEASURE_NAME_RE = re.compile(
+    r"(?:금액|단가|매출액|매출|이익|원가|수량|실적|예산|비용|잔액|손익|손실|세금|할인|충당|상각|마진|판관비|노무비|경비)|"
+    r"(?<![a-zA-Z])(?:amt|amount|qty|quantity|sales|profit|revenue|cost|costs|price|balance|total|"
+    r"exp|expense|expenses|inc|income|loss|cogs|opex|ebit|ebitda|gp|gross|net|tax|taxes|depr|amort|"
+    r"alloc|variance|diff|difference|adjustment|margin|discount|d/c|trade\s*term|charge|material|"
+    r"o/h|overhead|royalty|refund|waste|valuation|gap|sg&a|selling|admin|r&d|svc|labor|"
+    r"commission|advertising|promotion|bad\s*debt)(?![a-zA-Z])",
+    re.IGNORECASE,
+)
+
+
+def infer_decimal_precision_scale(values: Sequence[str]) -> tuple[int, int]:
+    """Infer lossless (precision, scale) from sample numeric strings including scientific notation."""
+    max_i = 0
+    max_r = 0
+    for raw in values:
+        if not raw:
+            continue
+        s = str(raw).strip().replace(" ", "").replace("\u00a0", "").replace("\u202f", "")
+        if not s:
+            continue
+        if "," in s and "." in s:
+            if s.rfind(",") > s.rfind("."):
+                s = s.replace(".", "").replace(",", ".")
+            else:
+                s = s.replace(",", "")
+        elif "," in s:
+            if re.match(r"^[-+]?\d{1,3}(,\d{3})+$", s):
+                s = s.replace(",", "")
+            else:
+                s = s.replace(",", ".")
+        try:
+            d = Decimal(s)
+            if not d.is_finite():
+                continue
+            norm = d.normalize()
+            if norm.is_zero():
+                continue
+            t = norm.as_tuple()
+            r_digits = max(0, -t.exponent)
+            i_digits = max(0, len(t.digits) + t.exponent)
+            max_i = max(max_i, i_digits)
+            max_r = max(max_r, r_digits)
+        except (InvalidOperation, ValueError):
+            continue
+
+    if max_r <= 2:
+        scale = 2
+    else:
+        scale = min(max(max_r + 2, 6), 18)
+
+    if max_i + 2 + scale <= 18:
+        precision = 18
+    else:
+        precision = 38
+        if max_r > 2:
+            scale = min(max(max_r + 2, 6), max(2, 38 - max_i))
+        else:
+            scale = min(scale, max(0, 38 - max_i))
+
+    return precision, scale
 
 
 @dataclass
@@ -87,22 +164,22 @@ class ColumnAssignment:
 class ModelGuessResult:
     fact_table: str
     period_column: str
-    assignments: List[ColumnAssignment]
-    dimensions: List[Dimension]
-    measures: List[Measure]
-    partition_columns: List[str]
-    row_key_columns: List[str]
-    excluded_columns: List[str]
+    assignments: list[ColumnAssignment]
+    dimensions: list[Dimension]
+    measures: list[Measure]
+    partition_columns: list[str]
+    row_key_columns: list[str]
+    excluded_columns: list[str]
     summary_text: str = ""
 
 
 def guess_model_assignments(
     columns: Sequence[str],
-    profile: Optional[DatasetProfileResult] = None,
-    csv_path: Optional[Path | str] = None,
+    profile: DatasetProfileResult | None = None,
+    csv_path: Path | str | None = None,
     default_fact_name: str = "fact_pnl",
-    delimiter: Optional[str] = None,
-    encoding: Optional[str] = None,
+    delimiter: str | None = None,
+    encoding: str | None = None,
 ) -> ModelGuessResult:
     """Analyze columns and suggest an initial Kimball star schema model setup.
     
@@ -111,12 +188,12 @@ def guess_model_assignments(
     if profile is None and csv_path is not None:
         try:
             profile = profile_dataset_sample(csv_path, sample_rows=1000, delimiter=delimiter, encoding=encoding)
-        except Exception:
+        except (OSError, ValueError):
             profile = None
 
     profile_map = {p.name.casefold(): p for p in (profile.columns if profile else [])}
 
-    assignments: List[ColumnAssignment] = []
+    assignments: list[ColumnAssignment] = []
     claimed_columns: set[str] = set()
 
     # 1. Period column detection
@@ -161,7 +238,7 @@ def guess_model_assignments(
     for c in columns:
         if c in claimed_columns:
             continue
-        if PARTITION_RE.search(c):
+        if PARTITION_RE.search(c) and not re.search(r"\(.*\)", c):
             col_prof = profile_map.get(c.casefold())
             unique_cnt = col_prof.unique_count if col_prof else 1
             if unique_cnt <= 10:
@@ -174,37 +251,90 @@ def guess_model_assignments(
                     )
                 )
                 claimed_columns.add(c)
+                break
 
     # 3. Measures detection (Additive numeric amounts)
     for c in columns:
         if c in claimed_columns:
             continue
         col_prof = profile_map.get(c.casefold())
-        is_numeric = False
-        if col_prof and col_prof.inferred_type in ("numeric", "integer"):
-            is_numeric = True
-        elif MEASURE_NAME_RE.search(c) and not re.search(r"(코드|번호|code|id|no)$", c, re.IGNORECASE):
-            is_numeric = True
+        has_non_measure_pattern = bool(
+            KEY_SUFFIX_RE.search(c) or ATTR_SUFFIX_RE.search(c) or PERIOD_RE.search(c)
+        )
+        is_profile_numeric = bool(
+            col_prof
+            and col_prof.inferred_type in ("numeric", "integer")
+            and col_prof.suggested_role == "numeric"
+        )
+        is_empty_sample = bool(
+            col_prof is None or not col_prof.sample_values or col_prof.null_ratio >= 1.0
+        )
+        is_name_measure = bool(MEASURE_NAME_RE.search(c) and not has_non_measure_pattern)
 
-        if is_numeric and (col_prof is None or col_prof.suggested_role == "numeric"):
+        if is_profile_numeric or (is_empty_sample and is_name_measure):
             kind = "value"
             if re.search(r"(수량|qty|quantity|count)", c, re.IGNORECASE):
                 kind = "quantity"
-            elif re.search(r"(원가|비용|cost|expense)", c, re.IGNORECASE):
+            elif re.search(r"(원가|비용|경비|판관비|노무비|cost|expense|exp|cogs|opex)", c, re.IGNORECASE):
                 kind = "cost"
 
-            scale = 0 if (col_prof and col_prof.inferred_type == "integer") else 2
+            if col_prof and col_prof.inferred_type == "integer":
+                prec, scale = 18, 0
+            else:
+                prec, scale = infer_decimal_precision_scale(col_prof.sample_values if col_prof else ())
             assignments.append(
                 ColumnAssignment(
                     column_name=c,
                     role=ROLE_MEASURE,
                     measure_kind=kind,
+                    measure_precision=prec,
                     measure_scale=scale,
                     confidence=0.85,
                     reason="가산적 수치 측도 (Measure)",
                 )
             )
             claimed_columns.add(c)
+
+    # 3b. Wide-table empty columns inside the numeric measure band
+    measure_indices = [
+        i
+        for i, c in enumerate(columns)
+        if c in claimed_columns and any(a.column_name == c and a.role == ROLE_MEASURE for a in assignments)
+    ]
+    if len(measure_indices) >= 10:
+        first_meas_idx = min(measure_indices)
+        for idx in range(first_meas_idx, len(columns)):
+            c = columns[idx]
+            if c in claimed_columns:
+                continue
+            col_prof = profile_map.get(c.casefold())
+            is_empty_sample = bool(
+                col_prof is not None and (not col_prof.sample_values or col_prof.null_ratio >= 1.0)
+            )
+            has_non_measure_pattern = bool(
+                KEY_SUFFIX_RE.search(c)
+                or ATTR_SUFFIX_RE.search(c)
+                or PERIOD_RE.search(c)
+                or ROW_KEY_RE.search(c)
+            )
+            if is_empty_sample and not has_non_measure_pattern:
+                kind = (
+                    "cost"
+                    if re.search(r"(원가|비용|경비|판관비|노무비|cost|expense|exp|cogs|opex)", c, re.IGNORECASE)
+                    else "value"
+                )
+                assignments.append(
+                    ColumnAssignment(
+                        column_name=c,
+                        role=ROLE_MEASURE,
+                        measure_kind=kind,
+                        measure_precision=18,
+                        measure_scale=2,
+                        confidence=0.75,
+                        reason="가산적 수치 측도 (Wide 수치 구간 내 빈 열)",
+                    )
+                )
+                claimed_columns.add(c)
 
     # 4. Standard Entity Dimension matching
     for entity in ENTITY_PATTERNS:
@@ -251,30 +381,38 @@ def guess_model_assignments(
     consumed_in_dim: set[str] = set()
 
     # 5a. Direct prefix match: one column is the exact base/prefix of another
-    # e.g., "Bill To Customer" and "Bill To Customer Name"
-    for c1 in remaining:
+    # e.g., "Bill To Customer" and "Bill To Customer Name", or "Product Lvl4" and "Product Lvl4 Code"
+    for c1 in sorted(remaining, key=len):
         if c1 in consumed_in_dim:
             continue
         matches = [
             c2 for c2 in remaining
-            if c2 != c1 and c2 not in consumed_in_dim and (
-                c2.startswith(c1 + " ") or c2.startswith(c1 + "_") or c2.startswith(c1 + "-")
-            )
+            if c2 != c1 and c2 not in consumed_in_dim and c2.startswith((c1 + " ", c1 + "_", c1 + "-", c1 + "("))
         ]
         if matches:
             dim_title = c1.replace(" ", "_")
-            assignments.append(
-                ColumnAssignment(
-                    column_name=c1,
-                    role=ROLE_DIM_KEY,
-                    dimension_name=dim_title,
-                    confidence=0.8,
-                    reason=f"{dim_title} 차원 식별키 (기본 열)",
+            group = [col for col in remaining if col == c1 or col in matches]
+            explicit_keys = [col for col in group if KEY_SUFFIX_RE.search(col)]
+            if explicit_keys:
+                keys = explicit_keys
+                attrs = [col for col in group if col not in explicit_keys]
+            else:
+                keys = [c1]
+                attrs = matches
+
+            for k_col in keys:
+                assignments.append(
+                    ColumnAssignment(
+                        column_name=k_col,
+                        role=ROLE_DIM_KEY,
+                        dimension_name=dim_title,
+                        confidence=0.85,
+                        reason=f"{dim_title} 차원 식별 자연키",
+                    )
                 )
-            )
-            claimed_columns.add(c1)
-            consumed_in_dim.add(c1)
-            for m_col in matches:
+                claimed_columns.add(k_col)
+                consumed_in_dim.add(k_col)
+            for m_col in attrs:
                 assignments.append(
                     ColumnAssignment(
                         column_name=m_col,
@@ -289,7 +427,7 @@ def guess_model_assignments(
 
     # 5b. Common token prefix match (e.g. "Product Lvl4 Code" & "Product Lvl4 Model Suffix")
     rem_after_5a = [c for c in remaining if c not in consumed_in_dim]
-    stem_buckets: Dict[str, List[str]] = {}
+    stem_buckets: dict[str, list[str]] = {}
     for c in rem_after_5a:
         m = re.match(r"^([a-zA-Z가-힣0-9]+)[_\-](.*)$", c)
         if m:
@@ -309,7 +447,7 @@ def guess_model_assignments(
     for pfx in sorted_stems:
         pfx_cols = [c for c in stem_buckets[pfx] if c not in consumed_in_dim]
         if len(pfx_cols) >= 2:
-            keys = [c for c in pfx_cols if re.search(r"(code|id|코드|번호)$", c, re.IGNORECASE)]
+            keys = [c for c in pfx_cols if KEY_SUFFIX_RE.search(c)]
             attrs = [c for c in pfx_cols if c not in keys]
             if not keys and pfx_cols:
                 keys = [pfx_cols[0]]
@@ -322,7 +460,7 @@ def guess_model_assignments(
                             column_name=k,
                             role=ROLE_DIM_KEY,
                             dimension_name=dim_title,
-                            confidence=0.7,
+                            confidence=0.75,
                             reason=f"{dim_title} 차원 식별키",
                         )
                     )
@@ -340,6 +478,43 @@ def guess_model_assignments(
                     )
                     claimed_columns.add(a)
                     consumed_in_dim.add(a)
+
+    # 5c. Standalone product/model/currency/code identifiers
+    for c in [col for col in remaining if col not in consumed_in_dim]:
+        if re.search(r"^(model|model[\s_\-]*suffix|model[\s_\-]*code|품번|모델|모델코드)$", c, re.IGNORECASE):
+            prod_dim = next(
+                (
+                    a.dimension_name
+                    for a in assignments
+                    if a.dimension_name and re.search(r"(product|item|제품|품목|상품)", a.dimension_name, re.IGNORECASE)
+                ),
+                "제품/품목",
+            )
+            existing_keys = [a for a in assignments if a.dimension_name == prod_dim and a.role == ROLE_DIM_KEY]
+            role = ROLE_DIM_KEY if len(existing_keys) < 2 else ROLE_DIM_ATTR
+            assignments.append(
+                ColumnAssignment(
+                    column_name=c,
+                    role=role,
+                    dimension_name=prod_dim,
+                    confidence=0.75,
+                    reason=f"{prod_dim} 차원 복합 식별키" if role == ROLE_DIM_KEY else f"{prod_dim} 차원 속성",
+                )
+            )
+            claimed_columns.add(c)
+            consumed_in_dim.add(c)
+        elif re.search(r"^(currency|curr|currency[\s_\-]*code|curr[\s_\-]*code|통화|통화코드)$", c, re.IGNORECASE):
+            assignments.append(
+                ColumnAssignment(
+                    column_name=c,
+                    role=ROLE_DIM_KEY,
+                    dimension_name="통화",
+                    confidence=0.75,
+                    reason="통화 차원 식별키",
+                )
+            )
+            claimed_columns.add(c)
+            consumed_in_dim.add(c)
 
     # 6. Row Key detection (slip_no, line_no, uuid, etc.)
     for c in columns:
@@ -364,13 +539,42 @@ def guess_model_assignments(
             continue
         col_prof = profile_map.get(c.casefold())
         if col_prof and col_prof.inferred_type in ("numeric", "integer"):
+            prec, scale = (
+                (18, 0)
+                if col_prof.inferred_type == "integer"
+                else infer_decimal_precision_scale(col_prof.sample_values)
+            )
             # Secondary measure
             assignments.append(
                 ColumnAssignment(
                     column_name=c,
                     role=ROLE_MEASURE,
+                    measure_precision=prec,
+                    measure_scale=scale,
                     confidence=0.6,
                     reason="수치 열 (기본 측정값)",
+                )
+            )
+            claimed_columns.add(c)
+        elif KEY_SUFFIX_RE.search(c):
+            dim_title = (
+                re.sub(
+                    r"[\s_\-]*(코드|번호|사번|식별자|code|id|no|key|cd|uuid)$",
+                    "",
+                    c,
+                    flags=re.IGNORECASE,
+                )
+                .strip()
+                .replace(" ", "_")
+                or c.replace(" ", "_")
+            )
+            assignments.append(
+                ColumnAssignment(
+                    column_name=c,
+                    role=ROLE_DIM_KEY,
+                    dimension_name=dim_title,
+                    confidence=0.7,
+                    reason=f"{dim_title} 차원 식별키",
                 )
             )
             claimed_columns.add(c)
@@ -414,12 +618,12 @@ def guess_model_assignments(
 
 def _build_components_from_assignments(
     assignments: Sequence[ColumnAssignment],
-) -> Tuple[List[Dimension], List[Measure], List[str], List[str], List[str]]:
-    dim_dict: Dict[str, Dict[str, List[str]]] = {}
-    measures: List[Measure] = []
-    partitions: List[str] = []
-    row_keys: List[str] = []
-    excluded: List[str] = []
+) -> tuple[list[Dimension], list[Measure], list[str], list[str], list[str]]:
+    dim_dict: dict[str, dict[str, list[str]]] = {}
+    measures: list[Measure] = []
+    partitions: list[str] = []
+    row_keys: list[str] = []
+    excluded: list[str] = []
 
     for a in assignments:
         if a.role == ROLE_PARTITION:
@@ -447,7 +651,7 @@ def _build_components_from_assignments(
             dname = a.dimension_name or "공통차원"
             dim_dict.setdefault(dname, {"keys": [], "attrs": []})["attrs"].append(a.column_name)
 
-    dimensions: List[Dimension] = []
+    dimensions: list[Dimension] = []
     for dname, parts in dim_dict.items():
         keys = tuple(parts["keys"])
         attrs = tuple(parts["attrs"])
@@ -475,7 +679,8 @@ def assignments_to_model(
     period_column: str,
     source_delimiter: str = ",",
     source_encoding: str = "utf-8-sig",
-    row_key_columns: Optional[Sequence[str]] = None,
+    row_key_columns: Sequence[str] | None = None,
+    duplicate_grain_policy: str = "reject",
 ) -> MartModel:
     """Construct and validate a MartModel from a finalized assignment list.
 
@@ -483,14 +688,14 @@ def assignments_to_model(
     Otherwise, assigned row keys are used. If still empty, automatically
     derives a surrogate composite grain from the period column and all dimension keys.
     """
-    dimensions, measures, partitions, assigned_row_keys, excluded = _build_components_from_assignments(assignments)
+    dimensions, measures, partitions, assigned_row_keys, _excluded = _build_components_from_assignments(assignments)
 
     if row_key_columns is not None and len(row_key_columns) > 0:
         effective_row_keys = tuple(row_key_columns)
     elif assigned_row_keys:
-        effective_row_keys = tuple(assigned_row_keys)
+        effective_row_keys = tuple(assigned_row_keys[:8])
     else:
-        # Auto-derive surrogate grain from period + dimension keys
+        # Auto-derive surrogate grain from period + dimension keys (capped at 8)
         auto_keys = []
         if period_column and period_column not in auto_keys:
             auto_keys.append(period_column)
@@ -498,7 +703,7 @@ def assignments_to_model(
             for k in d.key_columns:
                 if k not in auto_keys:
                     auto_keys.append(k)
-        effective_row_keys = tuple(auto_keys)
+        effective_row_keys = tuple(auto_keys[:8])
 
     if len(effective_row_keys) > 8:
         raise ValueError(f"Row key columns cannot exceed 8 (configured: {len(effective_row_keys)})")
@@ -523,6 +728,7 @@ def assignments_to_model(
         version="1",
         source_delimiter=source_delimiter,
         source_encoding=source_encoding,
+        duplicate_grain_policy=duplicate_grain_policy,
     )
     validate_column_roles(model)
     return model
@@ -531,9 +737,9 @@ def assignments_to_model(
 def model_to_assignments(
     model: MartModel,
     all_columns: Sequence[str],
-) -> List[ColumnAssignment]:
+) -> list[ColumnAssignment]:
     """Reverse-map an existing MartModel back into editable ColumnAssignments."""
-    result: List[ColumnAssignment] = []
+    result: list[ColumnAssignment] = []
     claimed = set()
 
     # Period

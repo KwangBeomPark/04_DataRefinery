@@ -2,10 +2,20 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+
 import yaml
+
+from src.app_paths import (
+    bundle_or_source_root,
+    dwh_legacy_directory,
+    installation_directory,
+)
 
 
 class ConfigError(Exception):
@@ -31,7 +41,7 @@ class DwhSettings:
     project_version: str
     entity_code: str
     entity_name: str
-    allowed_currencies: List[str]
+    allowed_currencies: list[str]
     reporting_currency: str
     number_format: str
     raw_dir: Path
@@ -44,7 +54,7 @@ class DwhSettings:
     warehouse_db: Path
     mart_export_dir: Path
     logs_dir: Path
-    fx_rates: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    fx_rates: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def ensure_directories(self) -> None:
         """Create all configured directories if they do not exist."""
@@ -85,11 +95,65 @@ class DwhSettings:
 class ConfigLoader:
     """Loads and validates pipeline configuration files."""
 
-    def __init__(self, base_dir: Optional[Path | str] = None) -> None:
-        self.base_dir = Path(base_dir).resolve() if base_dir else Path.cwd().resolve()
-        self.config_dir = self.base_dir / "config"
+    def __init__(self, base_dir: Path | str | None = None) -> None:
+        if base_dir is not None:
+            self.base_dir = Path(base_dir).resolve()
+            self.config_dir = self.base_dir / "config"
+            return
 
-    def load_settings(self, settings_path: Optional[Path | str] = None) -> DwhSettings:
+        cwd = Path.cwd().resolve()
+        is_frozen = bool(getattr(sys, "frozen", False) or getattr(sys, "_MEIPASS", None))
+        if (
+            not is_frozen
+            and cwd != installation_directory().resolve()
+            and (cwd / "config" / "settings.yaml").is_file()
+        ):
+            self.base_dir = cwd
+            self.config_dir = self.base_dir / "config"
+        else:
+            self.base_dir = dwh_legacy_directory().resolve()
+            self.config_dir = self.base_dir / "config"
+            self._seed_default_configs()
+
+    def _seed_default_configs(self) -> None:
+        """Atomically seed default YAML configuration files into the user legacy workspace once."""
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        resource_root = bundle_or_source_root()
+        fallback_root = Path(__file__).resolve().parents[1]
+
+        for filename in ("settings.yaml", "account_mapping.yaml"):
+            target_path = self.config_dir / filename
+            if target_path.exists():
+                continue
+
+            source_path = resource_root / "config" / filename
+            if not source_path.is_file() and fallback_root != resource_root:
+                candidate = fallback_root / "config" / filename
+                if candidate.is_file():
+                    source_path = candidate
+
+            if not source_path.is_file():
+                continue
+
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{filename}.",
+                suffix=".tmp",
+                dir=str(self.config_dir),
+            )
+            os.close(fd)
+            tmp_path = Path(tmp_name)
+            try:
+                shutil.copy2(source_path, tmp_path)
+                if not target_path.exists():
+                    os.replace(tmp_path, target_path)
+            finally:
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
+
+    def load_settings(self, settings_path: Path | str | None = None) -> DwhSettings:
         """Load and validate settings.yaml."""
         path = Path(settings_path) if settings_path else self.config_dir / "settings.yaml"
         if not path.is_file():
@@ -131,7 +195,7 @@ class ConfigLoader:
             fx_rates=fx_rates,
         )
 
-    def load_account_mapping(self, mapping_path: Optional[Path | str] = None) -> Dict[str, AccountRule]:
+    def load_account_mapping(self, mapping_path: Path | str | None = None) -> dict[str, AccountRule]:
         """Load and validate account_mapping.yaml."""
         path = Path(mapping_path) if mapping_path else self.config_dir / "account_mapping.yaml"
         if not path.is_file():
@@ -149,7 +213,7 @@ class ConfigLoader:
         if not accounts_data:
             raise ConfigError("No accounts defined in account_mapping.yaml")
 
-        rules: Dict[str, AccountRule] = {}
+        rules: dict[str, AccountRule] = {}
         for acc_code, acc_info in accounts_data.items():
             acc_name = acc_info.get("name", acc_code)
             stmt_line = acc_info.get("statement_line")
@@ -173,11 +237,11 @@ class ConfigLoader:
         return rules
 
 
-def load_settings(settings_path: Optional[Path | str] = None) -> DwhSettings:
+def load_settings(settings_path: Path | str | None = None) -> DwhSettings:
     """Convenience helper to load runtime DwhSettings."""
     return ConfigLoader().load_settings(settings_path)
 
 
-def load_account_mapping(mapping_path: Optional[Path | str] = None) -> Dict[str, AccountRule]:
+def load_account_mapping(mapping_path: Path | str | None = None) -> dict[str, AccountRule]:
     """Convenience helper to load account mapping rules."""
     return ConfigLoader().load_account_mapping(mapping_path)

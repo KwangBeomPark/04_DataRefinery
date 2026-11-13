@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import csv
 import re
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
-
 
 from src.csv_processing import detect_encoding_precise
 from src.dataset_engine import normalize_period_value
@@ -25,7 +25,7 @@ from src.dataset_engine import normalize_period_value
 class ColumnProfile:
     name: str
     inferred_type: str  # 'period', 'numeric', 'integer', 'identifier', 'text'
-    sample_values: List[str] = field(default_factory=list)
+    sample_values: list[str] = field(default_factory=list)
     suggested_role: str = "general"  # 'period', 'key', 'numeric', 'general'
     confidence: float = 0.5
     reason: str = ""
@@ -42,28 +42,49 @@ class DatasetProfileResult:
     delimiter: str
     total_columns: int
     sample_rows_analyzed: int
-    columns: List[ColumnProfile]
-    suggested_period_column: Optional[str] = None
+    columns: list[ColumnProfile]
+    suggested_period_column: str | None = None
     suggested_period_format: str = "Auto"
-    suggested_key_columns: List[str] = field(default_factory=list)
-    suggested_numeric_columns: List[str] = field(default_factory=list)
+    suggested_key_columns: list[str] = field(default_factory=list)
+    suggested_numeric_columns: list[str] = field(default_factory=list)
     detected_number_format: str = "auto"  # '1,234.56' or '1 234,56'
 
 
 # Regex patterns for role inference
 PERIOD_NAME_RE = re.compile(r"(기준년월|년월|기간|일자|period|month|date|yyyymm|year_month)", re.IGNORECASE)
 KEY_NAME_RE = re.compile(r"(코드|code|id|번호|no|key|cd|사번|계정|uuid)$", re.IGNORECASE)
-NUMERIC_NAME_RE = re.compile(r"(금액|액|가|매출|이익|원가|수량|단가|실적|예산|비용|amt|amount|qty|quantity|sales|profit|revenue|cost|price|total)", re.IGNORECASE)
+NUMERIC_NAME_RE = re.compile(
+    r"(금액|액|가|매출|이익|원가|수량|단가|실적|예산|비용|손익|손실|세금|할인|충당|상각|마진|판관비|노무비|경비|"
+    r"amt|amount|qty|quantity|sales|profit|revenue|cost|price|total|exp|expense|inc|income|loss|"
+    r"cogs|opex|ebit|ebitda|gp|gross|net|tax|depr|amort|alloc|variance|diff|margin)",
+    re.IGNORECASE,
+)
 
-EU_NUMBER_RE = re.compile(r"^[-+]?\d{1,3}([ .\u00a0\u202f]\d{3})*(,\d+)?$|^[-+]?\d+(,\d+)?$")
-US_NUMBER_RE = re.compile(r"^[-+]?\d{1,3}(,\d{3})*(\.\d+)?$|^[-+]?\d+(\.\d+)?$")
+EU_NUMBER_RE = re.compile(
+    r"^(?:[-+]?\d{1,3}(?:[ .\u00a0\u202f]\d{3})*(?:,\d+)?|[-+]?\d+(?:,\d+)?)(?:[eE][-+]?\d+)?$"
+)
+US_NUMBER_RE = re.compile(
+    r"^(?:[-+]?\d{1,3}(?:,\d{3})*(?:\.\d+)?|[-+]?\d+(?:\.\d+)?)(?:[eE][-+]?\d+)?$"
+)
+STRICT_PERIOD_VALUE_RE = re.compile(
+    r"^(?:(?:19|20|21)\d{2}[-./_]?(?:0?[1-9]|1[0-2])(?:[-./_]?(?:0?[1-9]|[12]\d|3[01]))?|"
+    r"(?:19|20|21)?\d{2}\s*년\s*(?:0?[1-9]|1[0-2])\s*월?)$"
+)
+
+
+def _is_plausible_period_cell(val: str) -> bool:
+    """Return True only when val matches a genuine calendar period representation."""
+    s = val.strip()
+    if not s or not STRICT_PERIOD_VALUE_RE.match(s):
+        return False
+    return normalize_period_value(s) is not None
 
 
 def profile_dataset_sample(
     file_path: Path | str,
     sample_rows: int = 1000,
-    encoding: Optional[str] = None,
-    delimiter: Optional[str] = None,
+    encoding: str | None = None,
+    delimiter: str | None = None,
 ) -> DatasetProfileResult:
     """Analyze the first sample_rows of a CSV file and suggest column roles."""
     path = Path(file_path)
@@ -75,16 +96,16 @@ def profile_dataset_sample(
     delim = delimiter or ","
 
     # Read sample lines in Python
-    raw_lines: List[str] = []
+    raw_lines: list[str] = []
     try:
-        with open(path, "r", encoding=enc, errors="replace") as f:
+        with open(path, encoding=enc, errors="replace") as f:
             for _ in range(sample_rows + 5):
                 line = f.readline()
                 if not line:
                     break
                 raw_lines.append(line)
     except Exception as e:
-        raise ValueError(f"Failed to read file sample with encoding '{enc}': {e}")
+        raise ValueError(f"Failed to read file sample with encoding '{enc}': {e}") from e
 
     if not raw_lines:
         raise ValueError("File is empty (0 lines).")
@@ -109,7 +130,7 @@ def profile_dataset_sample(
         raise ValueError("CSV file has no header row.")
 
     header = [c.strip().lstrip("\ufeff") for c in header_raw]
-    data_rows: List[List[str]] = []
+    data_rows: list[list[str]] = []
     for row in reader:
         if not row or (len(row) == 1 and not row[0].strip()):
             continue
@@ -145,7 +166,7 @@ def profile_dataset_sample(
         )
 
     # 2. Transpose into column arrays
-    col_values: Dict[str, List[str]] = {col: [] for col in header}
+    col_values: dict[str, list[str]] = {col: [] for col in header}
     for row in data_rows:
         for idx, col in enumerate(header):
             col_values[col].append(row[idx])
@@ -153,7 +174,7 @@ def profile_dataset_sample(
     # 3. Detect global number format across numeric candidates
     eu_votes = 0
     us_votes = 0
-    for col, vals in col_values.items():
+    for vals in col_values.values():
         for v in vals:
             if not v:
                 continue
@@ -170,10 +191,10 @@ def profile_dataset_sample(
     detected_num_fmt = "1 234,56" if eu_votes > us_votes else "1,234.56"
 
     # 4. Profile each column
-    profiles: List[ColumnProfile] = []
-    period_candidates: List[Tuple[str, float]] = []
-    key_candidates: List[Tuple[str, float]] = []
-    numeric_candidates: List[Tuple[str, float]] = []
+    profiles: list[ColumnProfile] = []
+    period_candidates: list[tuple[str, float]] = []
+    key_candidates: list[tuple[str, float]] = []
+    numeric_candidates: list[tuple[str, float]] = []
 
     for col in header:
         vals = col_values[col]
@@ -183,7 +204,7 @@ def profile_dataset_sample(
         unique_cnt = len(unique_vals)
         unique_ratio = unique_cnt / len(non_empty) if non_empty else 0.0
 
-        sample_preview = list(dict.fromkeys(non_empty))[:3]
+        sample_preview = list(dict.fromkeys(non_empty))[:100]
 
         # Analyze types
         is_period = False
@@ -191,10 +212,10 @@ def profile_dataset_sample(
         is_identifier = False
 
         # Check Period
-        period_match_cnt = sum(1 for v in non_empty if normalize_period_value(v) is not None)
+        period_match_cnt = sum(1 for v in non_empty if _is_plausible_period_cell(v))
         period_match_ratio = period_match_cnt / len(non_empty) if non_empty else 0.0
 
-        if period_match_ratio >= 0.8:
+        if period_match_ratio >= 0.8 and (PERIOD_NAME_RE.search(col) or not NUMERIC_NAME_RE.search(col)):
             is_period = True
 
         # Check Numeric (using regex according to detected format)
@@ -295,8 +316,8 @@ def profile_dataset_sample(
             p.suggested_role = "general"
             p.reason = "추가 기간 열 (일반 속성으로 분류됨)"
 
-    suggested_keys = [col for col, conf in key_candidates if col != suggested_period_col]
-    suggested_numerics = [col for col, conf in numeric_candidates if col != suggested_period_col]
+    suggested_keys = [col for col, _ in key_candidates if col != suggested_period_col]
+    suggested_numerics = [col for col, _ in numeric_candidates if col != suggested_period_col]
 
     return DatasetProfileResult(
         file_path=str(path),
@@ -319,9 +340,9 @@ def check_sample_key_uniqueness(
     period_col: str,
     key_cols: Sequence[str],
     sample_rows: int = 1000,
-    encoding: Optional[str] = None,
-    delimiter: Optional[str] = None,
-) -> Tuple[int, int]:
+    encoding: str | None = None,
+    delimiter: str | None = None,
+) -> tuple[int, int]:
     """Check compound key duplicate count within sample rows.
     
     Returns (duplicate_group_count, total_sample_rows_analyzed).
@@ -335,8 +356,8 @@ def check_sample_key_uniqueness(
     delim = delimiter or ","
 
     try:
-        raw_lines: List[str] = []
-        with open(path, "r", encoding=enc, errors="replace") as f:
+        raw_lines: list[str] = []
+        with open(path, encoding=enc, errors="replace") as f:
             for _ in range(sample_rows + 5):
                 line = f.readline()
                 if not line:
@@ -371,8 +392,7 @@ def check_sample_key_uniqueness(
         if not valid_key_indices:
             return 0, 0
 
-        from collections import Counter
-        key_counter: Counter[Tuple[str, ...]] = Counter()
+        key_counter: Counter[tuple[str, ...]] = Counter()
         total_rows = 0
 
         for row in reader:
@@ -393,6 +413,5 @@ def check_sample_key_uniqueness(
 
         dup_cnt = sum(1 for cnt in key_counter.values() if cnt > 1)
         return int(dup_cnt), int(total_rows)
-    except Exception:
+    except (OSError, ValueError, csv.Error):
         return 0, 0
-

@@ -46,6 +46,7 @@ from src.mart import (
     WorkspaceStore,
 )
 from src.mart.capacity import ResourcePreflight, available_space, collect_capacity
+from src.mart.engine import inspect_source_scopes
 from src.mart.model import model_from_dict
 
 # Text is indexed by stable keys so all labels can be switched without losing form state.
@@ -128,7 +129,7 @@ _TEXT = {
         "완성 선언 및 구성 파일을 확인하세요.",
         "미설정 또는 확인 불가",
         "경고: 예산 80% 이상",
-        "지원 범위: 차원 1–4, 업무키 2열, 행 기준 8열, 분할 2열, 속성 12개, 셀 125 UTF-8바이트. 64열/16지표까지 100만 행, 128열/64지표까지 10만 행, 최대 36범위. 추정은 보장이 아닙니다.",
+        "지원 범위: 차원 1–16, 업무키 8열, 행 기준 16열, 분할 2열, 속성 64개, 셀 1,000 UTF-8바이트. 최대 512열/512지표, 100만 행, 36범위, YYYYMM 기간 및 고정밀/지수 표기(정밀도 38) 지원. 추정은 보장이 아닙니다.",
         "상태",
         "리비전",
         "행 수",
@@ -228,7 +229,7 @@ _TEXT = {
         "Check completion declaration and contributing files.",
         "Not set or unknown",
         "Warning: budget at least 80%",
-        "Supported profile: 1–4 dimensions, 2 business-key columns, 8 row keys, 2 partitions, 12 attributes, 125 UTF-8 bytes per cell. Up to 1 million rows for 64 columns/16 measures, or 100,000 for 128 columns/64 measures, and 36 scopes. Estimates are not guarantees.",
+        "Supported profile: 1–16 dimensions, 8 business-key columns, 16 row keys, 2 partitions, 64 attributes, 1,000 UTF-8 bytes per cell. Up to 512 columns/512 measures, 1 million rows, 36 scopes, YYYYMM periods, and high-precision/scientific decimals (precision 38). Estimates are not guarantees.",
         "Status",
         "Revision",
         "Rows",
@@ -328,7 +329,7 @@ _TEXT = {
         "Sprawdź deklarację kompletności i pliki.",
         "Nie ustawiono lub brak danych",
         "Ostrzeżenie: co najmniej 80% budżetu",
-        "Obsługiwany profil: 1–4 wymiary, 2 kolumny klucza, 8 kluczy wiersza, 2 podziały, 12 atrybutów, 125 bajtów UTF-8 na komórkę. Do 1 mln wierszy dla 64 kolumn/16 miar, albo 100 tys. dla 128 kolumn/64 miar, maks. 36 zakresów. Szacunek nie jest gwarancją.",
+        "Obsługiwany profil: 1–16 wymiarów, 8 kolumn klucza, 16 kluczy wiersza, 2 podziały, 64 atrybuty, 1 000 bajtów UTF-8 na komórkę. Do 512 kolumn/512 miar, 1 mln wierszy, 36 zakresów, okresy RRRRMM oraz notacja naukowa/wysoka precyzja (precyzja 38). Szacunek nie jest gwarancją.",
         "Stan",
         "Wersja",
         "Wiersze",
@@ -465,6 +466,7 @@ class MartWorkspace(QWidget):
         self.last_revision = None
         self.offset = 0
         self.translations = []
+        self._autofilled_scope = {}
         self._build()
         self.apply_language(language_code)
         self.refresh_list()
@@ -553,6 +555,10 @@ class MartWorkspace(QWidget):
         self.row_keys = MultiPick()
         self.partitions = MultiPick()
         self.excluded = MultiPick()
+        self.duplicate_policy_label = QLabel("중복 행 처리")
+        self.duplicate_policy = QComboBox()
+        self.duplicate_policy.addItem("중복 행 발견 시 차단 (기본)", "reject")
+        self.duplicate_policy.addItem("동일 기준 수치 자동 합산 (Group & Sum)", "sum")
         for idx, w in [
             (6, self.fact),
             (7, self.period),
@@ -561,8 +567,10 @@ class MartWorkspace(QWidget):
             (10, self.excluded),
         ]:
             self.formrow(form, idx, w)
+        form.addRow(self.duplicate_policy_label, self.duplicate_policy)
         self.dim_list = QListWidget()
         self.dim_list.setMaximumHeight(80)
+        self.dim_list.currentRowChanged.connect(self._on_dimension_selected)
         model_lay.addWidget(self.label(11))
         model_lay.addWidget(self.dim_list)
         form = QFormLayout()
@@ -584,6 +592,7 @@ class MartWorkspace(QWidget):
         model_lay.addLayout(row)
         self.metric_list = QListWidget()
         self.metric_list.setMaximumHeight(80)
+        self.metric_list.currentRowChanged.connect(self._on_metric_selected)
         model_lay.addWidget(self.label(17))
         model_lay.addWidget(self.label(100))
         model_lay.addWidget(self.metric_list)
@@ -775,7 +784,7 @@ class MartWorkspace(QWidget):
         self.cancel.setEnabled(False)
         for widget in (self.fact, self.dim_name, self.metric_name, self.unit):
             widget.textChanged.connect(self._reset_declarations)
-        for widget in (self.period, self.dim_authority, self.metric_col, self.kind):
+        for widget in (self.period, self.duplicate_policy, self.dim_authority, self.metric_col, self.kind):
             widget.currentIndexChanged.connect(self._reset_declarations)
         for widget in (self.precision, self.scale):
             widget.valueChanged.connect(self._reset_declarations)
@@ -811,11 +820,28 @@ class MartWorkspace(QWidget):
                     "pl": "✨ Kreator Modelowania Gwiazdy",
                 }.get(self.language_code, "✨ Star Schema Modeling Wizard")
             )
+        if hasattr(self, "duplicate_policy_label") and hasattr(self, "duplicate_policy"):
+            self.duplicate_policy_label.setText(
+                {
+                    "ko": "중복 행 처리",
+                    "en": "Duplicate grain policy",
+                    "pl": "Polityka duplikatów",
+                }[self.language_code]
+            )
+            reject_txt, sum_txt = {
+                "ko": ("중복 행 발견 시 차단 (기본)", "동일 기준 수치 자동 합산 (Group & Sum)"),
+                "en": ("Reject on duplicate grain (Default)", "Auto Group & Sum duplicate rows"),
+                "pl": ("Odrzuć duplikaty (Domyślnie)", "Automatycznie sumuj duplikaty (Group & Sum)"),
+            }[self.language_code]
+            self.duplicate_policy.blockSignals(True)
+            self.duplicate_policy.setItemText(0, reject_txt)
+            self.duplicate_policy.setItemText(1, sum_txt)
+            self.duplicate_policy.blockSignals(False)
         self.profile_detail.setText(
             {
-                "ko": "범위당 10만 행, 차원당 고유 키 1만 개(소형 단일 차원 10만 개), 정밀도 18 이하, 기존 DB 512 MiB 이하. 그룹 열 8개와 등가 필터 2개까지 지원합니다.",
-                "en": "Up to 100,000 rows per scope, 10,000 keys per dimension (100,000 for the small single-dimension profile), precision 18 and a 512 MiB existing DB. Up to eight grouping columns and two equality filters.",
-                "pl": "Do 100 000 wierszy na zakres, 10 000 kluczy na wymiar (100 000 dla małego profilu), precyzja 18 i istniejąca baza do 512 MiB. Do ośmiu kolumn grupowania i dwóch filtrów równości.",
+                "ko": "범위당 최대 100만 행, 최대 512열/512지표, 16개 차원(차원당 고유 키 10만 개), YYYYMM 기간 및 고정밀/지수 표기(정밀도 38 이하), 기존 DB 512 MiB 이하. 그룹 열 16개와 등가 필터 8개까지 지원합니다.",
+                "en": "Up to 1,000,000 rows per scope, up to 512 columns/512 measures, 16 dimensions (100,000 unique keys per dimension), YYYYMM periods and lossless scientific/high-precision decimals (precision up to 38), and a 512 MiB existing DB. Up to 16 grouping columns and 8 equality filters.",
+                "pl": "Do 1 000 000 wierszy na zakres, do 512 kolumn/512 miar, 16 wymiarów (100 000 unikalnych kluczy na wymiar), okresy RRRRMM i bezstratna notacja naukowa/wysoka precyzja (do 38) oraz istniejąca baza do 512 MiB. Do 16 kolumn grupowania i 8 filtrów równości.",
             }[self.language_code]
         )
         for picker in (
@@ -1036,6 +1062,7 @@ class MartWorkspace(QWidget):
         self.source.setText("; ".join(p.name for p in self.files))
         self.files_label.setText("\n".join(p.name for p in self.files))
         self.inspect_source()
+        self._autofill_scope_inputs()
 
     def open_model_wizard(self):
         target_path = None
@@ -1081,11 +1108,14 @@ class MartWorkspace(QWidget):
                 prev_model = self.model
                 self._wizard_source_delim = getattr(aligned_model, "source_delimiter", ",")
                 self._wizard_source_enc = getattr(aligned_model, "source_encoding", "utf-8-sig")
+                self._wizard_dup_policy = getattr(aligned_model, "duplicate_grain_policy", "reject")
                 self.restore_model(aligned_model)
                 self.save_model()
                 # Rollback UI forms if save failed (e.g. locked DB or validation error)
                 if self.model != aligned_model and prev_model is not None:
                     self.restore_model(prev_model)
+
+    _launch_wizard = open_model_wizard
 
     def _run(self, work, done, progress=None, *, cancelable=False, on_finished=None):
         if self._busy:
@@ -1157,6 +1187,7 @@ class MartWorkspace(QWidget):
             self.columns = rows[0]
             self._set_columns(self.columns)
             self._table(self.source_preview, self.columns, rows[1:])
+            self._autofill_scope_inputs()
 
         self._run(read, done)
 
@@ -1183,6 +1214,38 @@ class MartWorkspace(QWidget):
             combo.addItems(([""] if blank else []) + list(cols))
             combo.setCurrentText(old)
 
+    def _on_dimension_selected(self, row: int) -> None:
+        if row < 0 or row >= len(self.dims):
+            return
+        d = self.dims[row]
+        for w in (self.dim_name, self.dim_authority):
+            w.blockSignals(True)
+        self.dim_name.setText(d.name)
+        self.dim_keys.blockSignals(True)
+        self.dim_keys.set_values(d.key_columns)
+        self.dim_keys.blockSignals(False)
+        self.dim_attrs.blockSignals(True)
+        self.dim_attrs.set_values(d.attributes)
+        self.dim_attrs.blockSignals(False)
+        self.dim_authority.setCurrentText(d.authority_column or "")
+        for w in (self.dim_name, self.dim_authority):
+            w.blockSignals(False)
+
+    def _on_metric_selected(self, row: int) -> None:
+        if row < 0 or row >= len(self.metrics):
+            return
+        m = self.metrics[row]
+        for w in (self.metric_name, self.metric_col, self.unit, self.precision, self.scale, self.kind):
+            w.blockSignals(True)
+        self.metric_name.setText(m.name)
+        self.metric_col.setCurrentText(m.column)
+        self.unit.setText(m.unit)
+        self.precision.setValue(m.precision)
+        self.scale.setValue(m.scale)
+        self.kind.setCurrentText(m.kind)
+        for w in (self.metric_name, self.metric_col, self.unit, self.precision, self.scale, self.kind):
+            w.blockSignals(False)
+
     def add_dimension(self):
         self._reset_declarations()
         d = Dimension(
@@ -1194,6 +1257,11 @@ class MartWorkspace(QWidget):
         if not d.name or not d.key_columns:
             self.status.setText(self.t(74))
             return
+        for idx, existing in enumerate(self.dims):
+            if existing.name == d.name:
+                self.dims[idx] = d
+                self._update_lists()
+                return
         self.dims.append(d)
         self._update_lists()
 
@@ -1218,6 +1286,11 @@ class MartWorkspace(QWidget):
         if not m.name or not m.column:
             self.status.setText(self.t(74))
             return
+        for idx, existing in enumerate(self.metrics):
+            if existing.name == m.name or existing.column == m.column:
+                self.metrics[idx] = m
+                self._update_lists()
+                return
         self.metrics.append(m)
         self._update_lists()
 
@@ -1229,6 +1302,7 @@ class MartWorkspace(QWidget):
             self._update_lists()
 
     def _update_lists(self):
+        self.dim_list.blockSignals(True)
         self.dim_list.clear()
         self.dim_list.addItems(
             [
@@ -1240,20 +1314,45 @@ class MartWorkspace(QWidget):
                 for d in self.dims
             ]
         )
+        self.dim_list.blockSignals(False)
+        self.metric_list.blockSignals(True)
         self.metric_list.clear()
         self.metric_list.addItems(
-            [m.name + " ← " + m.column + " (" + m.unit + ", SUM)" for m in self.metrics]
+            [
+                f"{m.name} ← {m.column} ({m.unit}, SUM, DEC({m.precision},{m.scale}))"
+                for m in self.metrics
+            ]
         )
+        self.metric_list.blockSignals(False)
 
     def save_model(self):
         self._reset_declarations()
         if not self.current:
             self.status.setText(self.t(83))
             return
-        source_delim = getattr(self, "_wizard_source_delim", None) or getattr(self, "_detected_source_delim", None) or (getattr(self.model, "source_delimiter", ",") if self.model else ",")
-        source_enc = getattr(self, "_wizard_source_enc", None) or getattr(self, "_detected_source_enc", None) or (getattr(self.model, "source_encoding", "utf-8-sig") if self.model else "utf-8-sig")
+        source_delim = (
+            getattr(self, "_wizard_source_delim", None)
+            or getattr(self, "_restored_source_delim", None)
+            or getattr(self, "_detected_source_delim", None)
+            or (getattr(self.model, "source_delimiter", None) if self.model else None)
+            or ","
+        )
+        source_enc = (
+            getattr(self, "_wizard_source_enc", None)
+            or getattr(self, "_restored_source_enc", None)
+            or getattr(self, "_detected_source_enc", None)
+            or (getattr(self.model, "source_encoding", None) if self.model else None)
+            or "utf-8-sig"
+        )
+        dup_policy = (
+            getattr(self, "_wizard_dup_policy", None)
+            or (self.duplicate_policy.currentData() if hasattr(self, "duplicate_policy") else None)
+            or (getattr(self.model, "duplicate_grain_policy", None) if self.model else None)
+            or "reject"
+        )
         self._wizard_source_delim = None
         self._wizard_source_enc = None
+        self._wizard_dup_policy = None
         model_ver = getattr(self.model, "version", "1") if self.model else "1"
         try:
             model = MartModel(
@@ -1268,6 +1367,7 @@ class MartWorkspace(QWidget):
                 version=model_ver,
                 source_delimiter=source_delim,
                 source_encoding=source_enc,
+                duplicate_grain_policy=dup_policy if dup_policy in ("reject", "sum") else "reject",
             )
             required = MartEngine(WorkspaceStore(self.current))._validate_model(model)
             if set(self.columns) != required:
@@ -1284,6 +1384,8 @@ class MartWorkspace(QWidget):
                 )
             _atomic_json(self.current / "model.json", asdict(model))
             self.model = model
+            self._restored_source_delim = model.source_delimiter
+            self._restored_source_enc = model.source_encoding
             self._scope_fields(model)
             self.status.setText(self.t(69))
         except (ValueError, OSError) as exc:
@@ -1294,6 +1396,8 @@ class MartWorkspace(QWidget):
             m = self.model
         if m is None:
             return
+        self._restored_source_delim = getattr(m, "source_delimiter", ",")
+        self._restored_source_enc = getattr(m, "source_encoding", "utf-8-sig")
         cols = list(
             dict.fromkeys(
                 [
@@ -1321,9 +1425,18 @@ class MartWorkspace(QWidget):
         self.row_keys.set_values(m.row_key_columns)
         self.partitions.set_values(m.partition_columns)
         self.excluded.set_values(m.excluded_columns)
+        if hasattr(self, "duplicate_policy"):
+            policy = getattr(m, "duplicate_grain_policy", "reject")
+            idx = self.duplicate_policy.findData(policy)
+            if idx >= 0:
+                self.duplicate_policy.blockSignals(True)
+                self.duplicate_policy.setCurrentIndex(idx)
+                self.duplicate_policy.blockSignals(False)
         self.dims = list(m.dimensions)
         self.metrics = list(m.measures)
         self._update_lists()
+        if self.metrics:
+            self._on_metric_selected(0)
         self._scope_fields(m)
 
     def _scope_fields(self, model=None):
@@ -1336,11 +1449,69 @@ class MartWorkspace(QWidget):
             if item.widget():
                 item.widget().deleteLater()
         self.scope_inputs = {}
+        self._autofilled_scope = {}
         for col in (model.period_column, *model.partition_columns):
             edit = QLineEdit()
             edit.textChanged.connect(self._reset_declarations)
             self.scope_inputs[col] = edit
             self.scope_form.addRow(col, edit)
+        self._autofill_scope_inputs(model)
+
+    def _resolve_source_files(self) -> tuple[Path, ...]:
+        if self.files:
+            return tuple(Path(p) for p in self.files if Path(p).exists())
+        if self.source.text():
+            parts = [Path(p.strip()) for p in self.source.text().split(";") if p.strip()]
+            return tuple(p for p in parts if p.exists())
+        return ()
+
+    def _autofill_scope_inputs(self, model=None):
+        if model is None:
+            model = self.model
+        if model is None or not self.scope_inputs:
+            return
+        files = self._resolve_source_files()
+        if not files:
+            return
+        detected_scope = None
+        try:
+            scopes = inspect_source_scopes(model, files)
+            if scopes:
+                detected_scope = scopes[0]
+        except Exception:
+            detected_scope = None
+        if not detected_scope:
+            try:
+                delim = getattr(model, "source_delimiter", ",") or ","
+                enc = getattr(model, "source_encoding", "utf-8-sig") or "utf-8-sig"
+                with files[0].open(encoding=enc, errors="replace", newline="") as f:
+                    reader = csv.reader(f, delimiter=delim)
+                    headers = [c.strip().lstrip("\ufeff") for c in next(reader, [])]
+                    for row in reader:
+                        if any(cell.strip() for cell in row):
+                            row_map = {
+                                headers[i]: row[i].strip()
+                                for i in range(min(len(headers), len(row)))
+                            }
+                            detected_scope = {
+                                col: row_map.get(col, "")
+                                for col in self.scope_inputs
+                                if row_map.get(col, "")
+                            }
+                            break
+            except Exception:
+                detected_scope = None
+        if detected_scope:
+            autofilled = getattr(self, "_autofilled_scope", {})
+            for col, edit in self.scope_inputs.items():
+                val = str(detected_scope.get(col, "")).strip()
+                curr = edit.text().strip()
+                if val and (not curr or curr == autofilled.get(col)):
+                    edit.blockSignals(True)
+                    edit.setText(val)
+                    edit.blockSignals(False)
+                    autofilled[col] = val
+            self._autofilled_scope = autofilled
 
     def load_snapshot(self):
         if (
@@ -1358,17 +1529,39 @@ class MartWorkspace(QWidget):
         current = self.current
         empty = self.empty.isChecked()
         cancel = self.cancel_event
-        self._run(
-            lambda _: MartEngine(
+
+        def work(_):
+            engine = MartEngine(
                 WorkspaceStore(current), ResourcePreflight(cancel=cancel)
-            ).load_snapshot(
+            )
+            if not empty:
+                try:
+                    detected_scopes = inspect_source_scopes(model, files)
+                except Exception:
+                    detected_scopes = ()
+                if len(detected_scopes) > 1:
+                    return engine.load_all_scopes(
+                        model,
+                        files,
+                        [p.name for p in files],
+                        complete=True,
+                        allow_empty=empty,
+                    )
+                if len(detected_scopes) == 1 and any(not v for v in scope.values()):
+                    for k, v in detected_scopes[0].items():
+                        if not scope.get(k):
+                            scope[k] = v
+            return engine.load_snapshot(
                 model,
                 files,
                 scope,
                 [p.name for p in files],
                 complete=True,
                 allow_empty=empty,
-            ),
+            )
+
+        self._run(
+            work,
             lambda r: self._loaded(r),
             cancelable=True,
             on_finished=self._reset_declarations,

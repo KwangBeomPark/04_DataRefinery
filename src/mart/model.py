@@ -34,6 +34,7 @@ class MartModel:
     version: str = "1"
     source_delimiter: str = ","
     source_encoding: str = "utf-8-sig"
+    duplicate_grain_policy: str = "reject"
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,8 @@ def validate_column_roles(model):
         raise ValueError('A measure source column cannot also be a key, attribute, period or authority')
     if excluded & (text_columns | set(measures)):
         raise ValueError('An excluded column cannot also have an active role')
+    if getattr(model, 'duplicate_grain_policy', 'reject') not in ('reject', 'sum'):
+        raise ValueError('Unsupported duplicate grain policy')
 
 
 def model_from_dict(data):
@@ -77,8 +80,8 @@ def model_from_dict(data):
         row_key_columns=tuple(data.get('row_key_columns', ())), excluded_columns=tuple(data.get('excluded_columns', ())),
         version=data.get('version', '1'),
         source_delimiter=data.get('source_delimiter', ','),
-        source_encoding=data.get('source_encoding', 'utf-8-sig'))
-
+        source_encoding=data.get('source_encoding', 'utf-8-sig'),
+        duplicate_grain_policy=data.get('duplicate_grain_policy', 'reject'))
 
 
 def export_from_dict(data):

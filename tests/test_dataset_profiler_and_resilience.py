@@ -1,13 +1,14 @@
 """Unit tests for dataset profiler, European number format parsing, encoding resilience, and schema validation."""
 
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
+
 import duckdb
 
 from src.dataset_config import DatasetDefinition, DatasetRegistry
 from src.dataset_engine import DatasetEngine, make_numeric_sql_expr
-from src.dataset_profiler import profile_dataset_sample, check_sample_key_uniqueness
+from src.dataset_profiler import check_sample_key_uniqueness, profile_dataset_sample
 
 
 class TestDatasetProfilerAndResilience(unittest.TestCase):
@@ -79,6 +80,24 @@ class TestDatasetProfilerAndResilience(unittest.TestCase):
         # General text
         name_col = next(c for c in result.columns if c.name == "거래선명")
         self.assertEqual(name_col.suggested_role, "general")
+
+    def test_profiler_scientific_notation_numeric_detection(self):
+        """Verify US and EU scientific notation strings (e.g. 5.95E-11, -1.23e+05) are profiled as numeric."""
+        csv_file = self.temp_path / "sci_sample.tsv"
+        content = (
+            "YYYYMM\tProduct Lvl4 Code\tVariable Installation Exp\tEU Sci Cost\n"
+            "201401\tPROD0001\t5.95E-11\t5,46E-10\n"
+            "201401\tPROD0002\t-1.20E-08\t-3,14e+02\n"
+            "201401\tPROD0003\t3.80E-09\t1,00E-06\n"
+        )
+        csv_file.write_text(content, encoding="utf-8")
+
+        result = profile_dataset_sample(csv_file)
+        col_map = {c.name: c for c in result.columns}
+        self.assertEqual(col_map["Variable Installation Exp"].inferred_type, "numeric")
+        self.assertEqual(col_map["Variable Installation Exp"].suggested_role, "numeric")
+        self.assertEqual(col_map["EU Sci Cost"].inferred_type, "numeric")
+        self.assertEqual(col_map["EU Sci Cost"].suggested_role, "numeric")
 
     def test_check_sample_key_uniqueness(self):
         """Test compound key duplicate detection within sample."""
