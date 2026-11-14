@@ -360,7 +360,39 @@ class ResourcePreflight:
                 fields, model, complex_shape = self._shape(context.get('model'))
                 memory = self._check_memory(complex_shape)
                 definition, db = context.get('definition'), context.get('db')
-                if db is None or definition is None or definition.format != 'wide':
+                recipe = context.get('recipe')
+                detail_measure_count = int(context.get('detail_measure_count', 1) or 1)
+                if (
+                    definition is not None
+                    and getattr(definition, 'format', None) is None
+                    and getattr(definition, 'mode', None) in ('wide_raw', 'wide_rollup', 'long_detail')
+                ):
+                    from .model import ExportDefinition
+
+                    recipe = definition
+                    group_by = tuple(definition.group_by)
+                    if not group_by:
+                        defaults = [model['period_column']]
+                        for dim in model['dimensions']:
+                            keys = dim.get('key_columns', ())
+                            if keys and keys[0] not in defaults:
+                                defaults.append(keys[0])
+                        group_by = tuple(defaults)
+                    cols = tuple(definition.columns) or (
+                        group_by + tuple(m['column'] for m in model['measures'] if m['column'] not in group_by)
+                    )
+                    if definition.mode == 'long_detail' and detail_measure_count <= 1:
+                        detail_measure_count = max(1, len(model.get('measures', ())))
+                    definition = ExportDefinition(
+                        name=definition.name,
+                        columns=cols,
+                        format='wide',
+                        group_by=group_by,
+                        filters=tuple(definition.filters),
+                        period_start=definition.period_start,
+                        period_end=definition.period_end,
+                    )
+                if db is None or definition is None or getattr(definition, 'format', None) != 'wide':
                     raise ValueError('측정 범위는 wide CSV 출력입니다')
                 if len(definition.group_by) > 16 or len(definition.filters) > 8 or len(definition.columns) > self.profile.columns:
                     raise ValueError(f'측정 범위는 그룹 키 최대 16개, 필터 최대 8개, 출력 최대 {self.profile.columns}열입니다')
@@ -389,6 +421,8 @@ class ResourcePreflight:
                         if any(len(str(v if v is not None else '').encode('utf-8')) > self.profile.cell_bytes for v in row):
                             raise ValueError('출력 셀이 측정된 최대 크기를 초과합니다')
                         output += sum(2 * len(str(v if v is not None else '').encode('utf-8')) + 3 for v in row) + 2
+                if getattr(recipe, 'mode', None) == 'long_detail' or detail_measure_count > 1:
+                    output *= max(1, detail_measure_count)
                 requirements = [(store.root, scratch), (destination, output + 4096)]
             elif operation in ('publish', 'backup', 'restore'):
                 if operation == 'restore' and size > self.profile.db_bytes:

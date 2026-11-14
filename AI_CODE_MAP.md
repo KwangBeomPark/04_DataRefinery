@@ -60,7 +60,7 @@ flowchart TD
 
 ## 4. 주요 모듈 책임과 변경 계약
 
-범용 마트는 `src/mart/model.py` 모델, `storage.py` 공간 표식·잠금, `engine.py` 범위 적재·실제 카탈로그·대사·후보 승인, `capacity.py` 자원 사전 점검(최대 512열·512지표·16차원·100만 행·정밀도 38), `publication.py` 조건부 SharePoint 게시, `excel.py` SharePoint M 안내로 구성됩니다. UI는 `src/qt/widgets/mart_workspace.py`이며 DWH의 기존 화면(`dwh_legacy`)은 전환 시에만 지연 검사해 보존합니다. 작업 DB·원본 보관·후보·토큰이 없는 로컬 배포 설정은 `UserSetting/datasets/mart_workspaces/<작업>/`에 두며, 레거시 DWH 설정(`settings.yaml`, `account_mapping.yaml`)은 `src/config_loader.py`가 번들/소스에서 `UserSetting/datasets/dwh_legacy/config/`로 원자 시딩해 임의 실행 경로에서도 설정 누락 없이 동작합니다. Excel M 안내는 연결된 XLSX를 생성하지 않습니다. 회사 권한과 다른 사용자 Excel 새로고침은 별도 검증 대상입니다.
+범용 마트는 `src/mart/model.py` 모델, `storage.py` 공간 표식·잠금·설계도 복제 목록(`BLUEPRINT_FILES`), `mapping.py` 계정·지표 분류 매핑(`AccountMappingEntry`, 대/중/소분류·부호·소계/비금액 제외·XLSX/CSV 왕복), `recipes.py` 마트 레시피(`MartRecipe`: `wide_rollup`, `long_detail`, `wide_raw`), `engine.py` 범위 적재·실제 카탈로그·대사·후보 승인·`clone_blueprint`·`create_recipe_export`·`reconcile_recipe_export`, `capacity.py` 자원 사전 점검(최대 512열·512지표·16차원·100만 행·정밀도 38, `ExportDefinition`/`MartRecipe` 지원), `publication.py` 조건부 SharePoint 게시, `excel.py` SharePoint M 안내로 구성됩니다. UI는 `src/qt/widgets/mart_workspace.py`이며 3단계 워크플로(1단계 DB 구축·적재 `db_tabs`, 2단계 계정·지표 매핑, 3단계 레시피·정합성 대사·`deploy_tabs` 배포)와 상단 `설계도 복제`/`workflow_guide_banner`를 제공하고 DWH의 기존 화면(`dwh_legacy`)은 전환 시에만 지연 검사해 보존합니다. 작업 DB·원본 보관·후보·토큰이 없는 로컬 배포 설정은 `UserSetting/datasets/mart_workspaces/<작업>/`에 두며, 레거시 DWH 설정(`settings.yaml`, `account_mapping.yaml`)은 `src/config_loader.py`가 번들/소스에서 `UserSetting/datasets/dwh_legacy/config/`로 원자 시딩해 임의 실행 경로에서도 설정 누락 없이 동작합니다. Excel M 안내는 연결된 XLSX를 생성하지 않습니다. 회사 권한과 다른 사용자 Excel 새로고침은 별도 검증 대상입니다.
 
 기간은 유효한 ISO 월(`YYYY-MM`), 일(`YYYY-MM-DD`) 또는 6자리 월(`YYYYMM`)로 작업 공간 내 입도를 고정하고 출력 경계도 일치시킵니다. 수치 열은 지수 표기(`5.95E-11`)를 포함한 표본에서 열별 무손실 `(precision, scale)`을 자동 산정하고 Python `Decimal` 정규화 후 고정소수점 문자열로 스테이징합니다. `duplicate_grain_policy="sum"`일 때는 적재 전 동일 행 기준을 DuckDB `Group & Sum`으로 압축·대사하며, 다기간/다중 분할 파일은 `inspect_source_scopes()`·`load_all_scopes()`로 순차 적재합니다. 범위·입력·모델 변경과 적재 시도 후 UI 완성/빈 범위 선언을 지웁니다. Excel 안내 생성은 작업 공간 잠금 아래 승인·후보 무결성·리비전·모델·세대를 검증한 매니페스트 열과 저장된 대상에 결속됩니다. 모델 및 UI 설정은 공통 원자 저장을 사용하며 적재 완료 후 편의 설정 저장 실패는 별도 경고합니다.
 
@@ -84,7 +84,8 @@ flowchart TD
 | `src/qt/tabs/dataset/tab.py` | 배포 탭·누적·검수 승인·공개·Excel 생성 | 긴 작업의 중복 실행·설정 변경 차단 |
 | `src/qt/tabs/dataset/wizard.py` | 파일 선별·역할 추천·복합키 진단 | 단계 이동 전 필수값 검증, 표본 진단을 전체 검증과 구분 |
 | `src/mart/auto_guess.py` | 표본 기반 스타 스키마 자동 추정 및 역할(기간, 키, 지표, 차원) 매핑, `infer_decimal_precision_scale` 무손실 정밀도 산정 | 프로파일러와 Kimball 계약 연동, 코드·명칭 쌍 키 우선, Wide 수치 구간 빈 열 포섭 |
-| `src/qt/widgets/mart_model_wizard.py` | 대형 좌우 분할 스타 스키마 모델링 마법사(1200x820) 및 데이터 뷰어 팝업 | 1,000행 페이징 그리드, 미할당 숫자열·제외 일괄 배정, 중복 행 Group & Sum 원클릭 전환, 관계 다이어그램 |
+| `src/mart/mapping.py`, `src/mart/recipes.py` | `AccountMappingEntry` 분류·키워드 자동 추천·XLSX/CSV 왕복(`mapping.py`), `MartRecipe` 3모드(`wide_rollup`, `long_detail`, `wide_raw`)·프리셋(`recipes.py`) | `mart_account_mapping` 테이블 + `mappings.json` / `recipes.json` 동기화, 소계·비금액 이중집계 차단, `Decimal` 오차 0 대사 |
+| `src/qt/widgets/mart_workspace.py`, `src/qt/widgets/mart_model_wizard.py` | 3단계 마트 작업공간(`db_tabs`, 계정 매핑 스튜디오, 레시피·대사·`deploy_tabs`, `설계도 복제`), 대형 스타 스키마 마법사(1200x820) | 기존 위젯 속성·하위 탭 계약 유지, `apply_language` 번역 동기화, 중복 행 Group & Sum 원클릭 전환 |
 | `src/dataset_profiler.py` | 표본 기반 타입·역할 추천(과학적 지수 표기·엄격 기간 매칭 포함) | 대용량 전체 로드 없이 분석 |
 | `src/dataset_config.py` | DatasetDefinition·DatasetRegistry·배포 경로 | 같은 배포 폴더 중복 등록 차단, 스키마 변경 시 승인 무효화 |
 | `src/dataset_engine.py` | 기간 누적·교체·검수·승인·CSV 공개 | 아카이브된 이전 기간 보존, 반쪽 기간 교체 차단 |

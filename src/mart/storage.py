@@ -9,6 +9,7 @@ from pathlib import Path
 class WorkspaceStore:
     ENGINE = "data-refinery-mart"
     SCHEMA = 1
+    BLUEPRINT_FILES = ("model.json", "mappings.json", "recipes.json", "ui.json")
 
     def __init__(self, root):
         self.root = Path(root).resolve()

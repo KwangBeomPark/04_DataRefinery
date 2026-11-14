@@ -477,30 +477,39 @@ class MartWorkspaceTest(unittest.TestCase):
             self.assertEqual([d.name for d in widget.dims], ["Customer"])
 
     def test_workspace_tabs_and_deployment_subtabs(self):
-        """Verify the 4-step main workflow tabs and deploy sub-tabs structure."""
+        """Verify the 3-stage workflow tabs, DB sub-tabs, and deploy sub-tabs structure."""
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             widget = MartWorkspace("ko", ImmediateRunner(), root=root / "spaces")
 
-            # 1. Main tabs count and titles
-            self.assertEqual(widget.tabs.count(), 4)
-            self.assertIn("1. 📋", widget.tabs.tabText(0))
-            self.assertIn("2. ⚡", widget.tabs.tabText(1))
-            self.assertIn("3. 🔍", widget.tabs.tabText(2))
-            self.assertIn("4. 📤", widget.tabs.tabText(3))
+            # 1. Main 3-stage tabs count and titles
+            self.assertEqual(widget.tabs.count(), 3)
+            self.assertIn("1. 🗄️", widget.tabs.tabText(0))
+            self.assertIn("2. 🏷️", widget.tabs.tabText(1))
+            self.assertIn("3. 📦", widget.tabs.tabText(2))
 
-            # 2. Deploy sub-tabs count and titles
+            # 2. DB inner sub-tabs inside Stage 1
+            self.assertTrue(hasattr(widget, "db_tabs"))
+            self.assertEqual(widget.db_tabs.count(), 3)
+            self.assertIn("1. 📋", widget.db_tabs.tabText(0))
+            self.assertIn("2. ⚡", widget.db_tabs.tabText(1))
+            self.assertIn("3. 🔍", widget.db_tabs.tabText(2))
+
+            # 3. Deploy sub-tabs count and titles inside Stage 3
             self.assertTrue(hasattr(widget, "deploy_tabs"))
             self.assertEqual(widget.deploy_tabs.count(), 3)
             self.assertEqual(widget.deploy_tabs.tabText(0), "목적 CSV")
             self.assertEqual(widget.deploy_tabs.tabText(1), "SharePoint")
             self.assertEqual(widget.deploy_tabs.tabText(2), "저장소 용량 모니터링")
 
-            # 3. Widgets integrity
+            # 4. Widgets integrity
             self.assertIsNotNone(widget.candidates)
             self.assertIsNotNone(widget.budget)
             self.assertIsNotNone(widget.site)
             self.assertIsNotNone(widget.export_name)
+            self.assertIsNotNone(widget.mapping_table)
+            self.assertIsNotNone(widget.recipe_reconcile_table)
+            self.assertIsNotNone(widget.clone_button)
 
     def test_wide_218_col_tsv_wizard_group_sum_e2e_and_month_switch_autofill(self):
         """E2E: 218-col wide TSV (YYYYMM, 5.95E-11, empty cols, duplicate grain) -> Wizard -> Group&Sum Load -> Reconcile -> Month 2 switch."""
@@ -672,6 +681,113 @@ class MartWorkspaceTest(unittest.TestCase):
                 widget.inspect_database()
                 self.assertEqual(engine.catalog()["revision"], 2)
                 self.assertTrue(engine.reconcile()["matches"])
+
+    def test_phase2_phase3_mapping_recipe_reconcile_and_blueprint_clone_e2e(self):
+        """E2E: Load Month 1 -> Account Mapping in Stage 2 -> Rollup & Long 0-filtered Recipes in Stage 3 -> Clone Blueprint."""
+        from src.mart import Dimension, MartEngine, MartModel, Measure, WorkspaceStore
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            measure_cols = [
+                "매출수량[400001]",
+                "매출액[410000]",
+                "원재료비(변동)[510001]",
+                "감가상각비(고정)[520001]",
+                "매출원가계[500000]",
+            ]
+            csv_m1 = root / "profit_202607.csv"
+            with csv_m1.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["YYYYMM", "cust_cd", "model_cd", *measure_cols])
+                writer.writerow(["202607", "C01", "M1", "10", "1000.00", "400.00", "0.00", "400.00"])
+                writer.writerow(["202607", "C02", "M2", "5", "500.00", "0.00", "150.00", "150.00"])
+
+            csv_m2 = root / "profit_202608.csv"
+            with csv_m2.open("w", encoding="utf-8-sig", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["YYYYMM", "cust_cd", "model_cd", *measure_cols])
+                writer.writerow(["202608", "C01", "M1", "20", "2000.00", "800.00", "100.00", "900.00"])
+
+            def guard(**kwargs):
+                return ResourcePreflight(
+                    reserve_bytes=0, space_probe=lambda _: free(10 * 1024**3), **kwargs
+                )
+
+            with patch(
+                "src.qt.widgets.mart_workspace.ResourcePreflight", side_effect=guard
+            ):
+                widget = MartWorkspace("ko", ImmediateRunner(), root=root / "spaces")
+                widget.name.setText("ws_profit_2026")
+                widget.create_workspace()
+                widget.set_files([csv_m1])
+
+                model = MartModel(
+                    name="ws_profit_2026",
+                    fact_table="profit",
+                    dimensions=(
+                        Dimension("customer", ("cust_cd",), ()),
+                        Dimension("model", ("model_cd",), ()),
+                    ),
+                    measures=tuple(
+                        Measure(f"m{i}", col, 18, 2, "KRW", kind="value")
+                        for i, col in enumerate(measure_cols, start=1)
+                    ),
+                    period_column="YYYYMM",
+                    row_key_columns=("YYYYMM", "cust_cd", "model_cd"),
+                )
+                widget.restore_model(model)
+                widget.save_model()
+                self.assertIsNotNone(widget.model)
+                widget.complete.setChecked(True)
+                widget.load_snapshot()
+                self.assertEqual(widget.status.text(), widget.t(69))
+
+                # Stage 2: Account Mapping auto-suggest & save to DuckDB
+                widget.auto_suggest_mapping()
+                self.assertEqual(widget.mapping_table.rowCount(), len(measure_cols))
+                widget.save_mapping_from_ui()
+                engine = MartEngine(WorkspaceStore(widget.current))
+                saved_mappings = engine.load_account_mapping()
+                self.assertEqual(len(saved_mappings), len(measure_cols))
+
+                # Stage 3: Wide Rollup preset -> save & run -> verify reconcile table
+                widget.apply_recipe_preset("wide_rollup")
+                widget.save_recipe_from_ui()
+                widget.run_recipe_export()
+                self.assertIn("완전 일치", widget.recipe_reconcile_summary.text())
+                self.assertGreaterEqual(widget.recipe_reconcile_table.rowCount(), 2)
+                for r in range(widget.recipe_reconcile_table.rowCount()):
+                    self.assertEqual(widget.recipe_reconcile_table.item(r, 3).text(), "0")
+                    self.assertEqual(widget.recipe_reconcile_table.item(r, 4).text(), "일치")
+
+                # Stage 3: Long Detail 0-excluded preset -> save & run -> verify filtered rows & match
+                widget.apply_recipe_preset("long_detail")
+                widget.save_recipe_from_ui()
+                widget.run_recipe_export()
+                self.assertIn("0원 제외 행", widget.recipe_reconcile_summary.text())
+                self.assertIn("완전 일치", widget.recipe_reconcile_summary.text())
+
+                # Blueprint Clone into a separate new DB workspace
+                clone_res = widget.clone_workspace_blueprint("ws_profit_sep")
+                self.assertIsNotNone(clone_res)
+                self.assertEqual(widget.current.name, "ws_profit_sep")
+                self.assertFalse((widget.current / "mart.duckdb").exists())
+                self.assertTrue((widget.current / "model.json").is_file())
+                self.assertTrue((widget.current / "mappings.json").is_file())
+                self.assertTrue((widget.current / "recipes.json").is_file())
+                self.assertIsNotNone(widget.model)
+                self.assertEqual(widget.mapping_table.rowCount(), len(measure_cols))
+                self.assertGreaterEqual(widget.recipe_combo.count(), 3)
+
+                # Load Month 2 directly into cloned workspace and batch-run saved recipes
+                widget.set_files([csv_m2])
+                self.assertEqual(widget.scope_inputs["YYYYMM"].text(), "202608")
+                widget.complete.setChecked(True)
+                widget.load_snapshot()
+                self.assertTrue((widget.current / "mart.duckdb").is_file())
+                widget.run_all_saved_recipes()
+                self.assertIn("일괄 생성 완료", widget.status.text())
+                self.assertIn("완전 일치", widget.recipe_reconcile_summary.text())
 
 
 if __name__ == "__main__":

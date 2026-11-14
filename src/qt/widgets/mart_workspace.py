@@ -20,7 +20,9 @@ from PySide6.QtWidgets import (
     QGraphicsScene,
     QGraphicsView,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -38,16 +40,25 @@ from PySide6.QtWidgets import (
 from src.app_paths import dataset_storage_directory
 from src.background_jobs import JobCallbacks
 from src.mart import (
+    AccountMappingEntry,
     Dimension,
     ExportDefinition,
     MartEngine,
     MartModel,
+    MartRecipe,
     Measure,
     WorkspaceStore,
 )
 from src.mart.capacity import ResourcePreflight, available_space, collect_capacity
 from src.mart.engine import inspect_source_scopes
+from src.mart.mapping import (
+    export_mapping_file,
+    import_mapping_file,
+    load_mappings_json,
+    suggest_mapping_entries,
+)
 from src.mart.model import model_from_dict
+from src.mart.recipes import build_default_recipes, load_recipes
 
 # Text is indexed by stable keys so all labels can be switched without losing form state.
 _TEXT = {
@@ -366,6 +377,9 @@ _TEXT["ko"].extend(
         "실제 관계도",
         "가산 지표의 합계만 지원합니다. 재고 잔액과 비율은 별도 기준기간 또는 측정값 설계가 필요합니다.",
         "저장소 용량 모니터링",
+        "1. 🗄️ DB 구축 및 적재 (스키마·적재·검수)",
+        "2. 🏷️ 계정·지표 매핑 (선택)",
+        "3. 📦 데이터 마트·검증·배포",
     ]
 )
 _TEXT["en"].extend(
@@ -374,6 +388,9 @@ _TEXT["en"].extend(
         "Actual relationships",
         "Only additive sums are supported. Inventory balances and ratios require a separate period or measure design.",
         "Storage Capacity",
+        "1. 🗄️ Build & Load DB (Schema · Load · Verify)",
+        "2. 🏷️ Account Mapping (Optional)",
+        "3. 📦 Data Mart & Publish",
     ]
 )
 _TEXT["pl"].extend(
@@ -382,6 +399,9 @@ _TEXT["pl"].extend(
         "Rzeczywiste relacje",
         "Obsługiwane są tylko sumy addytywne. Salda zapasów i wskaźniki wymagają osobnego projektu okresu lub miary.",
         "Pojemność Pamięci",
+        "1. 🗄️ Budowa i Ładowanie Bazy (Model · Dane · Kontrola)",
+        "2. 🏷️ Mapowanie Kont (Opcjonalne)",
+        "3. 📦 Mart Danych i Publikacja",
     ]
 )
 
@@ -459,6 +479,7 @@ class MartWorkspace(QWidget):
         self.candidate = None
         self.publisher = None
         self.destination_settings = {}
+        self._saved_mappings_cache = []
         self.cancel_event = threading.Event()
         self._busy = False
         self.warning = False
@@ -521,15 +542,35 @@ class MartWorkspace(QWidget):
         side = QVBoxLayout()
         self.name = QLineEdit()
         side.addWidget(self.name)
+        ws_btns = QHBoxLayout()
         self.create_button = self.button(1, self.create_workspace)
-        side.addWidget(self.create_button)
+        self.clone_button = QPushButton("📋 설계도 복제 (새 별도 DB)")
+        self.clone_button.clicked.connect(self.clone_workspace_blueprint)
+        ws_btns.addWidget(self.create_button)
+        ws_btns.addWidget(self.clone_button)
+        side.addLayout(ws_btns)
         row.addLayout(side)
         base.addWidget(self.label(0))
         base.addLayout(row)
+        self.workflow_guide_banner = QLabel()
+        self.workflow_guide_banner.setWordWrap(True)
+        self.workflow_guide_banner.setStyleSheet(
+            "background-color: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 4px; padding: 6px 10px; color: #1e3a8a;"
+        )
+        base.addWidget(self.workflow_guide_banner)
         self.tabs = QTabWidget()
         base.addWidget(self.tabs)
         self.tab_labels = []
-        model_lay = self.group(self.tabs, 3)
+
+        # Stage 1: DB Build, Load & Verify (db_tabs inside Stage 1)
+        stage1_page = QWidget()
+        stage1_lay = QVBoxLayout(stage1_page)
+        self.tabs.addTab(stage1_page, "")
+        self.tab_labels.append((self.tabs, 0, 102))
+        self.db_tabs = QTabWidget()
+        stage1_lay.addWidget(self.db_tabs)
+
+        model_lay = self.group(self.db_tabs, 3)
         source_row = QHBoxLayout()
         self.source_button = self.button(4, self.choose_source)
         self.sample_button = self.button(5, self.inspect_source)
@@ -623,14 +664,13 @@ class MartWorkspace(QWidget):
         row.addWidget(self.button(72, self.remove_metric))
         row.addWidget(self.button(25, self.save_model))
         model_lay.addLayout(row)
-        # Scroll the longer model page on smaller displays.
-        page = self.tabs.widget(0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        self.tabs.removeTab(0)
-        scroll.setWidget(page)
-        self.tabs.insertTab(0, scroll, "")
-        load = self.group(self.tabs, 26)
+        load = self.group(self.db_tabs, 26)
+        self.load_guide_label = QLabel()
+        self.load_guide_label.setWordWrap(True)
+        self.load_guide_label.setStyleSheet(
+            "background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 6px 10px;"
+        )
+        load.addWidget(self.load_guide_label)
         self.scope_form = QFormLayout()
         load.addLayout(self.scope_form)
         self.scope_inputs = {}
@@ -649,7 +689,7 @@ class MartWorkspace(QWidget):
         self.load_result = QLabel()
         load.addWidget(self.load_result)
         load.addWidget(self.label(83))
-        inspect = self.group(self.tabs, 30)
+        inspect = self.group(self.db_tabs, 30)
         inspect.addWidget(self.button(31, self.inspect_database))
         self.home_status = QLabel()
         inspect.addWidget(self.home_status)
@@ -676,12 +716,144 @@ class MartWorkspace(QWidget):
         self.reconciliation = QTableWidget()
         inspect.addWidget(self.reconciliation)
 
-        # 4. Deploy & Publish tab (Grouping Purpose CSV, SharePoint, and Capacity)
-        deploy = self.group(self.tabs, 35)
+        # Stage 2: Account & Measure Mapping Studio (Optional)
+        mapping_lay = self.group(self.tabs, 103)
+        self.mapping_optional_banner = QLabel()
+        self.mapping_optional_banner.setWordWrap(True)
+        self.mapping_optional_banner.setStyleSheet(
+            "background-color: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 6px 10px; color: #92400e;"
+        )
+        mapping_lay.addWidget(self.mapping_optional_banner)
+        self.mapping_status_label = QLabel()
+        self.mapping_status_label.setWordWrap(True)
+        mapping_lay.addWidget(self.mapping_status_label)
+        map_btns = QHBoxLayout()
+        self.mapping_suggest_button = QPushButton("✨ 키워드 자동 분류")
+        self.mapping_suggest_button.clicked.connect(self.auto_suggest_mapping)
+        self.mapping_save_button = QPushButton("💾 DB에 매핑 저장")
+        self.mapping_save_button.clicked.connect(self.save_mapping_from_ui)
+        self.mapping_export_button = QPushButton("📤 Excel/CSV 내보내기")
+        self.mapping_export_button.clicked.connect(lambda: self.export_mapping_dialog())
+        self.mapping_import_button = QPushButton("📥 Excel/CSV 가져오기")
+        self.mapping_import_button.clicked.connect(lambda: self.import_mapping_dialog())
+        self.mapping_copy_ws_button = QPushButton("🔗 다른 워크스페이스 매핑 가져오기")
+        self.mapping_copy_ws_button.clicked.connect(lambda: self.import_mapping_from_other_workspace())
+        for btn in (
+            self.mapping_suggest_button,
+            self.mapping_save_button,
+            self.mapping_export_button,
+            self.mapping_import_button,
+            self.mapping_copy_ws_button,
+        ):
+            map_btns.addWidget(btn)
+        mapping_lay.addLayout(map_btns)
+
+        bulk_row = QHBoxLayout()
+        self.bulk_type_combo = QComboBox()
+        self.bulk_type_combo.addItem("유형 변경 안함", "")
+        self.bulk_type_combo.addItem("amount (세부금액)", "amount")
+        self.bulk_type_combo.addItem("non_monetary (비금액/수량)", "non_monetary")
+        self.bulk_type_combo.addItem("subtotal_excluded (원본소계 제외)", "subtotal_excluded")
+        self.bulk_major_edit = QLineEdit()
+        self.bulk_major_edit.setPlaceholderText("대분류 일괄 입력")
+        self.bulk_medium_edit = QLineEdit()
+        self.bulk_medium_edit.setPlaceholderText("중분류 일괄 입력")
+        self.bulk_sign_combo = QComboBox()
+        self.bulk_sign_combo.addItem("부호 변경 안함", None)
+        self.bulk_sign_combo.addItem("+1", 1)
+        self.bulk_sign_combo.addItem("-1", -1)
+        self.bulk_apply_button = QPushButton("선택 행 일괄 적용")
+        self.bulk_apply_button.clicked.connect(self.apply_bulk_mapping)
+        for w in (
+            self.bulk_type_combo,
+            self.bulk_major_edit,
+            self.bulk_medium_edit,
+            self.bulk_sign_combo,
+            self.bulk_apply_button,
+        ):
+            bulk_row.addWidget(w)
+        mapping_lay.addLayout(bulk_row)
+
+        self.mapping_table = QTableWidget()
+        self.mapping_table.setMinimumHeight(280)
+        self.mapping_table.setColumnCount(9)
+        self.mapping_table.setHorizontalHeaderLabels(self._mapping_headers())
+        mapping_lay.addWidget(self.mapping_table)
+
+        # Stage 3: Data Mart Recipe, Verification & Deployment
+        deploy = self.group(self.tabs, 104)
         self.deploy_tabs = QTabWidget()
         deploy.addWidget(self.deploy_tabs)
 
         ex = self.group(self.deploy_tabs, 42)
+        self.recipe_box = QGroupBox("데이터 마트 레시피 설계 · 실행 · 대사 검증")
+        recipe_lay = QVBoxLayout(self.recipe_box)
+        preset_row = QHBoxLayout()
+        self.preset_wide_rollup_btn = QPushButton("📊 프리셋: 대분류 손익 요약 (Wide)")
+        self.preset_wide_rollup_btn.clicked.connect(lambda: self.apply_recipe_preset("wide_rollup"))
+        self.preset_long_detail_btn = QPushButton("🔎 프리셋: 원가 상세 계정전개 (Long, 0원 제외)")
+        self.preset_long_detail_btn.clicked.connect(lambda: self.apply_recipe_preset("long_detail"))
+        self.preset_wide_raw_btn = QPushButton("📄 프리셋: 원본 컬럼 직접 선택")
+        self.preset_wide_raw_btn.clicked.connect(lambda: self.apply_recipe_preset("wide_raw"))
+        for btn in (
+            self.preset_wide_rollup_btn,
+            self.preset_long_detail_btn,
+            self.preset_wide_raw_btn,
+        ):
+            preset_row.addWidget(btn)
+        recipe_lay.addLayout(preset_row)
+
+        r_form = QFormLayout()
+        self.recipe_combo = QComboBox()
+        self.recipe_combo.currentIndexChanged.connect(self._on_recipe_selected)
+        self.recipe_mode_combo = QComboBox()
+        self.recipe_mode_combo.addItem("원본 컬럼 직접 추출 (wide_raw)", "wide_raw")
+        self.recipe_mode_combo.addItem("대분류·중분류 요약 (wide_rollup)", "wide_rollup")
+        self.recipe_mode_combo.addItem("계정 상세 펼침 (long_detail)", "long_detail")
+        self.rollup_level_combo = QComboBox()
+        self.rollup_level_combo.addItem("대분류별 (major)", "major")
+        self.rollup_level_combo.addItem("중분류별 (medium)", "medium")
+        self.major_filter_edit = QLineEdit()
+        self.major_filter_edit.setPlaceholderText("예: 매출원가, 판관비 (비우면 전체 금액 계정)")
+        self.unmapped_policy_combo = QComboBox()
+        self.unmapped_policy_combo.addItem("미매핑 계정 있으면 차단 (권장)", "fail")
+        self.unmapped_policy_combo.addItem("미분류 버킷으로 포함", "other_bucket")
+        self.recipe_saved_label = QLabel("저장된 레시피")
+        self.recipe_mode_label = QLabel("마트 출력 형태")
+        self.rollup_level_label = QLabel("요약 집계 단계")
+        self.major_filter_label = QLabel("대상 대분류 필터")
+        self.unmapped_policy_label = QLabel("미매핑 처리 정책")
+        r_form.addRow(self.recipe_saved_label, self.recipe_combo)
+        r_form.addRow(self.recipe_mode_label, self.recipe_mode_combo)
+        r_form.addRow(self.rollup_level_label, self.rollup_level_combo)
+        r_form.addRow(self.major_filter_label, self.major_filter_edit)
+        r_form.addRow(self.unmapped_policy_label, self.unmapped_policy_combo)
+        recipe_lay.addLayout(r_form)
+
+        r_checks = QHBoxLayout()
+        self.exclude_zero_check = QCheckBox("0원 행 제외 (Long 상세)")
+        self.exclude_zero_check.setChecked(True)
+        self.apply_sign_check = QCheckBox("매핑 부호(+1/-1) 반영")
+        r_checks.addWidget(self.exclude_zero_check)
+        r_checks.addWidget(self.apply_sign_check)
+        recipe_lay.addLayout(r_checks)
+
+        r_actions = QHBoxLayout()
+        self.save_recipe_button = QPushButton("💾 레시피 저장")
+        self.save_recipe_button.clicked.connect(self.save_recipe_from_ui)
+        self.run_recipe_button = QPushButton("🚀 레시피 마트 생성 & 대사 검증")
+        self.run_recipe_button.clicked.connect(self.run_recipe_export)
+        self.run_all_recipes_button = QPushButton("⚡ 저장된 레시피 전체 일괄 생성")
+        self.run_all_recipes_button.clicked.connect(self.run_all_saved_recipes)
+        for btn in (
+            self.save_recipe_button,
+            self.run_recipe_button,
+            self.run_all_recipes_button,
+        ):
+            r_actions.addWidget(btn)
+        recipe_lay.addLayout(r_actions)
+        ex.addWidget(self.recipe_box)
+
         self.candidates = QComboBox()
         self.candidates.currentIndexChanged.connect(self.select_candidate)
         ex.addWidget(self.candidates)
@@ -713,6 +885,12 @@ class MartWorkspace(QWidget):
         ex.addWidget(self.label(51))
         self.export_preview = QTableWidget()
         ex.addWidget(self.export_preview)
+        self.recipe_reconcile_summary = QLabel()
+        self.recipe_reconcile_summary.setWordWrap(True)
+        ex.addWidget(self.recipe_reconcile_summary)
+        self.recipe_reconcile_table = QTableWidget()
+        self.recipe_reconcile_table.setMaximumHeight(170)
+        ex.addWidget(self.recipe_reconcile_table)
         self.formrow(form, 52, self.reviewer)
         row = QHBoxLayout()
         row.addWidget(self.button(53, self.approve))
@@ -796,22 +974,282 @@ class MartWorkspace(QWidget):
             self.dim_attrs,
         ):
             widget.changed.connect(self._reset_declarations)
-        for index in range(1, self.tabs.count()):
-            page = self.tabs.widget(index)
+        def wrap_tab_scroll(tab_widget, index):
+            page = tab_widget.widget(index)
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
-            self.tabs.removeTab(index)
+            tab_widget.removeTab(index)
             scroll.setWidget(page)
-            self.tabs.insertTab(index, scroll, "")
+            tab_widget.insertTab(index, scroll, "")
+
+        for index in range(self.db_tabs.count()):
+            wrap_tab_scroll(self.db_tabs, index)
+        for index in range(1, self.tabs.count()):
+            wrap_tab_scroll(self.tabs, index)
 
     def apply_language(self, lang):
         self.language_code = lang if lang in _TEXT else "en"
         if self.structure.columnCount() == 3:
             self.structure.setHorizontalHeaderLabels(self._structure_headers())
+        if hasattr(self, "mapping_table") and self.mapping_table.columnCount() == 9:
+            self.mapping_table.setHorizontalHeaderLabels(self._mapping_headers())
+        if hasattr(self, "recipe_reconcile_table"):
+            self.recipe_reconcile_table.setHorizontalHeaderLabels(self._reconcile_headers())
         for obj, index in self.translations:
             obj.setText(self.t(index))
         for tabs, index, key in self.tab_labels:
             tabs.setTabText(index, self.t(key))
+        lang = self.language_code
+        if hasattr(self, "clone_button"):
+            self.clone_button.setText(
+                {
+                    "ko": "📋 설계도 복제 (새 별도 DB)",
+                    "en": "📋 Clone Blueprint (New DB)",
+                    "pl": "📋 Klonuj Szablon (Nowa Baza)",
+                }[lang]
+            )
+        if hasattr(self, "load_guide_label"):
+            self.load_guide_label.setText(
+                {
+                    "ko": "💡 같은 양식의 다음 월 데이터를 기존 DB에 누적하려면 새 월 파일만 선택해 적재하세요. 별도 DB로 분리하려면 상단 '설계도 복제'를 사용하세요.",
+                    "en": "💡 To append a new month to the current DB, select the new file(s) below. To create a separate DB with the same layout, use 'Clone Blueprint' above.",
+                    "pl": "💡 Aby dopisać kolejny miesiąc do bieżącej bazy, wskaż nowe pliki poniżej. Aby utworzyć osobną bazę z tym samym układem, użyj 'Klonuj Szablon'.",
+                }[lang]
+            )
+        if hasattr(self, "mapping_optional_banner"):
+            self.mapping_optional_banner.setText(
+                {
+                    "ko": "ℹ️ [선택 단계] 원본 컬럼 그대로 추출하려면 3단계로 바로 이동하세요. 대분류 손익 요약이나 0원 제외 원가 상세 마트가 필요할 때 여기서 계정을 한 번 분류해 두면 DB에 영구 저장됩니다.",
+                    "en": "ℹ️ [Optional] Skip to Step 3 for raw-column exports. Configure classifications here once to enable category rollups and zero-filtered cost-detail marts.",
+                    "pl": "ℹ️ [Opcjonalne] Przejdź do kroku 3 dla surowego eksportu. Tutaj jednorazowo sklasyfikujesz konta dla podsumowań i szczegółów kosztów bez zer.",
+                }[lang]
+            )
+        if hasattr(self, "mapping_suggest_button"):
+            self.mapping_suggest_button.setText(
+                {
+                    "ko": "✨ 키워드 자동 분류",
+                    "en": "✨ Auto-Classify by Keywords",
+                    "pl": "✨ Auto-klasyfikacja",
+                }[lang]
+            )
+            self.mapping_save_button.setText(
+                {
+                    "ko": "💾 DB에 매핑 저장",
+                    "en": "💾 Save Mapping to DB",
+                    "pl": "💾 Zapisz mapowanie do DB",
+                }[lang]
+            )
+            self.mapping_export_button.setText(
+                {
+                    "ko": "📤 Excel/CSV 내보내기",
+                    "en": "📤 Export Excel/CSV",
+                    "pl": "📤 Eksportuj Excel/CSV",
+                }[lang]
+            )
+            self.mapping_import_button.setText(
+                {
+                    "ko": "📥 Excel/CSV 가져오기",
+                    "en": "📥 Import Excel/CSV",
+                    "pl": "📥 Importuj Excel/CSV",
+                }[lang]
+            )
+            self.mapping_copy_ws_button.setText(
+                {
+                    "ko": "🔗 다른 워크스페이스 매핑 가져오기",
+                    "en": "🔗 Copy Mapping from Workspace",
+                    "pl": "🔗 Kopiuj z innego obszaru",
+                }[lang]
+            )
+            self.bulk_major_edit.setPlaceholderText(
+                {
+                    "ko": "대분류 일괄 입력",
+                    "en": "Bulk major category",
+                    "pl": "Kategoria główna (grupowo)",
+                }[lang]
+            )
+            self.bulk_medium_edit.setPlaceholderText(
+                {
+                    "ko": "중분류 일괄 입력",
+                    "en": "Bulk medium category",
+                    "pl": "Podkategoria (grupowo)",
+                }[lang]
+            )
+            self.bulk_apply_button.setText(
+                {
+                    "ko": "선택 행 일괄 적용",
+                    "en": "Apply to Selected Rows",
+                    "pl": "Zastosuj do zaznaczonych",
+                }[lang]
+            )
+            bulk_types = {
+                "ko": (
+                    "유형 변경 안함",
+                    "amount (세부금액)",
+                    "non_monetary (비금액/수량)",
+                    "subtotal_excluded (원본소계 제외)",
+                ),
+                "en": (
+                    "Keep measure type",
+                    "amount (Monetary measure)",
+                    "non_monetary (Quantity / non-monetary)",
+                    "subtotal_excluded (Exclude subtotal)",
+                ),
+                "pl": (
+                    "Bez zmiany typu",
+                    "amount (Kwota szczegółowa)",
+                    "non_monetary (Ilość / niematerialne)",
+                    "subtotal_excluded (Wyklucz sumę częściową)",
+                ),
+            }[lang]
+            self.bulk_type_combo.blockSignals(True)
+            for idx, txt in enumerate(bulk_types):
+                if idx < self.bulk_type_combo.count():
+                    self.bulk_type_combo.setItemText(idx, txt)
+            self.bulk_type_combo.blockSignals(False)
+            self.bulk_sign_combo.blockSignals(True)
+            if self.bulk_sign_combo.count() > 0:
+                self.bulk_sign_combo.setItemText(
+                    0,
+                    {
+                        "ko": "부호 변경 안함",
+                        "en": "Keep sign",
+                        "pl": "Bez zmiany znaku",
+                    }[lang],
+                )
+            self.bulk_sign_combo.blockSignals(False)
+            self._update_mapping_status_label()
+        if hasattr(self, "recipe_box"):
+            self.recipe_box.setTitle(
+                {
+                    "ko": "데이터 마트 레시피 설계 · 실행 · 대사 검증",
+                    "en": "Data Mart Recipe Design, Execution & Reconciliation",
+                    "pl": "Projektowanie, Uruchamianie i Uzgadnianie Martów",
+                }[lang]
+            )
+            self.preset_wide_rollup_btn.setText(
+                {
+                    "ko": "📊 프리셋: 대분류 손익 요약 (Wide)",
+                    "en": "📊 Preset: Major Rollup Summary (Wide)",
+                    "pl": "📊 Szablon: Podsumowanie wg kategorii (Wide)",
+                }[lang]
+            )
+            self.preset_long_detail_btn.setText(
+                {
+                    "ko": "🔎 프리셋: 원가 상세 계정전개 (Long, 0원 제외)",
+                    "en": "🔎 Preset: Cost Account Detail (Long, No Zero)",
+                    "pl": "🔎 Szablon: Szczegóły kont (Long, bez zer)",
+                }[lang]
+            )
+            self.preset_wide_raw_btn.setText(
+                {
+                    "ko": "📄 프리셋: 원본 컬럼 직접 선택",
+                    "en": "📄 Preset: Raw Columns Select",
+                    "pl": "📄 Szablon: Wybór kolumn źródłowych",
+                }[lang]
+            )
+            self.recipe_saved_label.setText(
+                {"ko": "저장된 레시피", "en": "Saved recipe", "pl": "Zapisany przepis"}[lang]
+            )
+            self.recipe_mode_label.setText(
+                {"ko": "마트 출력 형태", "en": "Mart output mode", "pl": "Tryb wyjścia"}[lang]
+            )
+            self.rollup_level_label.setText(
+                {"ko": "요약 집계 단계", "en": "Rollup level", "pl": "Poziom agregacji"}[lang]
+            )
+            self.major_filter_label.setText(
+                {"ko": "대상 대분류 필터", "en": "Major category filter", "pl": "Filtr kategorii głównej"}[lang]
+            )
+            self.unmapped_policy_label.setText(
+                {"ko": "미매핑 처리 정책", "en": "Unmapped measure policy", "pl": "Polityka niemapowanych"}[lang]
+            )
+            self.major_filter_edit.setPlaceholderText(
+                {
+                    "ko": "예: 매출원가, 판관비 (비우면 전체 금액 계정)",
+                    "en": "e.g. COGS, SG&A (blank = all amount measures)",
+                    "pl": "np. COGS, SG&A (puste = wszystkie kwoty)",
+                }[lang]
+            )
+            self.recipe_mode_combo.blockSignals(True)
+            for idx, txt in enumerate(
+                {
+                    "ko": (
+                        "원본 컬럼 직접 추출 (wide_raw)",
+                        "대분류·중분류 요약 (wide_rollup)",
+                        "계정 상세 펼침 (long_detail)",
+                    ),
+                    "en": (
+                        "Raw Columns Export (wide_raw)",
+                        "Category Rollup Summary (wide_rollup)",
+                        "Account Detail Unpivot (long_detail)",
+                    ),
+                    "pl": (
+                        "Surowy eksport kolumn (wide_raw)",
+                        "Podsumowanie kategorii (wide_rollup)",
+                        "Szczegóły kont (long_detail)",
+                    ),
+                }[lang]
+            ):
+                if idx < self.recipe_mode_combo.count():
+                    self.recipe_mode_combo.setItemText(idx, txt)
+            self.recipe_mode_combo.blockSignals(False)
+            self.rollup_level_combo.blockSignals(True)
+            for idx, txt in enumerate(
+                {
+                    "ko": ("대분류별 (major)", "중분류별 (medium)"),
+                    "en": ("By Major Category (major)", "By Medium Category (medium)"),
+                    "pl": ("Wg kategorii głównej (major)", "Wg podkategorii (medium)"),
+                }[lang]
+            ):
+                if idx < self.rollup_level_combo.count():
+                    self.rollup_level_combo.setItemText(idx, txt)
+            self.rollup_level_combo.blockSignals(False)
+            self.unmapped_policy_combo.blockSignals(True)
+            for idx, txt in enumerate(
+                {
+                    "ko": ("미매핑 계정 있으면 차단 (권장)", "미분류 버킷으로 포함"),
+                    "en": ("Block if unmapped measures exist (Recommended)", "Include in Unclassified bucket"),
+                    "pl": ("Blokuj przy niemapowanych kontach (Zalecane)", "Dołącz jako niesklasyfikowane"),
+                }[lang]
+            ):
+                if idx < self.unmapped_policy_combo.count():
+                    self.unmapped_policy_combo.setItemText(idx, txt)
+            self.unmapped_policy_combo.blockSignals(False)
+            self.recipe_combo.blockSignals(True)
+            if self.recipe_combo.count() > 0:
+                self.recipe_combo.setItemText(0, self._recipe_placeholder())
+            self.recipe_combo.blockSignals(False)
+            self.exclude_zero_check.setText(
+                {
+                    "ko": "0원 행 제외 (Long 상세)",
+                    "en": "Exclude zero rows (Long detail)",
+                    "pl": "Wyklucz wiersze zerowe (Long)",
+                }[lang]
+            )
+            self.apply_sign_check.setText(
+                {
+                    "ko": "매핑 부호(+1/-1) 반영",
+                    "en": "Apply mapping sign (+1/-1)",
+                    "pl": "Zastosuj znak mapowania (+1/-1)",
+                }[lang]
+            )
+            self.save_recipe_button.setText(
+                {"ko": "💾 레시피 저장", "en": "💾 Save Recipe", "pl": "💾 Zapisz przepis"}[lang]
+            )
+            self.run_recipe_button.setText(
+                {
+                    "ko": "🚀 레시피 마트 생성 & 대사 검증",
+                    "en": "🚀 Build Mart & Reconcile",
+                    "pl": "🚀 Generuj mart i uzgodnij",
+                }[lang]
+            )
+            self.run_all_recipes_button.setText(
+                {
+                    "ko": "⚡ 저장된 레시피 전체 일괄 생성",
+                    "en": "⚡ Run All Saved Recipes",
+                    "pl": "⚡ Uruchom wszystkie przepisy",
+                }[lang]
+            )
+        self._update_workflow_guide()
         if hasattr(self, "wizard_button"):
             self.wizard_button.setText(
                 {
@@ -896,6 +1334,19 @@ class MartWorkspace(QWidget):
         self.last_revision = None
         self.publisher = None
         self.destination_settings = {}
+        self._saved_mappings_cache = []
+        if hasattr(self, "mapping_table"):
+            self.mapping_table.setRowCount(0)
+        if hasattr(self, "mapping_status_label"):
+            self.mapping_status_label.clear()
+        if hasattr(self, "recipe_combo"):
+            self.recipe_combo.blockSignals(True)
+            self.recipe_combo.clear()
+            self.recipe_combo.blockSignals(False)
+        if hasattr(self, "recipe_reconcile_summary"):
+            self.recipe_reconcile_summary.clear()
+        if hasattr(self, "recipe_reconcile_table"):
+            self.recipe_reconcile_table.setRowCount(0)
         for field in (
             self.site,
             self.tenant,
@@ -906,6 +1357,7 @@ class MartWorkspace(QWidget):
         ):
             field.clear()
         if not self.current:
+            self._update_workflow_guide()
             return
         try:
             path = self.current / "model.json"
@@ -914,6 +1366,8 @@ class MartWorkspace(QWidget):
                     json.loads(path.read_text(encoding="utf-8"))
                 )
                 self.restore_model()
+            self.refresh_mapping_table()
+            self._populate_recipe_combo()
             prefs = self.current / "ui.json"
             if prefs.exists():
                 try:
@@ -938,6 +1392,7 @@ class MartWorkspace(QWidget):
                     field.setText(str(profile.get(key, "")))
                 self.destination_settings = settings.get("destinations", {})
             self.refresh_capacity()
+            self._update_workflow_guide()
             if (self.current / "mart.duckdb").exists():
                 self.inspect_database()
         except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -1387,6 +1842,9 @@ class MartWorkspace(QWidget):
             self._restored_source_delim = model.source_delimiter
             self._restored_source_enc = model.source_encoding
             self._scope_fields(model)
+            self.refresh_mapping_table()
+            self._populate_recipe_combo()
+            self._update_workflow_guide()
             self.status.setText(self.t(69))
         except (ValueError, OSError) as exc:
             self.status.setText(self.t(70) + ": " + str(exc))
@@ -1584,8 +2042,11 @@ class MartWorkspace(QWidget):
             + str(result.get("rows", 0))
         )
         self.status.setText(self.t(69))
+        self.refresh_mapping_table()
+        self._populate_recipe_combo()
         self.refresh_candidates(result["revision"])
         self.refresh_capacity()
+        self._update_workflow_guide()
 
     @staticmethod
     def _table(table, headers, rows):
@@ -1616,6 +2077,7 @@ class MartWorkspace(QWidget):
                 self.t(79) + ": " + str(catalog["revision"]) + " — " + self.t(81)
             )
             self.refresh_candidates(catalog["revision"])
+            self._update_workflow_guide(catalog.get("scopes"))
             self._table(
                 self.home,
                 [self.t(92), self.t(80)],
@@ -1829,6 +2291,7 @@ class MartWorkspace(QWidget):
             self.start.setText(definition.get("period_start") or "")
             self.end.setText(definition.get("period_end") or "")
             self._table(self.export_preview, result[1], result[2])
+            self._display_recipe_reconciliation(result[0])
 
         self._run(work, done)
 
@@ -1935,6 +2398,7 @@ class MartWorkspace(QWidget):
         def done(result):
             self.candidate = result[0]["candidate"]
             self._table(self.export_preview, result[1], result[2])
+            self._display_recipe_reconciliation(result[0])
             self.refresh_candidates(result[0]["revision"])
             self.refresh_capacity()
 
@@ -2147,3 +2611,701 @@ class MartWorkspace(QWidget):
             self.status.setText(self.t(69))
 
         self._run(work, done)
+
+    # ------------------------------------------------------------------
+    # Stage 1 / 2 / 3 Workflow Guide, Blueprint Clone, Mapping & Recipes
+    # ------------------------------------------------------------------
+    def _mapping_headers(self):
+        return {
+            "ko": ["원천 컬럼", "대상 유형", "계정 코드", "표시명", "대분류", "중분류", "소분류", "부호", "정렬순서"],
+            "en": ["Source Column", "Type", "Code", "Display Name", "Major Category", "Medium Category", "Minor Category", "Sign", "Order"],
+            "pl": ["Kolumna źródła", "Typ", "Kod", "Nazwa", "Kategoria gł.", "Podkategoria", "Szczegół", "Znak", "Kolejność"],
+        }.get(self.language_code, ["Source Column", "Type", "Code", "Display Name", "Major Category", "Medium Category", "Minor Category", "Sign", "Order"])
+
+    def _reconcile_headers(self):
+        return {
+            "ko": ["구분/대분류", "원천 DB 합계", "생성 마트 합계", "차이(Diff)", "일치 여부"],
+            "en": ["Category", "Source DB Sum", "Exported Mart Sum", "Diff", "Match"],
+            "pl": ["Kategoria", "Suma źródłowa", "Suma eksportu", "Różnica", "Zgodność"],
+        }.get(self.language_code, ["Category", "Source DB Sum", "Exported Mart Sum", "Diff", "Match"])
+
+    def _update_workflow_guide(self, scopes=None):
+        if not hasattr(self, "workflow_guide_banner"):
+            return
+        lang = self.language_code
+        if not self.current:
+            self.workflow_guide_banner.setText(
+                {
+                    "ko": "💡 시작 안내: 왼쪽에서 작업 공간을 선택하거나 이름을 입력해 '새 작업'으로 시작하세요.",
+                    "en": "💡 Guide: Select an existing workspace or enter a name to create a new one.",
+                    "pl": "💡 Wskazówka: Wybierz obszar roboczy lub utwórz nowy powyżej.",
+                }.get(
+                    lang,
+                    "💡 Guide: Select an existing workspace or enter a name to create a new one.",
+                )
+            )
+            return
+        ws_name = self.current.name
+        has_db = (self.current / "mart.duckdb").exists()
+        saved_maps = load_mappings_json(self.current)
+        saved_recipes = load_recipes(self.current) if (self.current / "recipes.json").exists() else []
+        if not self.model:
+            msg = {
+                "ko": f"📂 [{ws_name}] 1-1단계에서 원본 CSV를 선택하고 '✨ 스타 스키마 설계 마법사'로 차원·팩트를 설계하세요.",
+                "en": f"📂 [{ws_name}] Pick source file(s) in Step 1-1 and launch '✨ Star Schema Modeling Wizard' to configure dimensions & facts.",
+                "pl": f"📂 [{ws_name}] Wybierz pliki w Kroku 1-1 i uruchom kreator modelu gwiazdy, aby zdefiniować wymiary i fakty.",
+            }.get(lang, f"📂 [{ws_name}] Configure dimensions & facts in Step 1-1.")
+        elif not has_db:
+            msg = {
+                "ko": (
+                    f"🧩 [{ws_name}] 설계도 준비 완료 (지표 {len(self.model.measures)}개, 저장된 매핑 {len(saved_maps)}개, 레시피 {len(saved_recipes)}개). "
+                    "1-2단계에서 첫 원본 파일을 적재하면 DuckDB가 생성됩니다."
+                ),
+                "en": (
+                    f"🧩 [{ws_name}] Blueprint ready ({len(self.model.measures)} measures, {len(saved_maps)} mappings, {len(saved_recipes)} recipes). "
+                    "Load your first source snapshot in Step 1-2 to create DuckDB."
+                ),
+                "pl": (
+                    f"🧩 [{ws_name}] Szablon gotowy ({len(self.model.measures)} miar, {len(saved_maps)} mapowań, {len(saved_recipes)} przepisów). "
+                    "Załaduj pierwszy plik w Kroku 1-2, aby utworzyć DuckDB."
+                ),
+            }.get(lang, f"🧩 [{ws_name}] Blueprint ready.")
+        else:
+            scope_txt = (
+                {
+                    "ko": f"적재 범위 {len(scopes)}개",
+                    "en": f"{len(scopes)} scope(s) loaded",
+                    "pl": f"Załadowano zakresów: {len(scopes)}",
+                }[lang]
+                if scopes is not None
+                else {
+                    "ko": "DB 적재 완료",
+                    "en": "DB loaded",
+                    "pl": "Baza załadowana",
+                }[lang]
+            )
+            msg = {
+                "ko": (
+                    f"✅ [{ws_name}] {scope_txt} · 매핑 {len(saved_maps)}개 · 레시피 {len(saved_recipes)}개 | "
+                    "다음 월 누적: [1-2. 스냅샷 적재] / 별도 DB 분리: [상단 📋 설계도 복제] / 마트 산출: [2단계(선택) → 3단계]"
+                ),
+                "en": (
+                    f"✅ [{ws_name}] {scope_txt} · {len(saved_maps)} mappings · {len(saved_recipes)} recipes | "
+                    "Append month: [1-2. Load] / Separate DB: [Clone Blueprint] / Build marts: [Step 2 (Optional) -> Step 3]"
+                ),
+                "pl": (
+                    f"✅ [{ws_name}] {scope_txt} · {len(saved_maps)} mapowań · {len(saved_recipes)} przepisów | "
+                    "Kolejny miesiąc: [1-2. Ładowanie] / Osobna baza: [Klonuj Szablon] / Marty: [Krok 2 -> Krok 3]"
+                ),
+            }.get(lang, f"✅ [{ws_name}] {scope_txt}")
+        self.workflow_guide_banner.setText(msg)
+
+    def clone_workspace_blueprint(self, new_name=None):
+        if not isinstance(new_name, str):
+            new_name = None
+        if not self.current:
+            self.status.setText(self.t(83))
+            return None
+        target_name = (new_name or self.name.text()).strip()
+        if not target_name or target_name == self.current.name:
+            entered, ok = QInputDialog.getText(
+                self,
+                "설계도 복제 (새 별도 DB)",
+                f"'{self.current.name}'의 스키마·매핑·레시피만 복제할 새 작업 공간 이름:",
+                text=f"{self.current.name}_copy",
+            )
+            if not ok:
+                return None
+            target_name = entered.strip()
+        if (
+            not target_name
+            or target_name in (".", "..")
+            or Path(target_name).name != target_name
+            or any(c in target_name for c in '<>:"/\\|?*')
+        ):
+            self.status.setText(self.t(2))
+            return None
+        try:
+            res = MartEngine(WorkspaceStore(self.current)).clone_blueprint(
+                self.root / target_name
+            )
+        except (ValueError, OSError) as exc:
+            self.status.setText(self.t(70) + ": " + str(exc))
+            return None
+        self.current = self.root / target_name
+        self.refresh_list()
+        self._select(target_name)
+        self.status.setText(
+            f"{self.t(69)}: '{target_name}' ({', '.join(res.get('copied', []))})"
+        )
+        return res
+
+    def _current_mapping_entries(self):
+        if hasattr(self, "mapping_table") and self.mapping_table.rowCount() > 0:
+            return self._entries_from_mapping_table()
+        if self.current:
+            saved = load_mappings_json(self.current)
+            if saved:
+                return saved
+        if self.model:
+            return suggest_mapping_entries(self.model)
+        return []
+
+    def refresh_mapping_table(self):
+        if not hasattr(self, "mapping_table"):
+            return
+        saved = load_mappings_json(self.current) if self.current else []
+        self._saved_mappings_cache = list(saved)
+        if not self.model:
+            self._populate_mapping_table(saved, saved=bool(saved))
+            return
+        if not saved:
+            draft = suggest_mapping_entries(self.model)
+            self._populate_mapping_table(draft, saved=False)
+            return
+        by_col = {e.source_column: e for e in saved}
+        by_col_fallback = {m.name: m.column for m in self.model.measures}
+        aligned = []
+        missing_any = False
+        for m in self.model.measures:
+            entry = by_col.get(m.column) or by_col.get(m.name)
+            if entry is None:
+                missing_any = True
+                aligned.append(AccountMappingEntry(source_column=m.column, display_name=m.column))
+            else:
+                src_col = by_col_fallback.get(entry.source_column, entry.source_column)
+                if src_col != entry.source_column:
+                    entry = AccountMappingEntry(
+                        source_column=src_col,
+                        measure_type=entry.measure_type,
+                        account_code=entry.account_code,
+                        display_name=entry.display_name,
+                        major_category=entry.major_category,
+                        medium_category=entry.medium_category,
+                        minor_category=entry.minor_category,
+                        sign=entry.sign,
+                        sort_order=entry.sort_order,
+                        updated_at=entry.updated_at,
+                    )
+                aligned.append(entry)
+        self._populate_mapping_table(aligned, saved=not missing_any)
+
+    def _populate_mapping_table(self, entries, *, saved=True):
+        from PySide6.QtGui import QBrush
+
+        self.mapping_table.blockSignals(True)
+        self.mapping_table.setColumnCount(9)
+        self.mapping_table.setHorizontalHeaderLabels(self._mapping_headers())
+        self.mapping_table.setRowCount(len(entries))
+
+        unmapped_count = 0
+        amt_count = 0
+        non_mon_count = 0
+        sub_count = 0
+
+        for r, entry in enumerate(entries):
+            is_unmapped = entry.measure_type == "amount" and not entry.major_category.strip()
+            if is_unmapped:
+                unmapped_count += 1
+            if entry.measure_type == "amount":
+                amt_count += 1
+            elif entry.measure_type == "non_monetary":
+                non_mon_count += 1
+            elif entry.measure_type == "subtotal_excluded":
+                sub_count += 1
+
+            col_item = QTableWidgetItem(entry.source_column)
+            col_item.setFlags(col_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.mapping_table.setItem(r, 0, col_item)
+
+            type_combo = QComboBox()
+            type_combo.addItem("amount", "amount")
+            type_combo.addItem("non_monetary", "non_monetary")
+            type_combo.addItem("subtotal_excluded", "subtotal_excluded")
+            t_idx = type_combo.findData(entry.measure_type)
+            if t_idx >= 0:
+                type_combo.setCurrentIndex(t_idx)
+            self.mapping_table.setCellWidget(r, 1, type_combo)
+
+            vals = [
+                (2, entry.account_code),
+                (3, entry.display_name),
+                (4, entry.major_category),
+                (5, entry.medium_category),
+                (6, entry.minor_category),
+                (8, str(entry.sort_order if entry.sort_order else r + 1)),
+            ]
+            for c_idx, text in vals:
+                it = QTableWidgetItem(text)
+                if is_unmapped:
+                    it.setBackground(QBrush(QColor("#fef3c7")))
+                self.mapping_table.setItem(r, c_idx, it)
+
+            sign_combo = QComboBox()
+            sign_combo.addItem("+1", 1)
+            sign_combo.addItem("-1", -1)
+            s_idx = sign_combo.findData(int(entry.sign) if entry.sign in (1, -1) else 1)
+            if s_idx >= 0:
+                sign_combo.setCurrentIndex(s_idx)
+            self.mapping_table.setCellWidget(r, 7, sign_combo)
+
+            if is_unmapped:
+                col_item.setBackground(QBrush(QColor("#fef3c7")))
+
+        self.mapping_table.blockSignals(False)
+        self.mapping_table.resizeColumnsToContents()
+        self._last_mapping_stats = (len(entries), amt_count, non_mon_count, sub_count, unmapped_count, saved)
+        self._update_mapping_status_label()
+
+    def _update_mapping_status_label(self):
+        if not hasattr(self, "mapping_status_label"):
+            return
+        stats = getattr(self, "_last_mapping_stats", None)
+        if not stats:
+            self.mapping_status_label.clear()
+            return
+        total, amt_count, non_mon_count, sub_count, unmapped_count, saved = stats
+        lang = self.language_code
+        save_state = (
+            {"ko": "DB 저장됨", "en": "Saved to DB", "pl": "Zapisano w DB"}[lang]
+            if saved
+            else {"ko": "초안/수정본 (💾 DB에 매핑 저장 필요)", "en": "Draft/Modified (Save to DB required)", "pl": "Szkic/Zmieniono (Wymaga zapisu)"}[lang]
+        )
+        msg = {
+            "ko": f"총 {total}개 지표 | 금액(amount): {amt_count} · 비금액(수량): {non_mon_count} · 원본소계(제외): {sub_count} · 미분류: {unmapped_count} | 상태: {save_state}",
+            "en": f"{total} measure(s) | amount: {amt_count} · non_monetary: {non_mon_count} · subtotal_excluded: {sub_count} · unmapped: {unmapped_count} | Status: {save_state}",
+            "pl": f"Miary: {total} | amount: {amt_count} · non_monetary: {non_mon_count} · subtotal_excluded: {sub_count} · niemapowane: {unmapped_count} | Stan: {save_state}",
+        }.get(lang, f"{total} measure(s) | Status: {save_state}")
+        self.mapping_status_label.setText(msg)
+
+    def _entries_from_mapping_table(self):
+        entries = []
+        for r in range(self.mapping_table.rowCount()):
+            col_item = self.mapping_table.item(r, 0)
+            source_column = col_item.text().strip() if col_item else ""
+            if not source_column:
+                continue
+            type_w = self.mapping_table.cellWidget(r, 1)
+            measure_type = (
+                type_w.currentData()
+                if isinstance(type_w, QComboBox)
+                else (self.mapping_table.item(r, 1).text().strip() if self.mapping_table.item(r, 1) else "amount")
+            )
+            sign_w = self.mapping_table.cellWidget(r, 7)
+            sign_val = (
+                int(sign_w.currentData())
+                if isinstance(sign_w, QComboBox)
+                else int(self.mapping_table.item(r, 7).text().strip() if self.mapping_table.item(r, 7) else 1)
+            )
+            order_text = self.mapping_table.item(r, 8).text().strip() if self.mapping_table.item(r, 8) else ""
+            try:
+                sort_order = int(order_text) if order_text else r + 1
+            except ValueError as exc:
+                raise ValueError(f"Row {r + 1}: 정렬순서는 정수여야 합니다 ('{order_text}')") from exc
+            entries.append(
+                AccountMappingEntry(
+                    source_column=source_column,
+                    measure_type=str(measure_type),
+                    account_code=(self.mapping_table.item(r, 2).text().strip() if self.mapping_table.item(r, 2) else ""),
+                    display_name=(self.mapping_table.item(r, 3).text().strip() if self.mapping_table.item(r, 3) else source_column),
+                    major_category=(self.mapping_table.item(r, 4).text().strip() if self.mapping_table.item(r, 4) else ""),
+                    medium_category=(self.mapping_table.item(r, 5).text().strip() if self.mapping_table.item(r, 5) else ""),
+                    minor_category=(self.mapping_table.item(r, 6).text().strip() if self.mapping_table.item(r, 6) else ""),
+                    sign=sign_val,
+                    sort_order=sort_order,
+                )
+            )
+        return entries
+
+    def auto_suggest_mapping(self):
+        if not self.model:
+            self.status.setText(self.t(83))
+            return
+        existing = self._entries_from_mapping_table() if self.mapping_table.rowCount() else ()
+        suggested = suggest_mapping_entries(self.model, existing=existing)
+        self._populate_mapping_table(suggested, saved=False)
+        self.status.setText(f"{self.t(69)}: 키워드 자동 분류 적용 (저장 버튼을 눌러 확정하세요)")
+
+    def apply_bulk_mapping(self):
+        rows = sorted({idx.row() for idx in self.mapping_table.selectedIndexes()})
+        if not rows:
+            self.status.setText("일괄 적용할 행을 표에서 먼저 선택하세요.")
+            return
+        target_type = self.bulk_type_combo.currentData()
+        major_txt = self.bulk_major_edit.text().strip()
+        medium_txt = self.bulk_medium_edit.text().strip()
+        sign_val = self.bulk_sign_combo.currentData()
+        for r in rows:
+            if target_type:
+                type_w = self.mapping_table.cellWidget(r, 1)
+                if isinstance(type_w, QComboBox):
+                    idx = type_w.findData(target_type)
+                    if idx >= 0:
+                        type_w.setCurrentIndex(idx)
+            if major_txt:
+                self.mapping_table.setItem(r, 4, QTableWidgetItem(major_txt))
+            if medium_txt:
+                self.mapping_table.setItem(r, 5, QTableWidgetItem(medium_txt))
+            if sign_val is not None:
+                sign_w = self.mapping_table.cellWidget(r, 7)
+                if isinstance(sign_w, QComboBox):
+                    idx = sign_w.findData(sign_val)
+                    if idx >= 0:
+                        sign_w.setCurrentIndex(idx)
+        entries = self._entries_from_mapping_table()
+        self._populate_mapping_table(entries, saved=False)
+
+    def save_mapping_from_ui(self):
+        if not self.current:
+            self.status.setText(self.t(83))
+            return
+        try:
+            entries = self._entries_from_mapping_table()
+        except ValueError as exc:
+            self.status.setText(self.t(70) + ": " + str(exc))
+            return
+        current = self.current
+
+        def work(_):
+            return MartEngine(WorkspaceStore(current)).save_account_mapping(entries)
+
+        def done(res):
+            self._saved_mappings_cache = list(entries)
+            self._populate_mapping_table(entries, saved=True)
+            self._populate_recipe_combo()
+            self._update_workflow_guide()
+            unmapped = res.get("unmapped") or []
+            if unmapped:
+                self.status.setText(
+                    f"매핑 저장 완료 ({res['saved']}건). 주의: 미분류 지표 {len(unmapped)}건 남음."
+                )
+            else:
+                self.status.setText(f"{self.t(69)}: 매핑 {res['saved']}건 DB 저장 완료")
+
+        self._run(work, done)
+
+    def export_mapping_dialog(self, path=None):
+        if not isinstance(path, (str, Path)):
+            path = None
+        if path is None:
+            chosen, _ = QFileDialog.getSaveFileName(
+                self, "계정 매핑 내보내기", "account_mapping.xlsx", "Excel (*.xlsx);;CSV (*.csv)"
+            )
+            if not chosen:
+                return None
+            path = chosen
+        try:
+            entries = self._entries_from_mapping_table()
+            out = export_mapping_file(path, entries)
+            self.status.setText(f"{self.t(69)}: {Path(out).name}")
+            return out
+        except (ValueError, OSError) as exc:
+            self.status.setText(self.t(70) + ": " + str(exc))
+            return None
+
+    def import_mapping_dialog(self, path=None):
+        if not isinstance(path, (str, Path)):
+            path = None
+        if path is None:
+            chosen, _ = QFileDialog.getOpenFileName(
+                self, "계정 매핑 가져오기", "", "Mapping Files (*.xlsx *.csv)"
+            )
+            if not chosen:
+                return None
+            path = chosen
+        try:
+            imported = import_mapping_file(path)
+            merged = self._align_imported_mappings(imported)
+            self._populate_mapping_table(merged, saved=False)
+            self.status.setText(
+                f"{self.t(69)}: 매핑 {len(imported)}건 불러옴 (💾 DB에 매핑 저장 버튼을 누르세요)"
+            )
+            return merged
+        except (ValueError, OSError, FileNotFoundError) as exc:
+            self.status.setText(self.t(70) + ": " + str(exc))
+            return None
+
+    def _align_imported_mappings(self, imported):
+        if not self.model:
+            return imported
+        by_col = {e.source_column: e for e in imported}
+        current_by_col = {
+            e.source_column: e for e in (self._entries_from_mapping_table() if self.mapping_table.rowCount() else [])
+        }
+        aligned = []
+        for idx, m in enumerate(self.model.measures, start=1):
+            entry = by_col.get(m.column) or by_col.get(m.name)
+            if entry is not None:
+                aligned.append(
+                    AccountMappingEntry(
+                        source_column=m.column,
+                        measure_type=entry.measure_type,
+                        account_code=entry.account_code,
+                        display_name=entry.display_name or m.column,
+                        major_category=entry.major_category,
+                        medium_category=entry.medium_category,
+                        minor_category=entry.minor_category,
+                        sign=entry.sign,
+                        sort_order=entry.sort_order or idx,
+                        updated_at=entry.updated_at,
+                    )
+                )
+            elif m.column in current_by_col:
+                aligned.append(current_by_col[m.column])
+            else:
+                aligned.append(AccountMappingEntry(source_column=m.column, display_name=m.column, sort_order=idx))
+        return aligned
+
+    def import_mapping_from_other_workspace(self, source_ws_name=None):
+        if not isinstance(source_ws_name, str):
+            source_ws_name = None
+        if not self.current or not self.root.exists():
+            self.status.setText(self.t(83))
+            return None
+        candidates = sorted(
+            p.name
+            for p in self.root.iterdir()
+            if p.is_dir()
+            and p.name != self.current.name
+            and ((p / "mappings.json").is_file() or (p / "mart.duckdb").is_file())
+        )
+        if not candidates:
+            self.status.setText("매핑을 가져올 수 있는 다른 작업 공간이 없습니다.")
+            return None
+        if source_ws_name is None:
+            picked, ok = QInputDialog.getItem(
+                self, "다른 작업 공간 매핑 가져오기", "원본 작업 공간:", candidates, 0, False
+            )
+            if not ok or not picked:
+                return None
+            source_ws_name = picked
+        try:
+            src_root = self.root / source_ws_name
+            entries = load_mappings_json(src_root)
+            if not entries and (src_root / "mart.duckdb").is_file():
+                entries = MartEngine(WorkspaceStore(src_root)).load_account_mapping()
+            merged = self._align_imported_mappings(entries)
+            self._populate_mapping_table(merged, saved=False)
+            self.status.setText(f"{self.t(69)}: '{source_ws_name}' 매핑 불러옴 (저장 필요)")
+            return merged
+        except (ValueError, OSError) as exc:
+            self.status.setText(self.t(70) + ": " + str(exc))
+            return None
+
+    def _recipe_placeholder(self):
+        return {
+            "ko": "-- 새 레시피 / 프리셋 선택 --",
+            "en": "-- Select Saved Recipe / Preset --",
+            "pl": "-- Wybierz przepis / szablon --",
+        }.get(self.language_code, "-- Select Saved Recipe / Preset --")
+
+    def _populate_recipe_combo(self, select_name=None):
+        if not hasattr(self, "recipe_combo") or not self.current:
+            return
+        recipes = load_recipes(self.current) if (self.current / "recipes.json").is_file() else []
+        self.recipe_combo.blockSignals(True)
+        self.recipe_combo.clear()
+        self.recipe_combo.addItem(self._recipe_placeholder(), None)
+        for r in recipes:
+            self.recipe_combo.addItem(f"{r.name} [{r.mode}]", r)
+        if select_name:
+            for idx in range(self.recipe_combo.count()):
+                item = self.recipe_combo.itemData(idx)
+                if isinstance(item, MartRecipe) and item.name == select_name:
+                    self.recipe_combo.setCurrentIndex(idx)
+                    break
+        self.recipe_combo.blockSignals(False)
+
+    def _apply_recipe_to_form(self, recipe: MartRecipe):
+        self.export_name.setText(recipe.name)
+        m_idx = self.recipe_mode_combo.findData(recipe.mode)
+        if m_idx >= 0:
+            self.recipe_mode_combo.setCurrentIndex(m_idx)
+        r_idx = self.rollup_level_combo.findData(recipe.rollup_level)
+        if r_idx >= 0:
+            self.rollup_level_combo.setCurrentIndex(r_idx)
+        p_idx = self.unmapped_policy_combo.findData(recipe.unmapped_policy)
+        if p_idx >= 0:
+            self.unmapped_policy_combo.setCurrentIndex(p_idx)
+        self.major_filter_edit.setText(", ".join(recipe.major_categories))
+        self.exclude_zero_check.setChecked(bool(recipe.exclude_zero))
+        self.apply_sign_check.setChecked(bool(recipe.apply_sign))
+        self.group_cols.set_values(list(recipe.group_by))
+        if recipe.mode == "wide_raw" and recipe.columns:
+            self.export_cols.set_values(list(recipe.columns))
+        elif recipe.mode == "wide_rollup" and recipe.include_non_monetary:
+            self.export_cols.set_values(list(recipe.include_non_monetary))
+        self.start.setText(recipe.period_start or "")
+        self.end.setText(recipe.period_end or "")
+
+    def _on_recipe_selected(self, index):
+        data = self.recipe_combo.itemData(index)
+        if isinstance(data, MartRecipe):
+            self._apply_recipe_to_form(data)
+
+    def apply_recipe_preset(self, mode):
+        if not self.model:
+            self.status.setText(self.t(83))
+            return None
+        presets = build_default_recipes(self.model, self._current_mapping_entries())
+        target = next((r for r in presets if r.mode == mode), None)
+        if target:
+            self._apply_recipe_to_form(target)
+            self.status.setText(f"프리셋 적용됨: {target.name}")
+        return target
+
+    def _recipe_from_ui(self):
+        mode = self.recipe_mode_combo.currentData() or "wide_raw"
+        name = self.export_name.text().strip() or f"mart_{mode}"
+        filters = tuple(
+            (combo.currentText(), value.text())
+            for combo, value in (
+                (self.filter_col, self.filter_value),
+                (self.filter_col2, self.filter_value2),
+            )
+            if combo.currentText()
+        )
+        majors = tuple(x.strip() for x in self.major_filter_edit.text().split(",") if x.strip())
+        non_mon_picked = ()
+        if mode == "wide_rollup" and self.model:
+            measure_cols = {m.column for m in self.model.measures}
+            mapping_by_col = {e.source_column: e for e in self._current_mapping_entries()}
+            non_mon_picked = tuple(
+                c
+                for c in self.export_cols.values
+                if c in measure_cols
+                and mapping_by_col.get(c)
+                and mapping_by_col[c].measure_type == "non_monetary"
+            )
+        return MartRecipe(
+            name=name,
+            mode=mode,
+            group_by=tuple(self.group_cols.values),
+            columns=tuple(self.export_cols.values) if mode == "wide_raw" else (),
+            major_categories=majors,
+            exclude_zero=self.exclude_zero_check.isChecked(),
+            apply_sign=self.apply_sign_check.isChecked(),
+            include_non_monetary=non_mon_picked,
+            rollup_level=self.rollup_level_combo.currentData() or "major",
+            unmapped_policy=self.unmapped_policy_combo.currentData() or "fail",
+            filters=filters,
+            period_start=self.start.text().strip() or None,
+            period_end=self.end.text().strip() or None,
+        )
+
+    def save_recipe_from_ui(self):
+        if not self.current:
+            self.status.setText(self.t(83))
+            return None
+        try:
+            recipe = self._recipe_from_ui()
+            existing = load_recipes(self.current) if (self.current / "recipes.json").is_file() else []
+            updated = [r for r in existing if r.name != recipe.name] + [recipe]
+            MartEngine(WorkspaceStore(self.current)).save_recipes(updated)
+            self._populate_recipe_combo(select_name=recipe.name)
+            self._update_workflow_guide()
+            self.status.setText(f"{self.t(69)}: 레시피 '{recipe.name}' 저장됨")
+            return recipe
+        except (ValueError, OSError) as exc:
+            self.status.setText(self.t(70) + ": " + str(exc))
+            return None
+
+    def run_recipe_export(self):
+        if not self.current or not self.model:
+            self.status.setText(self.t(83))
+            return
+        try:
+            recipe = self._recipe_from_ui()
+        except ValueError as exc:
+            self.status.setText(self.t(70) + ": " + str(exc))
+            return
+        current = self.current
+
+        def work(_):
+            manifest = MartEngine(
+                WorkspaceStore(current), ResourcePreflight(cancel=self.cancel_event)
+            ).create_recipe_export(recipe)
+            with (current / "exports" / manifest["candidate"] / "data.csv").open(
+                encoding="utf-8-sig", newline=""
+            ) as f:
+                reader = csv.reader(f)
+                return manifest, next(reader), [r for _, r in zip(range(100), reader)]
+
+        def done(result):
+            manifest, headers, rows = result
+            self.candidate = manifest["candidate"]
+            self._table(self.export_preview, headers, rows)
+            self._display_recipe_reconciliation(manifest)
+            self.refresh_candidates(manifest["revision"])
+            self.refresh_capacity()
+
+        self._run(work, done, cancelable=True)
+
+    def run_all_saved_recipes(self):
+        if not self.current or not self.model:
+            self.status.setText(self.t(83))
+            return
+        recipes = load_recipes(self.current) if (self.current / "recipes.json").is_file() else []
+        if not recipes:
+            recipes = build_default_recipes(self.model, self._current_mapping_entries())
+        if not recipes:
+            self.status.setText("실행할 레시피가 없습니다.")
+            return
+        current = self.current
+
+        def work(_):
+            engine = MartEngine(
+                WorkspaceStore(current), ResourcePreflight(cancel=self.cancel_event)
+            )
+            manifests = [engine.create_recipe_export(r) for r in recipes]
+            last = manifests[-1]
+            with (current / "exports" / last["candidate"] / "data.csv").open(
+                encoding="utf-8-sig", newline=""
+            ) as f:
+                reader = csv.reader(f)
+                return manifests, next(reader), [r for _, r in zip(range(100), reader)]
+
+        def done(result):
+            manifests, headers, rows = result
+            last = manifests[-1]
+            self.candidate = last["candidate"]
+            self._table(self.export_preview, headers, rows)
+            self._display_recipe_reconciliation(last)
+            self.refresh_candidates(last["revision"])
+            self.refresh_capacity()
+            self.status.setText(f"{self.t(69)}: 총 {len(manifests)}개 레시피 마트 일괄 생성 완료")
+
+        self._run(work, done, cancelable=True)
+
+    def _display_recipe_reconciliation(self, manifest):
+        if not hasattr(self, "recipe_reconcile_table"):
+            return
+        recon = manifest.get("recipe_reconciliation")
+        if not recon:
+            self.recipe_reconcile_summary.clear()
+            self.recipe_reconcile_table.setRowCount(0)
+            return
+        status_txt = "✅ 원천 DB와 마트 합계 완전 일치 (오차 0)" if recon.get("matches") else "❌ 합계 불일치 확인 필요"
+        extra_notes = []
+        if recon.get("filtered_zero_rows"):
+            extra_notes.append(f"0원 제외 행: {recon['filtered_zero_rows']}건")
+        if recon.get("excluded_subtotals"):
+            extra_notes.append(f"제외된 원본소계: {len(recon['excluded_subtotals'])}열")
+        if recon.get("excluded_non_monetary"):
+            extra_notes.append(f"제외된 비금액(수량 등): {len(recon['excluded_non_monetary'])}열")
+        note_str = (" | " + " · ".join(extra_notes)) if extra_notes else ""
+        self.recipe_reconcile_summary.setText(
+            f"{status_txt} — 원천 합계: {recon.get('total_source_amount', '0')} / "
+            f"마트 합계: {recon.get('total_exported_amount', '0')} (차이: {recon.get('diff', '0')}){note_str}"
+        )
+        rows = [
+            (
+                item["category"],
+                item["source_amount"],
+                item["exported_amount"],
+                item["diff"],
+                "일치" if item["matches"] else "불일치",
+            )
+            for item in recon.get("by_category", [])
+        ]
+        self._table(self.recipe_reconcile_table, self._reconcile_headers(), rows)
