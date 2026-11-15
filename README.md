@@ -14,7 +14,7 @@
 
 In everyday operations, finance and sales administrative teams frequently receive messy CSV files, broken encodings, and complex promotion tables. The primary purpose of Data Refinery is to automate the repair of malformed rows, correctly parse regional number formats (such as European comma decimals), and produce consistent daily time-series or summary tables that feed directly into management reports.
 
-## Development source (v2.7.0, unreleased)
+## Development source (v2.8.0, unreleased)
 
 The current source adds a flexible single-fact mart workspace inside the DWH tab along with a spacious 1200x820 **Star Schema Modeling Wizard (`MartModelWizardDialog`)**. Featuring a dual-pane layout, users can inspect up to 1,000 raw sample rows (with standalone full-screen viewer popup support) while configuring fact, measures, dimensions, and star schema relationships through a guided 4-step wizard with intelligent auto-guessing and one-click presets. Select UTF-8 CSV files, assign period, row grain, dimensions and additive measures, declare a complete scope, then load new or corrected periods. Inspect actual keys and relationships, samples and exact reconciliation before creating, reviewing and approving a purpose-specific CSV. An approved candidate can be published locally or to an approved SharePoint destination; remote readback, unverified uploads and consumer refresh are separate states.
 

@@ -7,6 +7,7 @@ and folder action error handling.
 
 from __future__ import annotations
 
+import gc
 import tempfile
 import tkinter as tk
 import unittest
@@ -63,6 +64,9 @@ class PromotionGuiTestCase(unittest.TestCase):
         except Exception:
             pass
         self.root.destroy()
+        self.app = None
+        self.root = None
+        gc.collect()
 
     def _simulate_export_success(self, template_path: Path, daily_rows: int = 5) -> PromotionExportResult:
         self.app.promotion_filepath.set(str(template_path))

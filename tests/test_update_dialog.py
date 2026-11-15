@@ -6,7 +6,12 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
-from src.qt.widgets.update_dialog import UpdateDialog, UpdateDownloadWorker
+from src.data_refinery_launcher import LauncherError
+from src.qt.widgets.update_dialog import (
+    INSTALLER_UPGRADE_ARGS,
+    UpdateDialog,
+    UpdateDownloadWorker,
+)
 from src.update_checker import ReleaseInfo
 
 app = QApplication.instance() or QApplication([])
@@ -86,9 +91,10 @@ class TestUpdateDialog(unittest.TestCase):
         mock_web_open.assert_called_once_with(self.sample_rel.url)
         dlg.close()
 
+    @patch("src.qt.widgets.update_dialog.verify_installer_signature")
     @patch("subprocess.Popen")
     @patch.object(QApplication, "quit")
-    def test_execute_installer_launches_and_quits(self, mock_quit, mock_popen):
+    def test_execute_installer_launches_and_quits(self, mock_quit, mock_popen, mock_verify):
         with tempfile.TemporaryDirectory() as tmpdir:
             installer = Path(tmpdir) / "setup.exe"
             installer.write_bytes(b"dummy")
@@ -97,10 +103,57 @@ class TestUpdateDialog(unittest.TestCase):
             dlg.chk_auto_install.setChecked(True)
             dlg._execute_installer(installer)
 
-            mock_popen.assert_called_once_with([str(installer)], shell=False)
+            mock_verify.assert_called_once_with(installer)
+            mock_popen.assert_called_once_with([str(installer), *INSTALLER_UPGRADE_ARGS], shell=False)
             self.assertEqual(dlg.result(), 1)
             mock_quit.assert_called_once()
             dlg.close()
+
+    @patch("src.qt.widgets.update_dialog.error_dialog")
+    @patch("src.qt.widgets.update_dialog.verify_installer_signature", side_effect=LauncherError("invalid signature"))
+    @patch("subprocess.Popen")
+    @patch.object(QApplication, "quit")
+    def test_execute_installer_blocks_invalid_signature(self, mock_quit, mock_popen, mock_verify, mock_err):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            installer = Path(tmpdir) / "setup.exe"
+            installer.write_bytes(b"untrusted")
+
+            dlg = UpdateDialog(self.sample_rel, current_version="2.5.0", language_code="ko")
+            dlg.installer_path = installer
+            dlg.chk_auto_install.setChecked(True)
+            dlg._execute_installer(installer)
+
+            mock_verify.assert_called_once_with(installer)
+            self.assertFalse(installer.exists())
+            self.assertIsNone(dlg.installer_path)
+            mock_err.assert_called_once()
+            mock_popen.assert_not_called()
+            mock_quit.assert_not_called()
+            dlg.close()
+
+    def test_worker_blocks_invalid_signature_on_download(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir) / "setup.exe"
+
+            def fake_download(_url, dest, **_kwargs):
+                Path(dest).write_bytes(b"untrusted")
+                return Path(dest)
+
+            worker = UpdateDownloadWorker("https://fake.url/setup.exe", target)
+            finished_paths = []
+            failed_msgs = []
+            worker.finished.connect(finished_paths.append)
+            worker.failed.connect(failed_msgs.append)
+
+            with (
+                patch("src.qt.widgets.update_dialog.download_release_asset", side_effect=fake_download),
+                patch("src.qt.widgets.update_dialog.verify_installer_signature", side_effect=LauncherError("bad thumbprint")),
+            ):
+                worker.run()
+
+            self.assertFalse(target.exists())
+            self.assertEqual(finished_paths, [])
+            self.assertEqual(failed_msgs, ["bad thumbprint"])
 
 
 if __name__ == "__main__":

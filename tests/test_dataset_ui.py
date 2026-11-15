@@ -1,5 +1,6 @@
 """Tests for DatasetPublisherTabFrame UI and DataRefinery integration."""
 
+import gc
 import tempfile
 import tkinter as tk
 from pathlib import Path
@@ -60,6 +61,10 @@ class TestDatasetUI(unittest.TestCase):
     def tearDown(self):
         self.frame.destroy()
         self.root.destroy()
+        self.frame = None
+        self.mock_app = None
+        self.root = None
+        gc.collect()
         self.temp_dir.cleanup()
 
     def test_ui_initialization_and_dataset_selection(self):

@@ -30,6 +30,7 @@ class BackgroundJobRunner:
         self._poll_interval_ms = poll_interval_ms
         self._events: queue.Queue[tuple[str, str, object]] = queue.Queue()
         self._callbacks: dict[str, JobCallbacks] = {}
+        self._threads: dict[str, threading.Thread] = {}
         self._poll_scheduled = False
 
     def is_running(self, name: str) -> bool:
@@ -51,7 +52,9 @@ class BackgroundJobRunner:
             else:
                 self._events.put((name, "success", result))
 
-        threading.Thread(target=run, name=name, daemon=True).start()
+        thread = threading.Thread(target=run, name=name, daemon=True)
+        self._threads[name] = thread
+        thread.start()
         self._request_poll(0)
         return True
 
@@ -90,6 +93,9 @@ class BackgroundJobRunner:
                     pass
                 finally:
                     self._callbacks.pop(name, None)
+                    thread = self._threads.pop(name, None)
+                    if thread is not None and thread is not threading.current_thread():
+                        thread.join(timeout=0.5)
                     try:
                         callbacks.on_finished()
                     except Exception:

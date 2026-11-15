@@ -1,5 +1,6 @@
 """Unit tests for the per-row remove list widget."""
 
+import gc
 import tkinter as tk
 import unittest
 
@@ -22,6 +23,9 @@ class TestFieldListView(unittest.TestCase):
 
     def tearDown(self):
         self.root.destroy()
+        self.view = None
+        self.root = None
+        gc.collect()
 
     def items(self):
         return [
@@ -532,6 +536,10 @@ class TestPlaceholderEntry(unittest.TestCase):
 
     def tearDown(self):
         self.root.destroy()
+        self.entry = None
+        self.var = None
+        self.root = None
+        gc.collect()
 
     def test_the_variable_stays_empty_while_the_hint_shows(self):
         self.assertTrue(self.entry.placeholder_visible())

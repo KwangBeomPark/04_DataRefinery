@@ -75,7 +75,7 @@ flowchart TD
 | `src/qt/app.py` | QApplication·폰트·테마·자산 경로 초기화 | 개발/번들 자산 탐색을 함께 유지 |
 | `src/qt/ui_state.py` | "Explain, don't block" 마이크로 넛지 헬퍼·비활성 사유 바인딩 (`set_button_enabled_with_nudge`) | 툴팁과 활성화 상태 동기화, 비활성 시 사유와 해결 행동을 함께 노출 |
 | `src/sample_data.py` | 테스트 및 시연용 DWH 샘플 원천 데이터(마스터 2종, P&L, 재고, 가격) 합성 생성 | 실데이터 보존 가드 준수, 기본 경로는 `UserSetting` DWH 설정 경로 |
-| `src/qt/main_window.py` | 네 탭·언어·메뉴·업데이트 확인 | 업무 엔진과 화면 책임 분리 |
+| `src/qt/main_window.py` | 네 탭·언어·메뉴·시작 시 백그라운드 업데이트 확인 | 업무 엔진과 화면 책임 분리, 24시간 주기 확인·원클릭 업데이트 배지·자동 확인 토글 제공 |
 | `src/qt/jobs.py`, `src/background_jobs.py` | Qt 타이머 연동·백그라운드 실행·콜백 | UI 갱신은 UI 스레드에서 수행 |
 | `src/csv_processing.py` | CSV/TXT/Excel 파싱·숫자·인코딩·안전한 출력 | 원본 덮어쓰기·불완전한 결과 파일 방지 |
 | `src/promotion_normalizer.py` | 프로모션 입력 검증·정규화·일별 출력 | 압축 기준 규칙과 일별 분석 결과를 구분 |
@@ -92,7 +92,7 @@ flowchart TD
 | `src/dataset_excel.py` | Excel COM으로 연결·데이터 모델·피벗 XLSX 생성 | 제작자 Excel 필요, 소비자는 추가 설치 불필요 |
 | `src/data_mapper.py`, `src/mapper_ui.py` | 규칙 매핑 엔진·별도 Tkinter 화면 | 기능 소스 보존, 현재 기본 네 탭에는 매핑 화면이 연결되지 않음 |
 | `src/app_paths.py`, `src/config_loader.py` | 설치·UserSetting 경로·기존 자료 이관·레거시 DWH 설정(`dwh_legacy`) 원자 시딩 | 원본 보존·사본 해시 검증·DB 사용 중 차단·반복 이관 방지·임의 CWD/번들 실행 시 자동 시딩 |
-| `src/update_checker.py` | GitHub 릴리스 조회·업데이트 설정 | 네트워크 실패가 자료 처리 실패로 이어지지 않게 함 |
+| `src/update_checker.py`, `src/qt/widgets/update_dialog.py` | GitHub 릴리스 조회·업데이트 설정·인앱 설치 파일 다운로드·서명 검증 후 무음 업그레이드(`/SILENT` · `/AUTORELAUNCH=1`) | 네트워크·서명 실패가 주 앱/사용자 데이터를 손상하지 않게 함 |
 | `src/data_refinery_launcher.py` | 설치 앱 탐색·공식 설치 파일 다운로드·서명 확인 | 공식 URL·파일명·서명자 검증 유지 |
 | `src/diagnostics.py`, `src/file_reveal.py` | 진단 ID·로그·결과 파일 찾기 | 원본 내용·민감한 경로를 로그에 노출하지 않음 |
 

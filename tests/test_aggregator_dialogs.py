@@ -1,5 +1,6 @@
 """Unit tests for the aggregator rule dialogs' validation and results."""
 
+import gc
 import tkinter as tk
 import unittest
 from unittest.mock import patch
@@ -37,6 +38,9 @@ class DialogTestCase(unittest.TestCase):
         except Exception:
             pass
         self.root.destroy()
+        self.app = None
+        self.root = None
+        gc.collect()
 
     def ui(self, key):
         return self.app._ui(key)

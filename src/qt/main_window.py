@@ -7,6 +7,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QComboBox,
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.background_jobs import BackgroundJobRunner
+from src.background_jobs import BackgroundJobRunner, JobCallbacks
 from src.i18n import _LANGUAGE_CODES, _UI_TEXT
 from src.qt.dialogs import info_dialog
 from src.qt.jobs import create_qt_job_runner
@@ -30,7 +31,14 @@ from src.qt.tabs.data_tools_tab import DataToolsTab
 from src.qt.tabs.dataset.tab import DatasetPublisherTab
 from src.qt.tabs.dwh_tab import DwhPipelineTab
 from src.qt.theme import PALETTE
-from src.update_checker import load_settings
+from src.update_checker import (
+    ReleaseInfo,
+    check_for_update,
+    fetch_latest_release,
+    load_settings,
+    save_settings,
+    version_key,
+)
 from src.version import __version__
 
 
@@ -57,10 +65,19 @@ class MainWindow(QMainWindow):
         self.language_code = "en"
         self.job_runner: BackgroundJobRunner = create_qt_job_runner()
         self._update_settings = load_settings()
+        self._available_release: ReleaseInfo | None = None
+        self._startup_update_checked = False
 
         self._init_window()
         self._init_ui()
         self.apply_language("ko")  # Default to Korean per user rule
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._startup_update_checked:
+            self._startup_update_checked = True
+            if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+                QTimer.singleShot(600, self.start_background_update_check)
 
     def _init_window(self) -> None:
         self.setWindowTitle(f"Data Refinery v{__version__}")
@@ -109,9 +126,25 @@ class MainWindow(QMainWindow):
         self.combo_language.currentIndexChanged.connect(self._on_language_changed)
         top_layout.addWidget(self.combo_language)
 
+        # Visible one-click update action when a newer release is discovered
+        self.btn_update_now = QPushButton()
+        self.btn_update_now.setVisible(False)
+        self.btn_update_now.setStyleSheet(
+            f"QPushButton {{ background-color: {PALETTE['accent']}; color: white; "
+            "font-weight: bold; padding: 5px 12px; border-radius: 6px; border: none; }} "
+            "QPushButton:hover { background-color: #1D4ED8; }"
+        )
+        self.btn_update_now.clicked.connect(self._on_open_available_update)
+        top_layout.addWidget(self.btn_update_now)
+
         # Update and application information menu.
         self.btn_settings = QPushButton("업데이트 / 정보 ▾")
         self.menu_settings = QMenu(self)
+        self.act_auto_update = self.menu_settings.addAction("새 버전 자동 확인")
+        self.act_auto_update.setCheckable(True)
+        self.act_auto_update.setChecked(bool(self._update_settings.get("update_check_enabled", True)))
+        self.act_auto_update.toggled.connect(self._on_toggle_auto_update)
+        self.menu_settings.addSeparator()
         self.act_check_update = self.menu_settings.addAction("업데이트 확인...", self._on_check_update)
         self.act_visit_repo = self.menu_settings.addAction("GitHub 저장소 방문...", self._on_visit_repo)
         self.menu_settings.addSeparator()
@@ -163,11 +196,12 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"Data Refinery v{__version__}")
         self.lbl_app_subtitle.setText(t.get("header_subtitle", "데이터 전처리 · 집계 · 배포 솔루션"))
-        self.btn_settings.setText(t["update_info_menu"])
+        self.act_auto_update.setText(t.get("update_enabled", "새 버전 자동 확인"))
         self.act_check_update.setText(t.get("menu_check_update", "업데이트 확인..."))
         self.act_visit_repo.setText(t.get("menu_visit_repo", "GitHub 저장소 방문..."))
         self.act_about.setText(t.get("menu_about", "정보 (About)..."))
         self.lbl_status_msg.setText(t.get("status_ready", "준비됨"))
+        self._refresh_update_controls()
 
         # task_options identifies features in logical order:
         task_opts = t.get("task_options", ())
@@ -188,14 +222,108 @@ class MainWindow(QMainWindow):
         self.tab_aggregator.apply_language(lang_code)
         self.tab_tools.apply_language(lang_code)
 
+    def _refresh_update_controls(self) -> None:
+        t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        base_menu_text = t["update_info_menu"]
+        if self._available_release is not None:
+            version = self._available_release.version
+            self.btn_settings.setText(f"{base_menu_text} •")
+            badge_text = {
+                "ko": f"⚡ v{version} 업데이트 설치",
+                "en": f"⚡ Update v{version}",
+                "pl": f"⚡ Aktualizacja v{version}",
+            }.get(self.language_code, f"⚡ Update v{version}")
+            self.btn_update_now.setText(badge_text)
+            self.btn_update_now.setVisible(True)
+            avail_msg = t.get("update_available", "").format(version=version)
+            if avail_msg:
+                self.lbl_status_msg.setText(avail_msg)
+        else:
+            self.btn_settings.setText(base_menu_text)
+            self.btn_update_now.setText("")
+            self.btn_update_now.setVisible(False)
+
+    def start_background_update_check(self, force: bool = False, fetcher=None) -> bool:
+        if not self._update_settings.get("update_check_enabled", True) and not force:
+            return False
+        if self.job_runner.is_running("startup-update-check"):
+            return False
+
+        settings_snapshot = dict(self._update_settings)
+        if force:
+            settings_snapshot["update_check_enabled"] = True
+            settings_snapshot["last_update_check"] = ""
+        active_fetcher = fetcher or fetch_latest_release
+
+        def worker(_report):
+            release = check_for_update(
+                __version__,
+                settings_snapshot,
+                fetcher=active_fetcher,
+            )
+            return release, settings_snapshot.get("last_update_check")
+
+        return self.job_runner.start(
+            "startup-update-check",
+            worker,
+            JobCallbacks(
+                on_progress=lambda _pct, _detail: None,
+                on_success=self._on_startup_update_result,
+                on_error=lambda _exc: None,
+                on_finished=lambda: None,
+            ),
+        )
+
+    def _on_startup_update_result(self, outcome) -> None:
+        release, last_checked = outcome
+        if last_checked:
+            self._update_settings["last_update_check"] = last_checked
+            try:
+                save_settings(self._update_settings)
+            except OSError:
+                pass
+        if release is not None:
+            self._available_release = release
+            self._refresh_update_controls()
+
+    def _on_toggle_auto_update(self, checked: bool) -> None:
+        self._update_settings["update_check_enabled"] = bool(checked)
+        try:
+            save_settings(self._update_settings)
+        except OSError:
+            pass
+        if checked and self._available_release is None:
+            self.start_background_update_check()
+
+    def _open_update_dialog(self, release: ReleaseInfo) -> None:
+        from src.qt.widgets.update_dialog import UpdateDialog
+
+        dlg = UpdateDialog(
+            release_info=release,
+            current_version=__version__,
+            parent=self,
+            language_code=self.language_code,
+        )
+        dlg.exec()
+
+    def _on_open_available_update(self) -> None:
+        if self._available_release is not None:
+            self._open_update_dialog(self._available_release)
+
     def _on_check_update(self) -> None:
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QGuiApplication
 
         from src.qt.dialogs import error_dialog, info_dialog
-        from src.qt.widgets.update_dialog import UpdateDialog
-        from src.update_checker import fetch_latest_release, version_key
+
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        if self._available_release is not None:
+            latest = version_key(self._available_release.version)
+            current = version_key(__version__)
+            if latest and current and latest > current:
+                self._open_update_dialog(self._available_release)
+                return
+
         QGuiApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             rel = fetch_latest_release(timeout=5)
@@ -204,13 +332,9 @@ class MainWindow(QMainWindow):
                 latest = version_key(rel.version)
                 current = version_key(__version__)
                 if latest and current and latest > current:
-                    dlg = UpdateDialog(
-                        release_info=rel,
-                        current_version=__version__,
-                        parent=self,
-                        language_code=self.language_code,
-                    )
-                    dlg.exec()
+                    self._available_release = rel
+                    self._refresh_update_controls()
+                    self._open_update_dialog(rel)
                     return
             info_dialog(
                 self,

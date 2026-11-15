@@ -1,5 +1,6 @@
 """Unit tests for the drag-and-drop controller's press/motion/release plumbing."""
 
+import gc
 import tkinter as tk
 import unittest
 from tkinter import ttk
@@ -58,6 +59,11 @@ class TestDragDropController(unittest.TestCase):
     def tearDown(self):
         self.controller.cancel()
         self.root.destroy()
+        self.controller = None
+        self.source = None
+        self.target = None
+        self.root = None
+        gc.collect()
 
     def press(self):
         self.controller._on_press(event(100, 100, 5), self.source)

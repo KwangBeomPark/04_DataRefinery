@@ -572,7 +572,12 @@ class DataRefineryApp:
 
         self._apply_language()
         self._on_task_tab_change()
-        self.root.after(350, self._start_update_check)
+        try:
+            root_state = self.root.state()
+        except Exception:
+            root_state = "normal"
+        if root_state != "withdrawn":
+            self.root.after(350, self._start_update_check)
 
     def browse_file(self):
         filename = filedialog.askopenfilename(

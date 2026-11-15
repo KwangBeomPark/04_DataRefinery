@@ -155,6 +155,60 @@ class TestQtMainWindow(unittest.TestCase):
 
         window.close()
 
+    def test_background_update_check_shows_one_click_banner_and_localizes(self):
+        import re
+        import tempfile
+        import time
+        from unittest.mock import patch
+
+        from src.update_checker import ReleaseInfo
+
+        hangul_re = re.compile(r"[가-힣]")
+        newer = ReleaseInfo(
+            version="99.0.0",
+            url="https://github.com/KwangBeomPark/04_DataRefinery/releases/tag/v99.0.0",
+            notes="- Auto update verification",
+            asset_name="App04_DataRefinery_Setup_v99.0.0.exe",
+            download_url="https://github.com/KwangBeomPark/04_DataRefinery/releases/download/v99.0.0/App04_DataRefinery_Setup_v99.0.0.exe",
+            size=1024,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict("os.environ", {"LOCALAPPDATA": tmpdir}):
+                window = MainWindow()
+                self.assertTrue(window.btn_update_now.isHidden())
+
+                started = window.start_background_update_check(force=True, fetcher=lambda: newer)
+                self.assertTrue(started)
+
+                deadline = time.monotonic() + 3.0
+                while window.job_runner.is_running("startup-update-check") and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                    self.app.processEvents()
+                window.job_runner.poll()
+                self.app.processEvents()
+
+                self.assertEqual(window._available_release, newer)
+                self.assertFalse(window.btn_update_now.isHidden())
+                self.assertIn("v99.0.0", window.btn_update_now.text())
+                self.assertIn("•", window.btn_settings.text())
+
+                for lang in ("en", "pl"):
+                    window.apply_language(lang)
+                    for txt in (
+                        window.btn_update_now.text(),
+                        window.btn_settings.text(),
+                        window.lbl_status_msg.text(),
+                        window.act_auto_update.text(),
+                    ):
+                        self.assertIsNone(
+                            hangul_re.search(txt),
+                            f"Found Korean text in {lang}: {txt!r}",
+                        )
+
+                window.apply_language("ko")
+                self.assertIn("v99.0.0", window.btn_update_now.text())
+                window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

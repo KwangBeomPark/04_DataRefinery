@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.data_refinery_launcher import LauncherError, verify_installer_signature
 from src.i18n import _UI_TEXT
 from src.qt.dialogs import confirm_dialog, error_dialog
 from src.ui_components import PALETTE
@@ -28,6 +29,14 @@ from src.update_checker import (
     ReleaseInfo,
     download_release_asset,
     get_update_download_directory,
+)
+
+INSTALLER_UPGRADE_ARGS = (
+    "/SILENT",
+    "/SUPPRESSMSGBOXES",
+    "/NORESTART",
+    "/CLOSEAPPLICATIONS",
+    "/AUTORELAUNCH=1",
 )
 
 
@@ -38,10 +47,11 @@ class UpdateDownloadWorker(QThread):
     finished = Signal(str)       # target_path
     failed = Signal(str)         # error_message
 
-    def __init__(self, download_url: str, target_path: Path) -> None:
+    def __init__(self, download_url: str, target_path: Path, verify_signature: bool = True) -> None:
         super().__init__()
         self.download_url = download_url
         self.target_path = target_path
+        self.verify_signature = verify_signature
         self._is_cancelled = False
 
     def run(self) -> None:
@@ -52,6 +62,12 @@ class UpdateDownloadWorker(QThread):
                 progress_callback=self._on_progress,
                 cancel_check=lambda: self._is_cancelled,
             )
+            if not self._is_cancelled and self.verify_signature:
+                try:
+                    verify_installer_signature(self.target_path)
+                except Exception:
+                    self.target_path.unlink(missing_ok=True)
+                    raise
             if not self._is_cancelled:
                 self.finished.emit(str(self.target_path))
         except Exception as exc:
@@ -74,11 +90,13 @@ class UpdateDialog(QDialog):
         current_version: str,
         parent: QWidget | None = None,
         language_code: str = "ko",
+        verify_signature: bool = True,
     ) -> None:
         super().__init__(parent)
         self.release_info = release_info
         self.current_version = current_version
         self.language_code = language_code
+        self.verify_signature = verify_signature
         self.worker: UpdateDownloadWorker | None = None
         self.installer_path: Path | None = None
 
@@ -240,7 +258,11 @@ class UpdateDialog(QDialog):
         self.btn_cancel.setVisible(True)
         self.lbl_status.setText(t.get("update_download_starting", "다운로드를 시작하는 중..."))
 
-        self.worker = UpdateDownloadWorker(self.release_info.download_url, self.target_file)
+        self.worker = UpdateDownloadWorker(
+            self.release_info.download_url,
+            self.target_file,
+            verify_signature=self.verify_signature,
+        )
         self.worker.progress.connect(self._on_download_progress)
         self.worker.finished.connect(self._on_download_finished)
         self.worker.failed.connect(self._on_download_failed)
@@ -295,8 +317,23 @@ class UpdateDialog(QDialog):
         self.btn_action.setText(t.get("update_btn_download_install", "⚡ 원클릭 업데이트 (다운로드 및 설치)"))
 
     def _execute_installer(self, path: Path) -> None:
-        """Launch Inno Setup installer and close current application to allow clean upgrade."""
+        """Verify digital signature, launch silent installer with relaunch, and close current app."""
         t = _UI_TEXT.get(self.language_code, _UI_TEXT["ko"])
+        if self.verify_signature:
+            try:
+                verify_installer_signature(path)
+            except LauncherError as exc:
+                path.unlink(missing_ok=True)
+                self.installer_path = None
+                self.progress_bar.setValue(0)
+                self.progress_bar.setVisible(False)
+                self.btn_action.setText(t.get("update_btn_retry", "다시 시도"))
+                self.lbl_status.setText(
+                    t.get("update_err_download", "업데이트 다운로드 실패:\n{error}").format(error=exc)
+                )
+                error_dialog(self, t.get("update_dlg_title", "Data Refinery 업데이트"), str(exc))
+                return
+
         if not self.chk_auto_install.isChecked() and not confirm_dialog(
             self,
             t.get("update_install_prompt_title", "설치 프로그램 실행"),
@@ -305,8 +342,8 @@ class UpdateDialog(QDialog):
             return
 
         try:
-            # Spawn installer detached
-            subprocess.Popen([str(path)], shell=False)
+            # Spawn verified silent installer that closes open runtime and relaunches new version
+            subprocess.Popen([str(path), *INSTALLER_UPGRADE_ARGS], shell=False)
             # Unblock and close modal dialog loop, allowing clean exit
             self.accept()
             QApplication.instance().quit()

@@ -79,6 +79,7 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir:
 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Flags: nowait; Check: ShouldAutoRelaunch
 
 #define PreviousAppId StringChange(SetupSetting("AppId"), "{{", "{")
 #define ExpectedAppHash GetSHA256OfFile(AppSourceDir + "\" + AppExeName)
@@ -262,6 +263,11 @@ begin
   except
     Log('Obsolete application EXE cleanup skipped: ' + GetExceptionMessage);
   end;
+end;
+
+function ShouldAutoRelaunch: Boolean;
+begin
+  Result := WizardSilent and (CompareText(ExpandConstant('{param:AUTORELAUNCH|0}'), '1') = 0);
 end;
 
 procedure DeinitializeSetup;

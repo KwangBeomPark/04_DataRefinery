@@ -1,3 +1,4 @@
+import gc
 import tkinter as tk
 import unittest
 
@@ -14,6 +15,10 @@ class TestUpdateMenu(unittest.TestCase):
 
     def tearDown(self):
         self.root.destroy()
+        self.enabled = None
+        self.language = None
+        self.root = None
+        gc.collect()
 
     def build(self, with_language=True):
         extra = {}

@@ -1,3 +1,4 @@
+import gc
 import os
 import pathlib
 import shutil
@@ -39,6 +40,10 @@ class AggregatorTestCase(unittest.TestCase):
         except Exception:
             pass
         self.root.destroy()
+        self.tab = None
+        self.app = None
+        self.root = None
+        gc.collect()
 
     def load_schema(self):
         self.tab.state.load_schema(DIMENSIONS, MEASURES, month_column="월", columns=COLUMNS)
